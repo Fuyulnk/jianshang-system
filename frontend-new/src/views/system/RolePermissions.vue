@@ -1,0 +1,122 @@
+<template>
+  <div class="page">
+    <el-card class="page-card">
+      <div class="page-header">
+        <div>
+          <h2>角色权限</h2>
+          <p class="page-desc">可视化配置每个角色的操作权限，勾选后自动生效</p>
+        </div>
+      </div>
+
+      <el-table :data="tableData" border stripe style="width: 100%">
+        <el-table-column label="模块" fixed width="140">
+          <template #default="{ row }">{{ moduleLabels[row.module] || row.module }}</template>
+        </el-table-column>
+        <el-table-column v-for="role in roleNames" :key="role.name" :label="role.label" min-width="180">
+          <template #default="{ row }">
+            <div class="perm-checkboxes" v-if="row[role.name]">
+              <label v-for="p in permTypes" :key="p.key" class="perm-item">
+                <el-checkbox
+                  :model-value="row[role.name][p.key]"
+                  @change="(v) => updatePerm(row.module, role.name, p.key, v)"
+                  size="small"
+                />
+                <span>{{ p.label }}</span>
+              </label>
+            </div>
+            <span v-else class="no-perm">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+
+const rawData = ref([])
+const roles = ref([])
+
+const moduleLabels = {
+  dashboard: '控制台', accounts: '账户管理', transactions: '交易流水',
+  products: '产品库存', employees: '员工管理', users: '用户管理', roles: '角色权限',
+  projects: '工程订单', chat: '聊天'
+}
+
+const permTypes = [
+  { key: 'can_view', label: '查看' },
+  { key: 'can_create', label: '新增' },
+  { key: 'can_edit', label: '编辑' },
+  { key: 'can_delete', label: '删除' }
+]
+
+const roleNames = computed(() => roles.value)
+const modules = computed(() => [...new Set(rawData.value.map(r => r.module))])
+
+const tableData = computed(() => {
+  const map = {}
+  for (const r of rawData.value) {
+    if (!map[r.module]) map[r.module] = { module: r.module }
+    map[r.module][r.role_name] = {
+      id: r.id,
+      can_view: !!r.can_view,
+      can_create: !!r.can_create,
+      can_edit: !!r.can_edit,
+      can_delete: !!r.can_delete
+    }
+  }
+  return Object.values(map)
+})
+
+function token() { return localStorage.getItem('token') }
+
+async function fetchData() {
+  const [pRes, rRes] = await Promise.all([
+    fetch('/api/role-permissions', { headers: { Authorization: `Bearer ${token()}` } }),
+    fetch('/api/roles', { headers: { Authorization: `Bearer ${token()}` } })
+  ])
+  const pj = await pRes.json()
+  const rj = await rRes.json()
+  if (pj.success) rawData.value = pj.data
+  if (rj.success) roles.value = rj.data
+}
+
+async function updatePerm(module, roleName, permKey, value) {
+  // 找到对应的 permission id
+  const row = rawData.value.find(r => r.module === module && r.role_name === roleName)
+  if (!row) return
+  try {
+    const body = { can_view: row.can_view, can_create: row.can_create, can_edit: row.can_edit, can_delete: row.can_delete }
+    body[permKey] = value ? 1 : 0
+    await fetch(`/api/role-permissions/${row.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify(body)
+    })
+    row[permKey] = body[permKey]
+    ElMessage.success('权限已更新')
+  } catch {
+    ElMessage.error('更新失败')
+  }
+}
+
+onMounted(fetchData)
+</script>
+
+<style scoped>
+.perm-checkboxes {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.perm-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.no-perm { color: var(--text-placeholder); font-size: 13px; }
+</style>

@@ -1,0 +1,294 @@
+/* ========== Design Tokens ========== */
+:root {
+  --color-primary: #4f6df5;
+  --color-primary-dark: #3d57d9;
+  --color-primary-light: #7b93ff;
+  --color-primary-bg: #edf0ff;
+
+  --color-accent: #d97706;
+  --color-accent-light: #f59e0b;
+
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-info: #8c8c8c;
+
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-tertiary: #a1a1aa;
+  --text-placeholder: #c4c4c7;
+
+  --bg-page: #f4f4f5;
+  --bg-card: #ffffff;
+  --bg-header: rgba(255, 255, 255, 0.85);
+
+  --sidebar-bg: #fafafa;
+  --sidebar-border: rgba(0, 0, 0, 0.06);
+  --sidebar-text: #52525b;
+  --sidebar-text-active: var(--color-primary);
+  --sidebar-logo-text: #18181b;
+  --sidebar-icon: #a1a1aa;
+
+  --border-color: #e4e4e7;
+  --border-light: #f0f0f2;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.1);
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  --font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
+
+  --header-height: 60px;
+}
+
+/* ========== Dark Mode ========== */
+html.dark {
+  --color-primary: #6380f7;
+  --color-primary-dark: #4f6df5;
+  --color-primary-light: #8da3ff;
+  --color-primary-bg: #1a1f3a;
+
+  --color-accent: #f59e0b;
+  --color-accent-light: #fbbf24;
+
+  --text-primary: #e4e4e7;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #6b6d75;
+  --text-placeholder: #4a4b52;
+
+  --bg-page: #0c0c0f;
+  --bg-card: #18181b;
+  --bg-header: rgba(24, 24, 27, 0.9);
+
+  --sidebar-bg: #08080a;
+  --sidebar-border: rgba(255, 255, 255, 0.04);
+  --sidebar-text: rgba(255, 255, 255, 0.55);
+  --sidebar-text-active: #ffffff;
+  --sidebar-logo-text: #ffffff;
+  --sidebar-icon: rgba(255, 255, 255, 0.3);
+
+  --border-color: #27272a;
+  --border-light: #1f1f22;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.7);
+}
+
+/* ========== Global Reset ========== */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+/* ========== Scrollbar ========== */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ========== Focus Ring ========== */
+*:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ========== Selection ========== */
+::selection {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+/* ========== Page Layout Utilities ========== */
+.page-wrapper {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.page-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-sm) !important;
+  border: 1px solid var(--border-light) !important;
+  transition: box-shadow 0.2s ease;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.page-header h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.4px;
+}
+
+.page-desc {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--text-tertiary);
+}
+
+/* ========== Stat Cards ========== */
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+  border: 1px solid var(--border-light);
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.stat-card .stat-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.stat-card .stat-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.stat-card .stat-num {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+  letter-spacing: -0.5px;
+}
+
+.stat-card .stat-label {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.stat-card.clickable {
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+.stat-card.clickable:hover {
+  border-color: var(--color-primary);
+}
+.stat-card.clickable.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+.stat-card.clickable .stat-info {
+  text-align: center;
+}
+
+/* ========== Toolbar ========== */
+.toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.toolbar .spacer {
+  margin-left: auto;
+}
+
+/* ========== Page Transitions ========== */
+.page-enter-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}
+
+/* ========== Utility Animations ========== */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.slide-up {
+  animation: slide-up 0.3s ease both;
+}
+
+.slide-up-1 { animation-delay: 0.05s; }
+.slide-up-2 { animation-delay: 0.1s; }
+.slide-up-3 { animation-delay: 0.15s; }
+.slide-up-4 { animation-delay: 0.2s; }
