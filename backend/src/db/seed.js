@@ -57,6 +57,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS products (
 
 db.exec(`CREATE TABLE IF NOT EXISTS employees (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  employee_code TEXT UNIQUE,
   name TEXT NOT NULL,
   department TEXT,
   position TEXT,

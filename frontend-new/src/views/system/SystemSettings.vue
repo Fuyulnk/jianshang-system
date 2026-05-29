@@ -195,17 +195,27 @@
             </div>
             <el-table :data="userList" stripe v-loading="userLoading" style="width: 100%">
               <el-table-column prop="id" label="ID" width="60" />
-              <el-table-column prop="username" label="账号" min-width="140" />
-              <el-table-column label="角色" width="160">
+              <el-table-column prop="username" label="账号" min-width="120" show-overflow-tooltip />
+              <el-table-column label="员工档案" min-width="160">
+                <template #default="{ row }">
+                  <div v-if="row.employee_id" class="employee-binding">
+                    <span class="employee-name">{{ row.employee_name || row.real_name || '-' }}</span>
+                    <span class="employee-code">{{ row.employee_code || `#${row.employee_id}` }}</span>
+                  </div>
+                  <span v-else class="unbound-text">未绑定</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="角色" width="130">
                 <template #default="{ row }">
                   <el-tag :type="row.role === 'super_admin' ? 'danger' : row.role === 'finance' ? 'warning' : row.role === 'warehouse' ? 'primary' : 'info'" size="small">
                     {{ row.role_label || row.role }}
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="created_at" label="创建时间" width="160" />
-              <el-table-column label="操作" width="200">
+              <el-table-column prop="created_at" label="创建时间" width="145" />
+              <el-table-column label="操作" width="220" fixed="right">
                 <template #default="{ row }">
+                  <el-button link size="small" @click="editUserEmployee(row)">{{ row.employee_id ? '改绑档案' : '绑定档案' }}</el-button>
                   <el-button v-if="row.username !== 'fuyulnk'" link size="small" @click="editUserRole(row)">分配角色</el-button>
                   <el-button v-if="row.username !== 'fuyulnk'" type="danger" link size="small" @click="deleteUser(row)">删除</el-button>
                 </template>
@@ -244,6 +254,25 @@
           <template #footer>
             <el-button @click="showAssignRole = false">取消</el-button>
             <el-button type="primary" :loading="userSaving" @click="handleAssignRole">确定</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 绑定员工档案弹窗 -->
+        <el-dialog v-model="showBindEmployee" title="绑定员工档案" width="460px" append-to-body>
+          <p>用户：<strong>{{ editingUser?.username }}</strong></p>
+          <el-select v-model="selectedEmployeeId" clearable filterable placeholder="选择员工档案" style="width: 100%">
+            <el-option
+              v-for="employee in employeeOptions"
+              :key="employee.id"
+              :label="employeeOptionLabel(employee)"
+              :value="employee.id"
+            />
+          </el-select>
+          <div class="dialog-tip">绑定后，旧登录 token 会失效，需要该用户重新登录以刷新员工身份。</div>
+          <template #footer>
+            <el-button @click="showBindEmployee = false">取消</el-button>
+            <el-button v-if="editingUser?.employee_id" :loading="userSaving" @click="handleUnbindEmployee">解绑</el-button>
+            <el-button type="primary" :loading="userSaving" @click="handleBindEmployee">确定</el-button>
           </template>
         </el-dialog>
 
@@ -411,22 +440,33 @@ const userRoles = ref([])
 const userLoading = ref(false)
 const showAddUser = ref(false)
 const showAssignRole = ref(false)
+const showBindEmployee = ref(false)
 const userSaving = ref(false)
 const editingUser = ref(null)
 const selectedUserRole = ref('')
+const selectedEmployeeId = ref(null)
 const addUserForm = ref({ username: '', password: '', role: 'employee' })
+const employeeList = ref([])
+
+const employeeOptions = computed(() => {
+  const editingId = editingUser.value?.id
+  return employeeList.value.filter(employee => !employee.bound_user_id || employee.bound_user_id === editingId)
+})
 
 async function fetchUsers() {
   userLoading.value = true
   try {
-    const [uRes, rRes] = await Promise.all([
+    const [uRes, rRes, eRes] = await Promise.all([
       fetch('/api/users', { headers: { Authorization: `Bearer ${token()}` } }),
-      fetch('/api/roles', { headers: { Authorization: `Bearer ${token()}` } })
+      fetch('/api/roles', { headers: { Authorization: `Bearer ${token()}` } }),
+      fetch('/api/employees', { headers: { Authorization: `Bearer ${token()}` } })
     ])
     const uj = await uRes.json()
     const rj = await rRes.json()
+    const ej = await eRes.json()
     if (uj.success) userList.value = uj.data
     if (rj.success) userRoles.value = rj.data
+    if (ej.success) employeeList.value = ej.data
   } finally {
     userLoading.value = false
   }
@@ -464,6 +504,18 @@ function editUserRole(row) {
   showAssignRole.value = true
 }
 
+function editUserEmployee(row) {
+  editingUser.value = row
+  selectedEmployeeId.value = row.employee_id || null
+  showBindEmployee.value = true
+}
+
+function employeeOptionLabel(employee) {
+  const code = employee.employee_code || `#${employee.id}`
+  const position = employee.position ? ` / ${employee.position}` : ''
+  return `${employee.name}（${code}${position}）`
+}
+
 async function handleAssignRole() {
   userSaving.value = true
   try {
@@ -483,6 +535,34 @@ async function handleAssignRole() {
   } finally {
     userSaving.value = false
   }
+}
+
+async function handleBindEmployee() {
+  if (!editingUser.value) return
+  userSaving.value = true
+  try {
+    const res = await fetch(`/api/users/${editingUser.value.id}/employee`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ employee_id: selectedEmployeeId.value || 0 })
+    })
+    const json = await res.json()
+    if (json.success) {
+      ElMessage.success(selectedEmployeeId.value ? '员工档案已绑定' : '已解绑员工档案')
+      showBindEmployee.value = false
+      fetchUsers()
+      fetchAiData()
+    } else {
+      ElMessage.error(json.message || '绑定失败')
+    }
+  } finally {
+    userSaving.value = false
+  }
+}
+
+async function handleUnbindEmployee() {
+  selectedEmployeeId.value = null
+  await handleBindEmployee()
 }
 
 async function deleteUser(row) {
@@ -914,5 +994,31 @@ onMounted(() => {
 }
 .users-toolbar {
   margin-bottom: 12px;
+}
+.employee-binding {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.employee-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.employee-code {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.unbound-text {
+  color: var(--text-placeholder);
+  font-size: 13px;
+}
+.dialog-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
 }
 </style>

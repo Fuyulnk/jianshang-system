@@ -66,6 +66,32 @@
 
 ## 交接记录
 
+### 2026-05-29 Codex 员工档案绑定与历史接口权限收紧
+
+- 任务：继续推进员工身份隔离，让系统账号可以绑定 `employees` 员工档案，并收紧历史模块“登录即可访问”的接口风险。
+- 已完成：
+  - `backend/src/utils/permissions.js` — 新增通用模块权限判断，复用 `roles / role_permissions` 的 `can_view / can_create / can_edit / can_delete`。
+  - `backend/src/routes/accounts.js`、`transactions.js`、`products.js`、`employees.js` — 账户、交易流水、产品库存、员工档案接口改为后端强制校验模块权限，不再只靠前端菜单隐藏。
+  - `backend/src/routes/employees.js` — 员工列表返回绑定的系统账号；已绑定账号的员工档案禁止直接删除，要求先解绑。
+  - `backend/src/routes/users.js` — 用户列表返回员工档案信息；新增 `PUT /api/users/:id/employee`，超级管理员可绑定/解绑员工档案；绑定变化会递增 `role_version`，让旧 token 失效并要求重新登录。
+  - `backend/src/index.js`、`backend/src/db/init.js`、`backend/src/db/seed.js` — 补齐 `employees.employee_code` 新库字段、唯一索引和旧员工档案编号回填。
+  - `frontend-new/src/views/system/SystemSettings.vue` — 用户管理表新增“员工档案”列和绑定/解绑弹窗；操作列固定在右侧，窄一些的桌面窗口也能看见按钮。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/users.js`
+  - `node --check backend/src/routes/accounts.js`
+  - `node --check backend/src/routes/transactions.js`
+  - `node --check backend/src/routes/products.js`
+  - `node --check backend/src/routes/employees.js`
+  - `node --check backend/src/utils/permissions.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 用 `/private/tmp/jianshang-codex-home/fuyulnk/jianshang.db` 临时库启动后端 `PORT=3012` 做接口验证：普通员工绑定员工档案后旧 token 调 `/api/me` 返回 401；重新登录后有 `employee_id`；普通员工访问 `/api/accounts`、`/api/transactions`、`/api/employees` 为 403，访问 `/api/products` 为 200。
+  - 用 Chrome 视觉检查 `localhost:5173/main/system/settings`：用户管理能看到“员工档案”列、右侧固定操作列和绑定弹窗。
+- 注意事项：
+  - 本次没有修改真实本地数据库；接口验证使用的是复制到 `/private/tmp` 的临时库。
+  - 旧本地后端如果已在 `3001` 运行，需要重启后才会加载这些后端权限改动。
+  - 后续可以继续做“个人权限申请/审批”和 AI 审计后台筛选页。
+
 ### 2026-05-29 Codex Git 基线整理
 
 - 任务：把长期脏工作树整理成可交接的 Git 基线，避免 Codex / Claude 后续互相踩未知改动。

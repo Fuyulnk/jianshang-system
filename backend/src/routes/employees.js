@@ -1,17 +1,25 @@
 import { authMiddleware } from '../middleware/auth.js'
+import { requireModuleAccess } from '../utils/permissions.js'
 
 export default function employeeRoutes(server, db) {
   // 获取员工列表
   server.get('/api/employees', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'employees', 'can_view', '无权限查看员工档案')) return
 
-    const employees = db.prepare('SELECT * FROM employees ORDER BY id ASC').all()
+    const employees = db.prepare(`
+      SELECT e.*, u.id as bound_user_id, u.username as bound_username, u.role as bound_user_role
+      FROM employees e
+      LEFT JOIN users u ON u.employee_id = e.id
+      ORDER BY e.id ASC
+    `).all()
     return { success: true, data: employees }
   })
 
   // 新增员工
   server.post('/api/employees', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'employees', 'can_create', '无权限新增员工档案')) return
 
     const { name, department, position, phone } = request.body
     if (!name) {
@@ -41,6 +49,7 @@ export default function employeeRoutes(server, db) {
   // 更新员工
   server.put('/api/employees/:id', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'employees', 'can_edit', '无权限编辑员工档案')) return
 
     const { name, department, position, phone, status } = request.body
     db.prepare(
@@ -53,6 +62,11 @@ export default function employeeRoutes(server, db) {
   // 删除员工
   server.delete('/api/employees/:id', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'employees', 'can_delete', '无权限删除员工档案')) return
+    const boundUser = db.prepare('SELECT username FROM users WHERE employee_id = ?').get(request.params.id)
+    if (boundUser) {
+      return { success: false, message: `员工档案已绑定账号 ${boundUser.username}，请先在用户管理中解绑` }
+    }
 
     db.prepare('DELETE FROM employees WHERE id = ?').run(request.params.id)
     return { success: true }

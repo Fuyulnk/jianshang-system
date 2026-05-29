@@ -1,9 +1,11 @@
 import { authMiddleware } from '../middleware/auth.js'
+import { requireModuleAccess } from '../utils/permissions.js'
 
 export default function transactionRoutes(server, db) {
   // 获取交易列表
   server.get('/api/transactions', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'transactions', 'can_view', '无权限查看交易流水')) return
 
     const { account_id, account_type, type, category, start_date, end_date, page = 1, pageSize = 20 } = request.query
     const offset = (Number(page) - 1) * Number(pageSize)
@@ -49,6 +51,7 @@ export default function transactionRoutes(server, db) {
   // 获取所有交易分类
   server.get('/api/transactions/categories', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'transactions', 'can_view', '无权限查看交易分类')) return
     const data = db.prepare(
       "SELECT DISTINCT category FROM transactions WHERE category IS NOT NULL AND category != '' ORDER BY category"
     ).all()
@@ -58,6 +61,7 @@ export default function transactionRoutes(server, db) {
   // 新增交易
   server.post('/api/transactions', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'transactions', 'can_create', '无权限新增交易流水')) return
 
     const { account_id, type, amount, category, description, party, proxy } = request.body
 
@@ -82,6 +86,7 @@ export default function transactionRoutes(server, db) {
   // 删除交易
   server.delete('/api/transactions/:id', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'transactions', 'can_delete', '无权限删除交易流水')) return
 
     const tx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(request.params.id)
     if (!tx) {

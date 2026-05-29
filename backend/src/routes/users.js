@@ -22,8 +22,11 @@ export default function userRoutes(server, db) {
     }
     const users = db.prepare(`
       SELECT u.id, u.username, u.role, u.avatar_url, u.real_name, u.phone, u.department,
+             u.employee_id, e.employee_code, e.name as employee_name, e.position as employee_position,
              r.label as role_label, u.created_at
-      FROM users u LEFT JOIN roles r ON u.role = r.name
+      FROM users u
+      LEFT JOIN roles r ON u.role = r.name
+      LEFT JOIN employees e ON u.employee_id = e.id
       ORDER BY u.id ASC
     `).all()
     return { success: true, data: users }
@@ -74,6 +77,41 @@ export default function userRoutes(server, db) {
       return
     }
     db.prepare('UPDATE users SET role = ?, role_version = COALESCE(role_version, 1) + 1 WHERE id = ?').run(role, request.params.id)
+    return { success: true }
+  })
+
+  // 绑定/解绑员工档案
+  server.put('/api/users/:id/employee', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (request.user.role !== 'super_admin') {
+      reply.code(403).send({ success: false, message: '无权限' })
+      return
+    }
+
+    const userId = Number(request.params.id)
+    const employeeId = toInt(request.body?.employee_id)
+    const target = db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId)
+    if (!target) {
+      reply.code(404).send({ success: false, message: '用户不存在' })
+      return
+    }
+
+    if (employeeId > 0) {
+      const employee = db.prepare('SELECT id, name, employee_code FROM employees WHERE id = ?').get(employeeId)
+      if (!employee) return { success: false, message: '员工档案不存在' }
+
+      const bound = db.prepare('SELECT id, username FROM users WHERE employee_id = ? AND id != ?').get(employeeId, userId)
+      if (bound) {
+        return { success: false, message: `该员工档案已绑定账号 ${bound.username}` }
+      }
+    }
+
+    db.prepare(`
+      UPDATE users
+      SET employee_id = ?, role_version = COALESCE(role_version, 1) + 1
+      WHERE id = ?
+    `).run(employeeId, userId)
+
     return { success: true }
   })
 
@@ -177,4 +215,9 @@ export default function userRoutes(server, db) {
 function isValidRole(db, role) {
   if (!role) return false
   return !!db.prepare('SELECT 1 FROM roles WHERE name = ?').get(role)
+}
+
+function toInt(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0
 }
