@@ -26,6 +26,170 @@
         </div>
       </div>
 
+      <!-- 当前阶段工作单 -->
+      <el-card class="work-card" shadow="never">
+        <template #header>
+          <div class="work-header">
+            <div>
+              <div class="work-kicker">当前工作单</div>
+              <h3>{{ currentTask.title }}</h3>
+              <p>{{ currentTask.desc }}</p>
+            </div>
+            <el-tag :type="project.status === 'closed' ? 'success' : 'primary'">{{ project.status_label }}</el-tag>
+          </div>
+        </template>
+
+        <el-form :model="editForm" label-position="top" class="work-form">
+          <template v-if="project.status === 'info_confirmed'">
+            <el-row :gutter="16">
+              <el-col :span="8"><el-form-item label="工勘日期"><el-input v-model="editForm.survey_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="16"><el-form-item label="工勘记录"><el-input v-model="editForm.survey_report" placeholder="现场面积、基层情况、特殊工艺等" /></el-form-item></el-col>
+            </el-row>
+          </template>
+
+          <template v-else-if="project.status === 'survey_done'">
+            <el-form-item label="开工条件备注"><el-input v-model="editForm.condition_note" type="textarea" :rows="2" placeholder="现场是否具备进场条件、水电/保护/基层等情况" /></el-form-item>
+          </template>
+
+          <template v-else-if="project.status === 'condition_met'">
+            <el-row :gutter="16">
+              <el-col :span="8">
+                <el-form-item label="班组长"><el-input v-model="editForm.team_leader" placeholder="班组长姓名" /></el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="施工负责人">
+                  <el-select v-model="editForm.assignee_user_id" clearable filterable style="width:100%" placeholder="选择施工负责人">
+                    <el-option v-for="u in assignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="预计完工"><el-input v-model="editForm.expected_end_date" placeholder="2026-01-01" /></el-form-item>
+              </el-col>
+            </el-row>
+            <el-form-item label="施工成员">
+              <el-select v-model="editForm.crew_member_user_ids" multiple clearable filterable style="width:100%" placeholder="选择参与施工的员工">
+                <el-option v-for="u in assignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id">
+                  <span>{{ userOptionLabel(u) }}</span>
+                  <span class="option-status" :class="{ busy: u.availability_status === 'busy' }">
+                    {{ u.availability_status === 'busy' ? `占用：${u.busy_project_name}` : '可安排' }}
+                  </span>
+                </el-option>
+              </el-select>
+            </el-form-item>
+          </template>
+
+          <template v-else-if="project.status === 'team_assigned'">
+            <el-form-item label="开工交底日期"><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
+          </template>
+
+          <template v-else-if="project.status === 'briefing_done'">
+            <el-row :gutter="16">
+              <el-col :span="8">
+                <el-form-item label="材料出库状态">
+                  <el-select v-model="editForm.material_out_status" style="width:100%">
+                    <el-option label="待出库" value="pending" />
+                    <el-option label="已申请" value="requested" />
+                    <el-option label="已出库" value="done" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="16">
+                <el-form-item label="出库备注"><el-input v-model="editForm.material_out_note" placeholder="后续将联动仓库出库单，当前先记录说明" /></el-form-item>
+              </el-col>
+            </el-row>
+          </template>
+
+          <template v-else-if="project.status === 'material_out'">
+            <el-row :gutter="16">
+              <el-col :span="8"><el-form-item label="开工日期"><el-input v-model="editForm.start_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8">
+                <el-form-item label="人员状态">
+                  <el-select v-model="editForm.crew_status" style="width:100%">
+                    <el-option label="待进场" value="pending" />
+                    <el-option label="已进场" value="onsite" />
+                    <el-option label="施工中" value="working" />
+                    <el-option label="已撤场" value="released" />
+                    <el-option label="暂停" value="paused" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="8"><el-form-item label="预计完工"><el-input v-model="editForm.expected_end_date" placeholder="2026-01-01" /></el-form-item></el-col>
+            </el-row>
+          </template>
+
+          <template v-else-if="project.status === 'in_progress'">
+            <el-form-item label="施工记录"><el-input v-model="editForm.construction_note" type="textarea" :rows="2" placeholder="施工进度、现场问题、需协调事项" /></el-form-item>
+          </template>
+
+          <template v-else-if="project.status === 'inspection_done'">
+            <el-row :gutter="16">
+              <el-col :span="12"><el-form-item label="完工日期"><el-input v-model="editForm.end_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="12"><el-form-item label="验收日期"><el-input v-model="editForm.acceptance_date" placeholder="2026-01-01" /></el-form-item></el-col>
+            </el-row>
+          </template>
+
+          <template v-else-if="project.status === 'completed'">
+            <el-row :gutter="16">
+              <el-col :span="8">
+                <el-form-item label="材料回库状态">
+                  <el-select v-model="editForm.material_return_status" style="width:100%">
+                    <el-option label="待回库" value="pending" />
+                    <el-option label="已申请" value="requested" />
+                    <el-option label="已回库" value="done" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="16">
+                <el-form-item label="回库备注"><el-input v-model="editForm.material_return_note" placeholder="后续将联动仓库回库单，当前先记录余料/损耗说明" /></el-form-item>
+              </el-col>
+            </el-row>
+          </template>
+
+          <template v-else-if="project.status === 'material_returned'">
+            <el-form-item label="结算金额">
+              <div class="money-editor">
+                <el-input v-model="editForm.settlement_amount" type="number" placeholder="请输入最终结算金额">
+                  <template #append>元</template>
+                </el-input>
+                <div class="money-preview">{{ formatCurrency(editForm.settlement_amount) }}</div>
+              </div>
+            </el-form-item>
+          </template>
+
+          <template v-else-if="project.status === 'closed' || project.status === 'settled'">
+            <div class="closed-state">
+              <el-icon><Select /></el-icon>
+              <div>
+                <strong>项目已完结</strong>
+                <span>如后续客户报修，可单独发起售后，不影响主工程完结。</span>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="project.status.startsWith('repair_')">
+            <el-form-item label="售后处理备注"><el-input v-model="editForm.construction_note" type="textarea" :rows="2" placeholder="维修安排、现场处理结果" /></el-form-item>
+          </template>
+        </el-form>
+
+        <div class="work-actions">
+          <el-button v-if="currentTask.next && canRunCurrentTask" type="primary" size="large" :loading="saving" @click="saveAndAdvance(currentTask.next)">
+            {{ currentTask.action }}
+          </el-button>
+          <el-button v-if="(project.status === 'closed' || project.status === 'settled') && canStartRepair" type="warning" plain @click="advanceStatus('repair_requested')">
+            发起售后单
+          </el-button>
+          <el-button plain @click="showEdit = true" v-if="canEditProject">编辑完整资料</el-button>
+        </div>
+      </el-card>
+
+      <AttachmentPanel
+        class="project-attachments"
+        entity-type="project"
+        :entity-id="project.id"
+        title="工程附件"
+      />
+
       <!-- 阶段详情 -->
       <div class="phase-panels">
         <!-- 阶段1: 项目前期 -->
@@ -38,7 +202,7 @@
           </template>
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="项目来源">{{ project.source || '未填写' }}</el-descriptions-item>
-            <el-descriptions-item label="施工地址">{{ project.address || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="施工地址">{{ formattedAddress || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="工勘报告">{{ project.survey_report || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="工勘日期">{{ project.survey_date || '未填写' }}</el-descriptions-item>
           </el-descriptions>
@@ -55,6 +219,12 @@
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="开工条件备注">{{ project.condition_note || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="班组长">{{ project.team_leader || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="施工成员" :span="2">
+              <span v-if="crewMembers.length" class="crew-tags">
+                <el-tag v-for="member in crewMembers" :key="member.id" size="small">{{ displayUser(member.real_name, member.username) }}</el-tag>
+              </span>
+              <span v-else>未安排</span>
+            </el-descriptions-item>
             <el-descriptions-item label="开工交底日期">{{ project.briefing_date || '未填写' }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -70,6 +240,8 @@
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="开工日期">{{ project.start_date || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="预计完工">{{ project.expected_end_date || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="人员状态">{{ crewStatusLabel(project.crew_status) }}</el-descriptions-item>
+            <el-descriptions-item label="材料出库">{{ materialStatusLabel(project.material_out_status) }}</el-descriptions-item>
             <el-descriptions-item label="施工备注" :span="2">{{ project.construction_note || '未填写' }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -88,40 +260,22 @@
             <el-descriptions-item label="合同金额">{{ project.total_amount?.toFixed(2) }} 元</el-descriptions-item>
             <el-descriptions-item label="定金">{{ project.deposit_amount?.toFixed(2) }} 元</el-descriptions-item>
             <el-descriptions-item label="结算金额">{{ project.settlement_amount?.toFixed(2) }} 元</el-descriptions-item>
+            <el-descriptions-item label="材料回库">{{ materialStatusLabel(project.material_return_status) }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
 
-        <!-- 阶段5: 售后服务 -->
-        <el-card class="phase-card">
+        <!-- 售后服务 -->
+        <el-card class="phase-card" v-if="project.phase >= 6">
           <template #header>
             <div class="card-header">
               <span><el-icon><Service /></el-icon> 售后服务</span>
-              <el-tag size="small" :type="project.phase >= 5 ? 'warning' : 'info'">{{ project.phase >= 5 ? '进行中' : '待进行' }}</el-tag>
+              <el-tag size="small" type="warning">进行中</el-tag>
             </div>
           </template>
-          <el-empty description="暂无售后记录" v-if="project.phase < 5" style="padding:20px" />
-          <div v-else>
-            <el-descriptions :column="2" border size="small">
-              <el-descriptions-item label="售后状态">{{ project.status_label }}</el-descriptions-item>
-            </el-descriptions>
-          </div>
-        </el-card>
-
-        <!-- 状态推进 -->
-        <el-card class="phase-card">
-          <template #header>
-            <div class="card-header">
-              <span><el-icon><Right /></el-icon> 状态推进</span>
-              <span class="header-meta">当前：{{ project.status_label }}</span>
-            </div>
-          </template>
-          <div class="status-actions">
-            <el-button v-for="s in nextStatuses" :key="s.key"
-              :type="s.type" :disabled="s.disabled" @click="advanceStatus(s.key)">
-              <el-icon v-if="s.icon && statusIconMap[s.icon]"><component :is="statusIconMap[s.icon]" /></el-icon>
-              {{ s.label }}
-            </el-button>
-          </div>
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="售后状态">{{ project.status_label }}</el-descriptions-item>
+            <el-descriptions-item label="处理备注">{{ project.construction_note || '未填写' }}</el-descriptions-item>
+          </el-descriptions>
         </el-card>
       </div>
 
@@ -166,7 +320,19 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <el-form-item label="施工地址"><el-input v-model="editForm.address" /></el-form-item>
+            <el-form-item label="施工地址">
+              <div class="address-fields">
+                <el-cascader
+                  v-model="editForm.addressRegion"
+                  :options="chinaRegionOptions"
+                  :props="addressCascaderProps"
+                  clearable
+                  filterable
+                  placeholder="省 / 市"
+                />
+                <el-input v-model="editForm.address_detail" placeholder="小区、楼栋、门牌号等详细地址" />
+              </div>
+            </el-form-item>
             <el-row :gutter="16" v-if="canManageProject">
               <el-col :span="12">
                 <el-form-item label="项目负责人">
@@ -202,6 +368,11 @@
                 <el-form-item label="交底日期"><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
               </el-col>
             </el-row>
+            <el-form-item label="施工成员">
+              <el-select v-model="editForm.crew_member_user_ids" multiple clearable filterable style="width:100%" placeholder="选择参与施工的员工">
+                <el-option v-for="u in assignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+              </el-select>
+            </el-form-item>
           </el-tab-pane>
           <el-tab-pane label="施工与结算">
             <el-row :gutter="16">
@@ -215,6 +386,14 @@
             <el-form-item label="施工备注"><el-input v-model="editForm.construction_note" type="textarea" :rows="2" /></el-form-item>
             <el-row :gutter="16">
               <el-col :span="12">
+                <el-form-item label="材料出库"><el-select v-model="editForm.material_out_status" style="width:100%"><el-option label="待出库" value="pending" /><el-option label="已申请" value="requested" /><el-option label="已出库" value="done" /></el-select></el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="材料回库"><el-select v-model="editForm.material_return_status" style="width:100%"><el-option label="待回库" value="pending" /><el-option label="已申请" value="requested" /><el-option label="已回库" value="done" /></el-select></el-form-item>
+              </el-col>
+            </el-row>
+            <el-row :gutter="16">
+              <el-col :span="12">
                 <el-form-item label="完工日期"><el-input v-model="editForm.end_date" placeholder="2026-01-01" /></el-form-item>
               </el-col>
               <el-col :span="12">
@@ -224,7 +403,7 @@
             <el-row :gutter="16" v-if="canManageProject">
               <el-col :span="8"><el-form-item label="合同金额"><el-input v-model="editForm.total_amount" type="number"><template #append>元</template></el-input></el-form-item></el-col>
               <el-col :span="8"><el-form-item label="定金"><el-input v-model="editForm.deposit_amount" type="number"><template #append>元</template></el-input></el-form-item></el-col>
-              <el-col :span="8"><el-form-item label="结算金额"><el-input v-model="editForm.settlement_amount" type="number"><template #append>元</template></el-input></el-form-item></el-col>
+              <el-col :span="24"><el-form-item label="结算金额"><div class="money-editor compact"><el-input v-model="editForm.settlement_amount" type="number"><template #append>元</template></el-input><div class="money-preview">{{ formatCurrency(editForm.settlement_amount) }}</div></div></el-form-item></el-col>
             </el-row>
           </el-tab-pane>
         </el-tabs>
@@ -241,7 +420,16 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Check, Document, Tools, House, Select, Edit, Service, Right } from '@element-plus/icons-vue'
+import { Document, Tools, House, Select, Edit, Service } from '@element-plus/icons-vue'
+import AttachmentPanel from '../../components/AttachmentPanel.vue'
+import {
+  addressCascaderProps,
+  buildAddressPayload,
+  chinaRegionOptions,
+  formatProjectAddress,
+  getAddressDetail,
+  getAddressRegion
+} from '../../utils/chinaRegions'
 
 const route = useRoute()
 const project = ref(null)
@@ -256,7 +444,7 @@ const phases = [
   { phase: 2, label: '准备阶段' },
   { phase: 3, label: '施工过程' },
   { phase: 4, label: '完工验收' },
-  { phase: 5, label: '售后服务' },
+  { phase: 5, label: '项目完结' },
 ]
 
 // 当前用户角色
@@ -272,64 +460,147 @@ const userId = (() => {
     return JSON.parse(atob(t.split('.')[1])).userId || 0
   } catch { return 0 }
 })()
-const canManageProject = computed(() => ['super_admin', 'admin'].includes(userRole))
-const isAssignedEmployee = computed(() => project.value?.assignee_user_id === userId)
-const canEditProject = computed(() => canManageProject.value || (userRole === 'employee' && isAssignedEmployee.value))
-
-const STATUS_TRANSITIONS = {
-  info_confirmed:  { next: 'survey_done', label: '工勘完成', type: 'primary', icon: 'Check', roles: ['super_admin','admin'] },
-  survey_done:     { next: 'condition_met', label: '确认开工条件', type: 'primary', icon: 'Check', roles: ['super_admin','admin','finance'] },
-  condition_met:   { next: 'team_assigned', label: '安排施工班组', type: 'primary', icon: 'Check', roles: ['super_admin','admin'] },
-  team_assigned:   { next: 'briefing_done', label: '开工交底完成', type: 'primary', icon: 'Check', roles: ['super_admin','admin'] },
-  briefing_done:   { next: 'material_out', label: '材料出库', type: 'primary', icon: 'Check', roles: ['super_admin','admin','warehouse'] },
-  material_out:    { next: 'in_progress', label: '开始施工', type: 'primary', icon: 'Check', roles: ['super_admin','admin'] },
-  in_progress:     { next: 'inspection_done', label: '过程检查完成', type: 'primary', icon: 'Check', roles: ['super_admin','admin'] },
-  inspection_done: { next: 'completed', label: '申请完工验收', type: 'primary', icon: 'Check', roles: ['super_admin','admin'] },
-  completed:       { next: 'material_returned', label: '材料回库', type: 'primary', icon: 'Check', roles: ['super_admin','admin','warehouse'] },
-  material_returned: { next: 'settled', label: '结算完成', type: 'success', icon: 'Check', roles: ['super_admin','admin','finance'] },
-  settled:         { next: null, label: '已完结', type: 'success', icon: 'Check' },
-}
-
-// 售后流程（从结算后可进入售后）
-const AFTER_SALES = {
-  repair_requested: { next: 'repair_assigned', label: '安排维修', type: 'warning', icon: 'Tools', roles: ['super_admin','admin'] },
-  repair_assigned:  { next: 'repair_done', label: '维修完成', type: 'success', icon: 'Check', roles: ['super_admin','admin'] },
-  repair_done:      { next: null, label: '已完结', type: 'success', icon: 'Check' },
-}
-
-const statusIconMap = { Check, Tools }
-
-const nextStatuses = computed(() => {
-  if (!project.value) return []
-  const s = project.value.status
-
-  function canAct(roles) {
-    if (!roles || userRole === 'super_admin') return true
-    if (!roles.includes(userRole)) return false
-    return userRole !== 'employee' || isAssignedEmployee.value
-  }
-
-  // 售后状态走售后流程
-  if (s.startsWith('repair_')) {
-    const t = AFTER_SALES[s]
-    return t && canAct(t.roles)
-      ? [{ key: t.next, label: t.label, type: t.type, icon: t.icon, disabled: !t.next }]
-      : []
-  }
-  // 正常流转
-  if (STATUS_TRANSITIONS[s]) {
-    const t = STATUS_TRANSITIONS[s]
-    const actions = t.next && canAct(t.roles)
-      ? [{ key: t.next, label: t.label, type: t.type, icon: t.icon, disabled: false }]
-      : []
-    // 结算后管理员可进入售后
-    if (s === 'settled' && canAct(['admin'])) {
-      actions.push({ key: 'repair_requested', label: '收到售后报修', type: 'warning', icon: 'Tools', disabled: false })
-    }
-    return actions
-  }
-  return []
+const canManageProject = computed(() => ['super_admin', 'admin', 'engineering'].includes(userRole))
+const isAssignedEmployee = computed(() => {
+  if (!project.value) return false
+  return project.value.assignee_user_id === userId
+    || parseCrewMemberIds(project.value.crew_member_user_ids).includes(userId)
 })
+const canEditProject = computed(() => canManageProject.value || (userRole === 'employee' && isAssignedEmployee.value))
+const formattedAddress = computed(() => formatProjectAddress(project.value || {}))
+const crewMembers = computed(() => {
+  const ids = parseCrewMemberIds(project.value?.crew_member_user_ids)
+  return ids.map(id => assignees.value.find(user => user.id === id)).filter(Boolean)
+})
+
+const TASK_FALLBACK = {
+  title: '查看工程状态',
+  desc: '当前阶段暂无需要填写的工作项。',
+  action: '',
+  next: '',
+  roles: []
+}
+
+const TASKS = {
+  info_confirmed: {
+    title: '补充工勘信息',
+    desc: '填完工勘日期或工勘记录后，直接进入工勘完成。',
+    action: '保存并标记工勘完成',
+    next: 'survey_done',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  survey_done: {
+    title: '确认开工条件',
+    desc: '记录现场是否具备开工条件，确认后进入开工准备。',
+    action: '保存并确认开工条件',
+    next: 'condition_met',
+    roles: ['super_admin', 'admin', 'finance']
+  },
+  condition_met: {
+    title: '安排施工组',
+    desc: '安排班组长、施工负责人和施工成员，系统会显示成员是否已被其他项目占用。',
+    action: '保存施工组并进入班组安排',
+    next: 'team_assigned',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  team_assigned: {
+    title: '完成开工交底',
+    desc: '填写交底日期后，进入材料出库准备。',
+    action: '保存并标记交底完成',
+    next: 'briefing_done',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  briefing_done: {
+    title: '确认材料出库',
+    desc: '当前先记录材料出库状态，后续会联动仓库出库单。',
+    action: '确认材料出库',
+    next: 'material_out',
+    roles: ['super_admin', 'admin', 'warehouse']
+  },
+  material_out: {
+    title: '开始施工',
+    desc: '填写开工日期并更新人员进场状态，施工成员会被视为占用。',
+    action: '保存并开始施工',
+    next: 'in_progress',
+    roles: ['super_admin', 'admin', 'engineering', 'employee'],
+    assignedOnly: true
+  },
+  in_progress: {
+    title: '记录施工过程',
+    desc: '记录施工进度、现场问题或协调事项，完成后进入检查。',
+    action: '保存并标记检查完成',
+    next: 'inspection_done',
+    roles: ['super_admin', 'admin', 'engineering', 'employee'],
+    assignedOnly: true
+  },
+  inspection_done: {
+    title: '完工验收',
+    desc: '填写完工和验收日期，进入材料回库。',
+    action: '保存并标记已完工',
+    next: 'completed',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  completed: {
+    title: '确认材料回库',
+    desc: '当前先记录材料回库状态，后续会联动仓库回库单和项目成本。',
+    action: '确认材料回库',
+    next: 'material_returned',
+    roles: ['super_admin', 'admin', 'warehouse']
+  },
+  material_returned: {
+    title: '财务结算',
+    desc: '填写最终结算金额后，可以直接完结项目；没有售后也能正常闭环。',
+    action: '结算完成并完结项目',
+    next: 'closed',
+    roles: ['super_admin', 'admin', 'finance']
+  },
+  settled: {
+    title: '确认项目完结',
+    desc: '旧项目的已结算状态可以补确认后完结。',
+    action: '确认项目完结',
+    next: 'closed',
+    roles: ['super_admin', 'admin', 'finance']
+  },
+  closed: {
+    title: '项目已完结',
+    desc: '主工程流程已经结束。后续客户报修时再单独发起售后。',
+    action: '',
+    next: '',
+    roles: []
+  },
+  repair_requested: {
+    title: '安排售后维修',
+    desc: '售后是独立事件，不影响主工程完结。',
+    action: '安排维修',
+    next: 'repair_assigned',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  repair_assigned: {
+    title: '完成售后维修',
+    desc: '记录维修处理结果并关闭售后。',
+    action: '维修完成',
+    next: 'repair_done',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  repair_done: {
+    title: '售后已完成',
+    desc: '该售后事件已经处理完成。',
+    action: '',
+    next: '',
+    roles: []
+  }
+}
+
+const currentTask = computed(() => TASKS[project.value?.status] || TASK_FALLBACK)
+const canRunCurrentTask = computed(() => {
+  const roles = currentTask.value.roles || []
+  if (!currentTask.value.next || !roles.length) return false
+  if (userRole === 'super_admin') return true
+  if (!roles.includes(userRole)) return false
+  if (currentTask.value.assignedOnly && ['employee', 'engineering'].includes(userRole)) return isAssignedEmployee.value
+  return true
+})
+const canStartRepair = computed(() => ['super_admin', 'admin', 'engineering'].includes(userRole))
 
 function token() { return localStorage.getItem('token') }
 function formatTime(t) { return t ? new Date(t).toLocaleString('zh-CN') : '' }
@@ -349,7 +620,15 @@ async function fetchDetail() {
     const json = await res.json()
     if (json.success) {
       project.value = json.data
-      editForm.value = { ...json.data }
+      editForm.value = {
+        ...json.data,
+        addressRegion: getAddressRegion(json.data),
+        address_detail: getAddressDetail(json.data),
+        crew_member_user_ids: parseCrewMemberIds(json.data.crew_member_user_ids),
+        crew_status: json.data.crew_status || 'pending',
+        material_out_status: json.data.material_out_status || 'pending',
+        material_return_status: json.data.material_return_status || 'pending'
+      }
     }
   } finally { loading.value = false }
 }
@@ -364,7 +643,7 @@ async function fetchAssignees() {
   } catch {}
 }
 
-async function advanceStatus(statusKey) {
+async function advanceStatus(statusKey, throwOnError = false) {
   const res = await fetch(`/api/projects/${route.params.id}/status`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
@@ -373,43 +652,113 @@ async function advanceStatus(statusKey) {
   const json = await res.json()
   if (json.success) {
     ElMessage.success('状态已更新')
-    fetchDetail()
+    await fetchDetail()
+    return true
   } else {
-    ElMessage.warning(json.message || '状态更新失败')
+    const message = json.message || '状态更新失败'
+    if (throwOnError) throw new Error(message)
+    ElMessage.warning(message)
+    return false
+  }
+}
+
+async function saveAndAdvance(statusKey) {
+  saving.value = true
+  try {
+    await saveProjectFields()
+    await advanceStatus(statusKey, true)
+  } catch (err) {
+    ElMessage.error(err.message || '操作失败，请稍后重试')
+  } finally {
+    saving.value = false
   }
 }
 
 async function handleSave() {
   saving.value = true
   try {
-    const body = {}
-    const fields = ['name', 'customer', 'phone', 'address', 'source', 'survey_report', 'survey_date',
-      'team_leader', 'briefing_date', 'condition_note', 'start_date', 'expected_end_date', 'construction_note',
-      'end_date', 'acceptance_date', 'total_amount', 'deposit_amount', 'settlement_amount',
-      'manager_user_id', 'assignee_user_id']
-    for (const f of fields) {
-      if (editForm.value[f] !== undefined) {
-        body[f] = typeof editForm.value[f] === 'string' ? editForm.value[f].trim() : editForm.value[f]
-      }
-    }
-    body.total_amount = parseFloat(body.total_amount) || 0
-    body.deposit_amount = parseFloat(body.deposit_amount) || 0
-    body.settlement_amount = parseFloat(body.settlement_amount) || 0
-    body.manager_user_id = body.manager_user_id || 0
-    body.assignee_user_id = body.assignee_user_id || 0
-
-    const res = await fetch(`/api/projects/${route.params.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
-      body: JSON.stringify(body)
-    })
-    const json = await res.json()
-    if (json.success) {
-      ElMessage.success('保存成功')
-      showEdit.value = false
-      fetchDetail()
-    }
+    await saveProjectFields()
+    ElMessage.success('保存成功')
+    showEdit.value = false
+    fetchDetail()
+  } catch (err) {
+    ElMessage.error(err.message || '保存失败，请稍后重试')
   } finally { saving.value = false }
+}
+
+async function saveProjectFields() {
+  const body = { ...buildAddressPayload(editForm.value) }
+  const fields = ['name', 'customer', 'phone', 'address', 'address_province', 'address_city', 'address_detail', 'source', 'survey_report', 'survey_date',
+    'team_leader', 'crew_member_user_ids', 'crew_status', 'briefing_date', 'condition_note',
+    'material_out_status', 'material_out_note', 'material_return_status', 'material_return_note',
+    'start_date', 'expected_end_date', 'construction_note',
+    'end_date', 'acceptance_date', 'total_amount', 'deposit_amount', 'settlement_amount',
+    'manager_user_id', 'assignee_user_id']
+  for (const f of fields) {
+    if (editForm.value[f] !== undefined) {
+      body[f] = typeof editForm.value[f] === 'string' ? editForm.value[f].trim() : editForm.value[f]
+    }
+  }
+  Object.assign(body, buildAddressPayload(editForm.value))
+  body.total_amount = parseFloat(body.total_amount) || 0
+  body.deposit_amount = parseFloat(body.deposit_amount) || 0
+  body.settlement_amount = parseFloat(body.settlement_amount) || 0
+  body.manager_user_id = body.manager_user_id || 0
+  body.assignee_user_id = body.assignee_user_id || 0
+  body.crew_member_user_ids = Array.isArray(body.crew_member_user_ids) ? body.crew_member_user_ids : []
+
+  const res = await fetch(`/api/projects/${route.params.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+    body: JSON.stringify(body)
+  })
+  const json = await readJson(res)
+  if (!res.ok || !json.success) {
+    throw new Error(json.message || '保存失败，请检查权限或服务器日志')
+  }
+}
+
+async function readJson(res) {
+  const text = await res.text()
+  try {
+    return text ? JSON.parse(text) : {}
+  } catch {
+    return { success: false, message: text.slice(0, 120) || '服务器返回异常' }
+  }
+}
+
+function parseCrewMemberIds(value) {
+  if (Array.isArray(value)) return value.map(Number).filter(Boolean)
+  try {
+    const parsed = JSON.parse(value || '[]')
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+function crewStatusLabel(value) {
+  return {
+    pending: '待进场',
+    onsite: '已进场',
+    working: '施工中',
+    released: '已撤场',
+    paused: '暂停'
+  }[value] || '待进场'
+}
+
+function materialStatusLabel(value) {
+  return {
+    pending: '待处理',
+    requested: '已申请',
+    done: '已完成'
+  }[value] || '待处理'
+}
+
+function formatCurrency(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '￥0.00'
+  return `￥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 onMounted(() => {
@@ -451,12 +800,150 @@ onMounted(() => {
 .phase-step.current .step-dot { box-shadow: 0 0 0 4px rgba(79,109,245,0.25); }
 .step-label { font-size: 13px; color: var(--text-tertiary); }
 .phase-step.active .step-label { color: var(--color-primary); font-weight: 500; }
+.work-card {
+  margin-bottom: 20px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, var(--border-light));
+}
+.work-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+.work-kicker {
+  font-size: 12px;
+  color: var(--color-primary);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.work-header h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  color: var(--text-primary);
+}
+.work-header p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.work-form {
+  max-width: 960px;
+}
+.work-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding-top: 6px;
+}
+.option-status {
+  float: right;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.option-status.busy {
+  color: var(--color-warning);
+}
+.crew-tags {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.closed-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+  padding: 8px 0 12px;
+}
+.closed-state .el-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  color: var(--color-success);
+}
+.closed-state strong,
+.closed-state span {
+  display: block;
+}
+.closed-state span {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+.money-editor {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) minmax(180px, 1fr);
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+.money-editor :deep(.el-input__inner) {
+  height: 46px;
+  font-size: 20px;
+  font-weight: 700;
+}
+.money-preview {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-success) 10%, var(--bg-page));
+  color: var(--color-success);
+  font-size: 22px;
+  font-weight: 800;
+}
+.money-editor.compact {
+  grid-template-columns: minmax(240px, 1fr) minmax(180px, 240px);
+}
 .phase-panels { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
+.project-attachments { margin-bottom: 20px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
-.status-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.phase-card,
+.log-card {
+  background: var(--bg-card);
+}
+.phase-card :deep(.el-descriptions__body),
+.phase-card :deep(.el-descriptions__cell) {
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-page));
+  color: var(--text-secondary);
+}
+.phase-card :deep(.el-descriptions__label) {
+  background: color-mix(in srgb, var(--bg-page) 82%, var(--bg-card));
+  color: var(--text-tertiary);
+}
+.phase-card :deep(.el-descriptions__content) {
+  color: var(--text-primary);
+}
 .log-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-light); font-size: 13px; }
 .log-item:last-child { border-bottom: none; }
 .log-operator { color: var(--color-primary); font-weight: 500; }
 .log-content { color: var(--text-primary); flex: 1; }
 .log-time { color: var(--text-placeholder); font-size: 12px; }
+.address-fields {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+}
+.address-fields :deep(.el-cascader) {
+  width: 100%;
+}
+@media (max-width: 720px) {
+  .address-fields {
+    grid-template-columns: 1fr;
+  }
+  .money-editor,
+  .money-editor.compact {
+    grid-template-columns: 1fr;
+  }
+  .work-header {
+    flex-direction: column;
+  }
+}
 </style>

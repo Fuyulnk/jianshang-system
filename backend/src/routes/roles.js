@@ -35,14 +35,19 @@ export default function roleRoutes(server, db) {
       reply.code(403).send({ success: false, message: '无权限' })
       return
     }
-    const { can_view, can_create, can_edit, can_delete } = request.body
+    const { can_view, can_create, can_edit, can_delete, data_scope } = request.body
+    const current = db.prepare('SELECT data_scope FROM role_permissions WHERE id = ?').get(request.params.id)
+    const scope = data_scope === undefined
+      ? normalizeDataScope(current?.data_scope)
+      : normalizeDataScope(data_scope)
     db.prepare(
-      'UPDATE role_permissions SET can_view = ?, can_create = ?, can_edit = ?, can_delete = ? WHERE id = ?'
+      'UPDATE role_permissions SET can_view = ?, can_create = ?, can_edit = ?, can_delete = ?, data_scope = ? WHERE id = ?'
     ).run(
       can_view ? 1 : 0,
       can_create ? 1 : 0,
       can_edit ? 1 : 0,
       can_delete ? 1 : 0,
+      scope,
       request.params.id
     )
     return { success: true }
@@ -63,4 +68,9 @@ export default function roleRoutes(server, db) {
 
     return { success: true, data: perms.map(p => p.module) }
   })
+}
+
+function normalizeDataScope(value) {
+  const allowed = new Set(['all', 'department', 'self', 'project_related', 'private_grant', 'none'])
+  return allowed.has(value) ? value : 'all'
 }

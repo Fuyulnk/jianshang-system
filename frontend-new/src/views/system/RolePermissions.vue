@@ -23,6 +23,19 @@
                 />
                 <span>{{ p.label }}</span>
               </label>
+              <el-select
+                :model-value="row[role.name].data_scope"
+                size="small"
+                class="scope-select"
+                @change="(v) => updateScope(row.module, role.name, v)"
+              >
+                <el-option
+                  v-for="scope in scopeOptions"
+                  :key="scope.value"
+                  :label="scope.label"
+                  :value="scope.value"
+                />
+              </el-select>
             </div>
             <span v-else class="no-perm">—</span>
           </template>
@@ -52,6 +65,15 @@ const permTypes = [
   { key: 'can_delete', label: '删除' }
 ]
 
+const scopeOptions = [
+  { value: 'all', label: '全部数据' },
+  { value: 'department', label: '本部门' },
+  { value: 'project_related', label: '项目相关' },
+  { value: 'self', label: '仅本人' },
+  { value: 'private_grant', label: '私有授权' },
+  { value: 'none', label: '无数据' }
+]
+
 const roleNames = computed(() => roles.value)
 const modules = computed(() => [...new Set(rawData.value.map(r => r.module))])
 
@@ -64,7 +86,8 @@ const tableData = computed(() => {
       can_view: !!r.can_view,
       can_create: !!r.can_create,
       can_edit: !!r.can_edit,
-      can_delete: !!r.can_delete
+      can_delete: !!r.can_delete,
+      data_scope: r.data_scope || 'all'
     }
   }
   return Object.values(map)
@@ -84,11 +107,16 @@ async function fetchData() {
 }
 
 async function updatePerm(module, roleName, permKey, value) {
-  // 找到对应的 permission id
   const row = rawData.value.find(r => r.module === module && r.role_name === roleName)
   if (!row) return
   try {
-    const body = { can_view: row.can_view, can_create: row.can_create, can_edit: row.can_edit, can_delete: row.can_delete }
+    const body = {
+      can_view: row.can_view,
+      can_create: row.can_create,
+      can_edit: row.can_edit,
+      can_delete: row.can_delete,
+      data_scope: row.data_scope || 'all'
+    }
     body[permKey] = value ? 1 : 0
     await fetch(`/api/role-permissions/${row.id}`, {
       method: 'PUT',
@@ -102,6 +130,29 @@ async function updatePerm(module, roleName, permKey, value) {
   }
 }
 
+async function updateScope(module, roleName, value) {
+  const row = rawData.value.find(r => r.module === module && r.role_name === roleName)
+  if (!row) return
+  try {
+    const body = {
+      can_view: row.can_view,
+      can_create: row.can_create,
+      can_edit: row.can_edit,
+      can_delete: row.can_delete,
+      data_scope: value
+    }
+    await fetch(`/api/role-permissions/${row.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify(body)
+    })
+    row.data_scope = value
+    ElMessage.success('数据范围已更新')
+  } catch {
+    ElMessage.error('更新失败')
+  }
+}
+
 onMounted(fetchData)
 </script>
 
@@ -110,6 +161,7 @@ onMounted(fetchData)
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
 }
 .perm-item {
   display: flex;
@@ -119,4 +171,7 @@ onMounted(fetchData)
   color: var(--text-secondary);
 }
 .no-perm { color: var(--text-placeholder); font-size: 13px; }
+.scope-select {
+  width: 110px;
+}
 </style>

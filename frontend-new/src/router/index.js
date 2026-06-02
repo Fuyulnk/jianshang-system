@@ -14,6 +14,7 @@ import EmployeeDashboard from '../views/EmployeeDashboard.vue'
 import ProjectList from '../views/projects/ProjectList.vue'
 import ProjectDetail from '../views/projects/ProjectDetail.vue'
 import FinanceOverview from '../views/finance/FinanceOverview.vue'
+import FileCenter from '../views/files/FileCenter.vue'
 
 const routes = [
   {
@@ -39,6 +40,7 @@ const routes = [
       { path: 'employee-dashboard', name: 'EmployeeDashboard', component: EmployeeDashboard, meta: { title: '工作台' } },
       { path: 'profile', name: 'Profile', component: ProfilePage, meta: { title: '个人设置' } },
       { path: 'chat', name: 'Chat', component: ChatIndex, meta: { title: '聊天' } },
+      { path: 'files', name: 'FileCenter', component: FileCenter, meta: { title: '文件中心' } },
       { path: 'projects', name: 'Projects', component: ProjectList, meta: { title: '工程订单' } },
       { path: 'projects/:id', name: 'ProjectDetail', component: ProjectDetail, meta: { title: '项目详情' } },
       { path: 'finance/overview', name: 'FinanceOverview', component: FinanceOverview, meta: { title: '财务总览' } }

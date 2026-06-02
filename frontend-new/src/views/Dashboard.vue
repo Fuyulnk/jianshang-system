@@ -59,7 +59,7 @@ const currentTime = ref('')
 
 const stats = ref([
   { label: '账户总数', value: '-', icon: Wallet, color: 'blue' },
-  { label: '今日交易', value: '-', icon: TrendCharts, color: 'green' },
+  { label: '交易记录', value: '-', icon: TrendCharts, color: 'green' },
   { label: '产品种类', value: '-', icon: Goods, color: 'orange' },
   { label: '员工人数', value: '-', icon: User, color: 'purple' }
 ])
@@ -81,23 +81,66 @@ async function fetchStats() {
   const token = localStorage.getItem('token')
   if (!token) return
   try {
-    const [accRes, txRes, prodRes, empRes] = await Promise.all([
+    const [accRes, txWindow, prodRes, empRes] = await Promise.all([
       fetch('/api/accounts', { headers: { Authorization: `Bearer ${token}` } }),
-      fetch('/api/transactions?pageSize=1', { headers: { Authorization: `Bearer ${token}` } }),
+      fetchTransactionWindow(token),
       fetch('/api/products', { headers: { Authorization: `Bearer ${token}` } }),
       fetch('/api/employees', { headers: { Authorization: `Bearer ${token}` } })
     ])
     const acc = await accRes.json()
-    const tx = await txRes.json()
     const prod = await prodRes.json()
     const emp = await empRes.json()
     stats.value = [
       { label: '账户总数', value: acc.data?.length || 0, icon: Wallet, color: 'blue' },
-      { label: '今日交易', value: tx.total || 0, icon: TrendCharts, color: 'green' },
+      { label: txWindow.label, value: txWindow.count, icon: TrendCharts, color: 'green' },
       { label: '产品种类', value: prod.data?.length || 0, icon: Goods, color: 'orange' },
       { label: '员工人数', value: emp.data?.length || 0, icon: User, color: 'purple' }
     ]
   } catch {}
+}
+
+async function fetchTransactionWindow(token) {
+  const today = new Date()
+  const yesterday = addDays(today, -1)
+  const sevenDaysAgo = addDays(today, -6)
+  const windows = [
+    { label: '今日交易', start: formatDate(today), end: formatDate(today) },
+    { label: '昨日交易', start: formatDate(yesterday), end: formatDate(yesterday) },
+    { label: '近7日交易', start: formatDate(sevenDaysAgo), end: formatDate(today) }
+  ]
+
+  for (const item of windows) {
+    const params = new URLSearchParams({
+      pageSize: '1',
+      start_date: item.start,
+      end_date: item.end
+    })
+    const res = await fetch(`/api/transactions?${params}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    const json = await res.json()
+    const count = Number(json.total || 0)
+    if (count > 0 || item.label === '近7日交易') {
+      return {
+        label: count > 0 ? item.label : '近7日无交易',
+        count
+      }
+    }
+  }
+  return { label: '近7日无交易', count: 0 }
+}
+
+function addDays(date, days) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function formatDate(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 onMounted(() => {

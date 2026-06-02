@@ -7,6 +7,7 @@ import fastifyStatic from '@fastify/static'
 import Database from 'better-sqlite3'
 import fs from 'fs'
 import { Server as SocketIOServer } from 'socket.io'
+import bcrypt from 'bcryptjs'
 
 import authRoutes from './routes/auth.js'
 import accountRoutes from './routes/accounts.js'
@@ -23,6 +24,7 @@ import projectRoutes from './routes/projects.js'
 import settingsRoutes from './routes/settings.js'
 import financeRoutes from './routes/finance.js'
 import employeeDashboardRoutes from './routes/employee-dashboard.js'
+import fileRoutes from './routes/files.js'
 import { setAuthDb, resolveFreshUser } from './middleware/auth.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -42,6 +44,8 @@ if (!fs.existsSync(dbDir)) {
 
 const db = new Database(dbPath)
 setAuthDb(db)
+ensureCoreTables(db)
+ensureProjectTables(db)
 
 // 初始化 JWT 配置（自动轮换密钥）
 initJwtConfig(db)
@@ -73,6 +77,21 @@ try {
 // 工程订单分配字段：先以系统用户为责任主体，后续可再和员工档案强绑定。
 try { db.exec('ALTER TABLE projects ADD COLUMN manager_user_id INTEGER DEFAULT 0') } catch {}
 try { db.exec('ALTER TABLE projects ADD COLUMN assignee_user_id INTEGER DEFAULT 0') } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN address_province TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN address_city TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN address_detail TEXT DEFAULT ''") } catch {}
+try { db.exec('ALTER TABLE projects ADD COLUMN created_by INTEGER DEFAULT 0') } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN crew_member_user_ids TEXT DEFAULT '[]'") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN crew_status TEXT DEFAULT 'pending'") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN material_out_status TEXT DEFAULT 'pending'") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN material_out_note TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN material_return_status TEXT DEFAULT 'pending'") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN material_return_note TEXT DEFAULT ''") } catch {}
+try { db.exec("UPDATE projects SET address_detail = address WHERE COALESCE(address_detail, '') = '' AND COALESCE(address, '') != ''") } catch {}
+try {
+  const owner = db.prepare("SELECT id FROM users WHERE username = 'fuyulnk'").get()
+  if (owner) db.prepare('UPDATE projects SET created_by = ? WHERE COALESCE(created_by, 0) = 0').run(owner.id)
+} catch {}
 try { db.exec('ALTER TABLE chat_history ADD COLUMN user_id INTEGER DEFAULT 0') } catch {}
 try {
   const owner = db.prepare("SELECT id FROM users WHERE username = 'fuyulnk'").get()
@@ -151,11 +170,13 @@ if (toolCount === 0) {
     }
   }
 }
+ensureAiToolPermissionRows(db)
 
 const server = fastify({
   logger: true,
-  bodyLimit: 1048576 * 10
+  bodyLimit: 1048576 * 20
 })
+const realtime = { io: null }
 
 // 静态文件
 server.register(fastifyStatic, {
@@ -196,11 +217,12 @@ aiPermissionsRoutes(server, db)
 kbRoutes(server, db)
 userRoutes(server, db)
 roleRoutes(server, db)
-chatRoutes(server, db)
+chatRoutes(server, db, realtime)
 projectRoutes(server, db)
 settingsRoutes(server, db)
 financeRoutes(server, db)
 employeeDashboardRoutes(server, db)
+fileRoutes(server, db)
 
 // SPA 回退
 server.setNotFoundHandler((request, reply) => {
@@ -237,6 +259,7 @@ const start = async () => {
     const io = new SocketIOServer(server.server, {
       cors: { origin: '*', methods: ['GET', 'POST'] }
     })
+    realtime.io = io
 
     io.use((socket, next) => {
       const token = socket.handshake.auth?.token
@@ -389,3 +412,367 @@ function generateEmployeeCode(db) {
 }
 
 start()
+
+function ensureProjectTables(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      customer TEXT NOT NULL,
+      phone TEXT DEFAULT '',
+      address TEXT DEFAULT '',
+      address_province TEXT DEFAULT '',
+      address_city TEXT DEFAULT '',
+      address_detail TEXT DEFAULT '',
+      source TEXT DEFAULT '',
+      status TEXT DEFAULT 'info_confirmed',
+      manager_user_id INTEGER DEFAULT 0,
+      assignee_user_id INTEGER DEFAULT 0,
+      crew_member_user_ids TEXT DEFAULT '[]',
+      crew_status TEXT DEFAULT 'pending',
+      material_out_status TEXT DEFAULT 'pending',
+      material_out_note TEXT DEFAULT '',
+      material_return_status TEXT DEFAULT 'pending',
+      material_return_note TEXT DEFAULT '',
+      survey_report TEXT DEFAULT '',
+      survey_date TEXT DEFAULT '',
+      team_leader TEXT DEFAULT '',
+      briefing_date TEXT DEFAULT '',
+      condition_note TEXT DEFAULT '',
+      start_date TEXT DEFAULT '',
+      expected_end_date TEXT DEFAULT '',
+      construction_note TEXT DEFAULT '',
+      end_date TEXT DEFAULT '',
+      acceptance_date TEXT DEFAULT '',
+      total_amount REAL DEFAULT 0,
+      deposit_amount REAL DEFAULT 0,
+      settlement_amount REAL DEFAULT 0,
+      created_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS project_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      operator TEXT DEFAULT '',
+      content TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    )
+  `)
+}
+
+function ensureCoreTables(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      role TEXT DEFAULT 'employee',
+      avatar_url TEXT DEFAULT '',
+      onboarding_done INTEGER DEFAULT 0,
+      real_name TEXT DEFAULT '',
+      phone TEXT DEFAULT '',
+      department TEXT DEFAULT '',
+      ai_pet_enabled INTEGER DEFAULT 1,
+      ai_auto_query INTEGER DEFAULT 1,
+      ai_name TEXT DEFAULT '简尚小助手',
+      role_version INTEGER DEFAULT 1,
+      employee_id INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT DEFAULT 'personal',
+      initial_balance REAL DEFAULT 0,
+      current_balance REAL DEFAULT 0,
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      amount REAL NOT NULL,
+      category TEXT,
+      description TEXT,
+      party TEXT,
+      proxy TEXT,
+      status TEXT DEFAULT 'approved',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      category TEXT,
+      unit TEXT DEFAULT 'kg',
+      stock REAL DEFAULT 0,
+      min_stock REAL DEFAULT 0,
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS employees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT UNIQUE,
+      name TEXT NOT NULL,
+      department TEXT,
+      position TEXT,
+      phone TEXT,
+      status TEXT DEFAULT 'active',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER DEFAULT 0,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS roles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      label TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      role_id INTEGER NOT NULL,
+      module TEXT NOT NULL,
+      can_view INTEGER DEFAULT 1,
+      can_create INTEGER DEFAULT 0,
+      can_edit INTEGER DEFAULT 0,
+      can_delete INTEGER DEFAULT 0,
+      data_scope TEXT DEFAULT 'all',
+      UNIQUE(role_id, module)
+    );
+
+    CREATE TABLE IF NOT EXISTS conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      name TEXT,
+      created_by INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_participants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(conversation_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      message_type TEXT DEFAULT 'text',
+      file_id INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL,
+      message_id INTEGER DEFAULT 0,
+      uploaded_by INTEGER NOT NULL,
+      original_name TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      mime_type TEXT DEFAULT 'application/octet-stream',
+      size INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      original_name TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      mime_type TEXT DEFAULT 'application/octet-stream',
+      size INTEGER DEFAULT 0,
+      checksum TEXT DEFAULT '',
+      uploaded_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      deleted_at TEXT DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS private_workspaces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      owner_user_id INTEGER NOT NULL,
+      description TEXT DEFAULT '',
+      workspace_type TEXT DEFAULT 'director',
+      created_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      archived_at TEXT DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_access_grants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      resource_type TEXT NOT NULL,
+      resource_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      granted_by INTEGER DEFAULT 0,
+      can_view INTEGER DEFAULT 1,
+      can_create INTEGER DEFAULT 0,
+      can_edit INTEGER DEFAULT 0,
+      can_delete INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      revoked_at TEXT DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS access_audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER DEFAULT 0,
+      employee_id INTEGER DEFAULT 0,
+      role TEXT DEFAULT '',
+      action TEXT NOT NULL,
+      resource_type TEXT DEFAULT '',
+      resource_id INTEGER DEFAULT 0,
+      module TEXT DEFAULT '',
+      status TEXT DEFAULT 'ok',
+      summary TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    )
+  `)
+
+  try { db.exec('ALTER TABLE conversations ADD COLUMN created_by INTEGER DEFAULT 0') } catch {}
+  try { db.exec("ALTER TABLE messages ADD COLUMN message_type TEXT DEFAULT 'text'") } catch {}
+  try { db.exec('ALTER TABLE messages ADD COLUMN file_id INTEGER DEFAULT 0') } catch {}
+  try { db.exec("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''") } catch {}
+  try { db.exec("ALTER TABLE role_permissions ADD COLUMN data_scope TEXT DEFAULT 'all'") } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id, deleted_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_uploaded_by ON attachments(uploaded_by, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_private_workspaces_owner ON private_workspaces(owner_user_id, archived_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_resource_access_grants_resource ON resource_access_grants(resource_type, resource_id, user_id, revoked_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_access_audit_user_time ON access_audit_logs(user_id, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_access_audit_resource_time ON access_audit_logs(resource_type, resource_id, created_at)') } catch {}
+
+  const roles = [
+    ['super_admin', '超级管理员', '系统所有权限'],
+    ['admin', '管理员', '日常管理权限'],
+    ['finance', '财务部', '账户、流水、结算相关权限'],
+    ['warehouse', '仓库部', '产品库存、材料出入库相关权限'],
+    ['engineering', '工程部', '工程订单、施工班组相关权限'],
+    ['employee', '员工', '普通员工工作台权限'],
+  ]
+  const roleStmt = db.prepare('INSERT OR IGNORE INTO roles (name, label, description) VALUES (?, ?, ?)')
+  for (const role of roles) roleStmt.run(...role)
+
+  const ownerPassword = bcrypt.hashSync('123456', 10)
+  db.prepare(`
+    INSERT OR IGNORE INTO users (username, password, role, onboarding_done)
+    VALUES ('fuyulnk', ?, 'super_admin', 1)
+  `).run(ownerPassword)
+  db.prepare("UPDATE users SET role = 'super_admin', onboarding_done = 1 WHERE username = 'fuyulnk'").run()
+
+  const modules = ['dashboard', 'accounts', 'transactions', 'products', 'employees', 'users', 'roles', 'projects', 'chat', 'finance']
+  const roleRows = db.prepare('SELECT id, name FROM roles').all()
+  const permStmt = db.prepare(`
+    INSERT OR IGNORE INTO role_permissions
+      (role_id, module, can_view, can_create, can_edit, can_delete, data_scope)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  for (const role of roleRows) {
+    for (const module of modules) {
+      const perm = defaultPermission(role.name, module)
+      permStmt.run(role.id, module, perm.view, perm.create, perm.edit, perm.delete, perm.scope)
+    }
+  }
+  migrateRolePermissionScopes(db)
+}
+
+function migrateRolePermissionScopes(db) {
+  const key = 'migrate_role_permission_scopes_20260602'
+  if (db.prepare('SELECT value FROM app_config WHERE key = ?').get(key)) return
+
+  const rows = db.prepare(`
+    SELECT rp.id, rp.module, r.name as role_name
+    FROM role_permissions rp
+    JOIN roles r ON rp.role_id = r.id
+  `).all()
+  const updateScope = db.prepare('UPDATE role_permissions SET data_scope = ? WHERE id = ?')
+  for (const row of rows) {
+    updateScope.run(defaultPermission(row.role_name, row.module).scope, row.id)
+  }
+  db.prepare('INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(key, '1', String(Date.now()))
+}
+
+function defaultPermission(role, module) {
+  if (role === 'super_admin' || role === 'admin') return { view: 1, create: 1, edit: 1, delete: 1, scope: 'all' }
+  if (role === 'finance') {
+    return {
+      view: ['dashboard', 'accounts', 'transactions', 'projects', 'chat', 'finance'].includes(module) ? 1 : 0,
+      create: ['transactions', 'chat'].includes(module) ? 1 : 0,
+      edit: ['transactions', 'projects', 'chat'].includes(module) ? 1 : 0,
+      delete: 0,
+      scope: ['accounts', 'transactions', 'finance'].includes(module) ? 'all' : 'project_related'
+    }
+  }
+  if (role === 'warehouse') {
+    return {
+      view: ['dashboard', 'products', 'projects', 'chat'].includes(module) ? 1 : 0,
+      create: ['products', 'chat'].includes(module) ? 1 : 0,
+      edit: ['products', 'projects', 'chat'].includes(module) ? 1 : 0,
+      delete: 0,
+      scope: ['products'].includes(module) ? 'all' : 'project_related'
+    }
+  }
+  if (role === 'engineering') {
+    return {
+      view: ['dashboard', 'projects', 'products', 'chat'].includes(module) ? 1 : 0,
+      create: ['projects', 'chat'].includes(module) ? 1 : 0,
+      edit: ['projects', 'chat'].includes(module) ? 1 : 0,
+      delete: 0,
+      scope: module === 'projects' ? 'all' : 'project_related'
+    }
+  }
+  return {
+    view: ['dashboard', 'projects', 'chat'].includes(module) ? 1 : 0,
+    create: module === 'chat' ? 1 : 0,
+    edit: ['projects', 'chat'].includes(module) ? 1 : 0,
+    delete: 0,
+    scope: module === 'projects' ? 'project_related' : 'self'
+  }
+}
+
+function ensureAiToolPermissionRows(db) {
+  const allTools = [
+    'get_accounts', 'get_transactions', 'get_today_summary', 'get_products',
+    'get_employees', 'get_projects', 'get_system_stats', 'create_transaction', 'create_account'
+  ]
+  const roles = db.prepare('SELECT id, name FROM roles').all()
+  const stmt = db.prepare('INSERT OR IGNORE INTO ai_role_tools (role_id, tool_name, allowed) VALUES (?, ?, ?)')
+  for (const role of roles) {
+    for (const tool of allTools) {
+      const allowed = defaultAiToolAllowed(role.name, tool)
+      stmt.run(role.id, tool, allowed)
+    }
+  }
+}
+
+function defaultAiToolAllowed(role, tool) {
+  if (role === 'super_admin') return 1
+  if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats'].includes(tool) ? 1 : 0
+  if (role === 'warehouse') return ['get_products', 'get_system_stats'].includes(tool) ? 1 : 0
+  if (role === 'engineering') return ['get_projects', 'get_products', 'get_system_stats'].includes(tool) ? 1 : 0
+  return ['get_system_stats', 'get_projects'].includes(tool) ? 1 : 0
+}

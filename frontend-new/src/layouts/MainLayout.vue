@@ -5,7 +5,7 @@
       <div class="sidebar-bg"></div>
       <div class="sidebar-inner">
         <div class="sidebar-logo">
-          <div class="logo-symbol">简</div>
+          <img class="logo-symbol" src="/jianshang-logo.jpeg" alt="简尚涂装" />
           <span class="logo-text" :class="{ collapsed }">简尚系统</span>
         </div>
         <el-menu
@@ -26,6 +26,11 @@
           <el-menu-item index="/main/projects" v-if="hasPerm('projects')">
             <el-icon><List /></el-icon>
             <span>工程订单</span>
+          </el-menu-item>
+
+          <el-menu-item index="/main/files" v-if="hasFileCenterAccess">
+            <el-icon><Document /></el-icon>
+            <span>文件中心</span>
           </el-menu-item>
 
           <el-menu-item index="/main/accounts" v-if="hasPerm('accounts')">
@@ -82,7 +87,7 @@
           <UserAvatar :username="userInfo.username" :avatar-url="userInfo.avatar_url" :size="30" />
           <span class="user-name">{{ userInfo.username }}</span>
           <span class="user-role">{{ userInfo.role_label }}</span>
-          <el-button text size="small" class="header-btn" @click="toggleTheme" :title="isDark ? '切换亮色模式' : '切换暗色模式'">
+          <el-button text size="small" class="header-btn" @click="toggleTheme" :title="themeTitle">
             <el-icon><Moon v-if="isDark" /><Sunny v-else /></el-icon>
           </el-button>
           <el-button type="danger" plain size="small" @click="handleLogout">退出</el-button>
@@ -106,9 +111,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { HomeFilled, Wallet, List, Goods, User, Operation, ChatDotSquare, Fold, Expand, Tools, Sunny, Moon, TrendCharts } from '@element-plus/icons-vue'
+import { HomeFilled, Wallet, List, Goods, User, Operation, ChatDotSquare, Fold, Expand, Tools, Sunny, Moon, TrendCharts, Document } from '@element-plus/icons-vue'
 import UserAvatar from '../components/UserAvatar.vue'
 import AiPetWidget from '../components/AiPetWidget.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
@@ -121,29 +126,57 @@ const isAdmin = ref(false)
 const collapsed = ref(window.innerWidth < 1200)
 const showOnboarding = ref(false)
 const isDark = ref(false)
+const themeTimer = ref(null)
 const hasFinanceAccess = computed(() => isAdmin.value || userInfo.value.role === 'finance' || allowedModules.value.includes('finance'))
+const hasFileCenterAccess = computed(() => isAdmin.value || ['finance', 'warehouse', 'engineering'].includes(userInfo.value.role) || ['projects', 'transactions', 'products'].some(hasPerm))
+const themeTitle = computed(() => {
+  const mode = localStorage.getItem('theme-mode') || 'auto'
+  const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  if (mode === 'auto') return `自动主题 ${now}，18:00 后切换夜间`
+  return isDark.value ? '切换亮色模式' : '切换暗色模式'
+})
 
 function initTheme() {
+  const mode = localStorage.getItem('theme-mode') || 'auto'
   const stored = localStorage.getItem('theme')
-  if (stored === 'dark' || stored === 'light') {
-    isDark.value = stored === 'dark'
+  if (mode === 'manual' && (stored === 'dark' || stored === 'light')) {
+    applyTheme(stored === 'dark')
   } else {
-    isDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
+    applyTheme(isNightTime())
   }
-  document.documentElement.classList.toggle('dark', isDark.value)
-
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-    if (!localStorage.getItem('theme')) {
-      isDark.value = e.matches
-      document.documentElement.classList.toggle('dark', e.matches)
+  themeTimer.value = window.setInterval(() => {
+    if ((localStorage.getItem('theme-mode') || 'auto') === 'auto') {
+      applyTheme(isNightTime())
     }
-  })
+  }, 60 * 1000)
+}
+
+function isNightTime() {
+  const hour = new Date().getHours()
+  return hour >= 18 || hour < 7
+}
+
+function applyTheme(dark) {
+  isDark.value = dark
+  document.documentElement.classList.toggle('dark', dark)
 }
 
 function toggleTheme() {
-  isDark.value = !isDark.value
+  applyTheme(!isDark.value)
+  localStorage.setItem('theme-mode', 'manual')
   localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
-  document.documentElement.classList.toggle('dark', isDark.value)
+}
+
+function applyPersonalAppearance() {
+  const raw = localStorage.getItem('personal-appearance')
+  const root = document.documentElement
+  if (!raw) return
+  try {
+    const value = JSON.parse(raw)
+    value.primaryColor ? root.style.setProperty('--color-primary', value.primaryColor) : root.style.removeProperty('--color-primary')
+    value.textColor ? root.style.setProperty('--text-primary', value.textColor) : root.style.removeProperty('--text-primary')
+    value.bgColor ? root.style.setProperty('--bg-page', value.bgColor) : root.style.removeProperty('--bg-page')
+  } catch {}
 }
 
 function hasPerm(module) {
@@ -201,8 +234,15 @@ const handleLogout = () => {
 
 onMounted(() => {
   initTheme()
+  applyPersonalAppearance()
+  window.addEventListener('personal-appearance-change', applyPersonalAppearance)
   fetchUserInfo()
   fetchMenu()
+})
+
+onUnmounted(() => {
+  if (themeTimer.value) window.clearInterval(themeTimer.value)
+  window.removeEventListener('personal-appearance-change', applyPersonalAppearance)
 })
 </script>
 
@@ -250,13 +290,10 @@ onMounted(() => {
 .logo-symbol {
   width: 32px;
   height: 32px;
-  line-height: 32px;
-  text-align: center;
   border-radius: 8px;
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
-  color: #fff;
-  font-size: 16px;
-  font-weight: bold;
+  object-fit: contain;
+  background: #fff;
+  padding: 3px;
   flex-shrink: 0;
 }
 

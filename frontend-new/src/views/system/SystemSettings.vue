@@ -9,7 +9,7 @@
         <div class="settings-nav">
           <div v-for="item in navItems" :key="item.key"
             :class="['nav-item', { active: activeTab === item.key }]"
-            @click="activeTab = item.key">
+            @click="switchSettingsTab(item.key)">
             <el-icon :size="18"><component :is="item.icon" /></el-icon>
             <span>{{ item.label }}</span>
           </div>
@@ -30,13 +30,24 @@
             <el-form-item label="头像">
               <div class="avatar-upload">
                 <div class="avatar-preview-wrap">
-                  <UserAvatar :username="userName" :avatar-url="previewUrl || userAvatar" :size="72" />
+                  <div v-if="previewUrl" class="avatar-crop-preview">
+                    <img :src="previewUrl" :style="avatarCropStyle" alt="头像预览" />
+                  </div>
+                  <UserAvatar v-else :username="userName" :avatar-url="userAvatar" :size="72" />
                 </div>
                 <div class="avatar-actions">
                   <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp" style="display:none" @change="onFileSelect" />
                   <el-button @click="$refs.fileInput.click()" :disabled="uploading">选择图片</el-button>
                   <el-button v-if="previewUrl" type="primary" :loading="uploading" @click="uploadAvatar">{{ uploading ? '上传中...' : '保存头像' }}</el-button>
                   <div class="form-tip">支持 PNG、JPG、WebP，建议 200x200 以上</div>
+                  <div v-if="previewUrl" class="avatar-crop-controls">
+                    <label>缩放</label>
+                    <el-slider v-model="avatarCrop.scale" :min="0.7" :max="2.6" :step="0.05" />
+                    <label>左右</label>
+                    <el-slider v-model="avatarCrop.x" :min="-80" :max="80" :step="1" />
+                    <label>上下</label>
+                    <el-slider v-model="avatarCrop.y" :min="-80" :max="80" :step="1" />
+                  </div>
                 </div>
               </div>
             </el-form-item>
@@ -52,6 +63,32 @@
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingPwd" @click="changePassword">修改密码</el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <!-- 个性化 -->
+        <div v-show="activeTab === 'appearance'" class="settings-section">
+          <div class="section-header">
+            <h3>个性化设置</h3>
+            <p class="section-desc">只影响当前账号在当前浏览器里的显示，不会改成全公司统一样式</p>
+          </div>
+          <el-form :model="appearance" label-width="120px" class="settings-form">
+            <el-form-item label="主色">
+              <el-color-picker v-model="appearance.primaryColor" show-alpha />
+              <span class="color-value">{{ appearance.primaryColor }}</span>
+            </el-form-item>
+            <el-form-item label="文字颜色">
+              <el-color-picker v-model="appearance.textColor" show-alpha />
+              <span class="color-value">{{ appearance.textColor }}</span>
+            </el-form-item>
+            <el-form-item label="背景颜色">
+              <el-color-picker v-model="appearance.bgColor" show-alpha />
+              <span class="color-value">{{ appearance.bgColor }}</span>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="saveAppearance">保存外观</el-button>
+              <el-button @click="resetAppearance">恢复默认</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -122,6 +159,7 @@
                   {{ kbStatus.running ? '运行中' : '未启动' }}
                 </el-tag>
               </el-descriptions-item>
+              <el-descriptions-item label="定位">{{ kbStatus.message || '当前仅连接本机知识库搜索服务' }}</el-descriptions-item>
               <el-descriptions-item label="集合名称">{{ kbStatus.collection || '-' }}</el-descriptions-item>
               <el-descriptions-item label="文档块数">{{ kbStatus.chunks ?? '-' }}</el-descriptions-item>
             </el-descriptions>
@@ -129,6 +167,7 @@
               <el-button @click="refreshKB" :loading="kbLoading">刷新状态</el-button>
               <el-button type="warning" @click="reindexKB" :loading="reindexing">重新索引</el-button>
             </div>
+            <p class="kb-note">现在这个入口只适合做“知识库是否能用”的运维检查。后续更合理的是把公司制度、工单样板、材料说明做成可见的文档库，并显示索引时间和失败原因。</p>
           </el-card>
         </div>
 
@@ -141,21 +180,23 @@
 
           <el-card shadow="never" class="settings-card-wide">
             <h4 class="subsection-title">角色预设</h4>
-            <el-table :data="aiRoleTableData" border stripe style="width: 100%">
-              <el-table-column label="工具" fixed width="200">
-                <template #default="{ row }">
-                  <div class="tool-cell">
-                    <span class="tool-name">{{ row.label }}</span>
-                    <span class="tool-desc">{{ row.desc }}</span>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column v-for="r in aiRoles" :key="r.id" :label="r.label" min-width="120">
-                <template #default="{ row }">
-                  <el-switch :model-value="row.roles[r.id]" @change="(v) => updateAiRoleTool(row.name, r.id, v)" size="small" />
-                </template>
-              </el-table-column>
-            </el-table>
+            <div class="stable-table-wrap ai-role-table">
+              <el-table :data="aiRoleTableData" border stripe style="width: 100%">
+                <el-table-column label="工具" fixed width="200">
+                  <template #default="{ row }">
+                    <div class="tool-cell">
+                      <span class="tool-name">{{ row.label }}</span>
+                      <span class="tool-desc">{{ row.desc }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column v-for="r in aiRoles" :key="r.id" :label="r.label" min-width="120">
+                  <template #default="{ row }">
+                    <el-switch :model-value="row.roles[r.id]" @change="(v) => updateAiRoleTool(row.name, r.id, v)" size="small" />
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
           </el-card>
 
           <el-card shadow="never" class="settings-card-wide" style="margin-top: 16px;">
@@ -183,6 +224,83 @@
           </el-card>
         </div>
 
+        <!-- API 统计 -->
+        <div v-show="activeTab === 'ai-audit'" class="settings-section">
+          <div class="section-header">
+            <h3>API统计</h3>
+            <p class="section-desc">查看 AI、工具调用、失败和越权风险记录</p>
+          </div>
+
+          <el-card shadow="never" class="settings-card-wide">
+            <div class="audit-summary">
+              <div class="audit-stat">
+                <span>24小时请求</span>
+                <strong>{{ aiAuditSummary.total || 0 }}</strong>
+              </div>
+              <div class="audit-stat">
+                <span>工具调用</span>
+                <strong>{{ aiAuditSummary.tool_count || 0 }}</strong>
+              </div>
+              <div class="audit-stat risk">
+                <span>失败/风险</span>
+                <strong>{{ aiAuditSummary.risk_count || 0 }}</strong>
+              </div>
+              <div class="audit-stat">
+                <span>输出 Tokens</span>
+                <strong>{{ aiAuditSummary.output_tokens || 0 }}</strong>
+              </div>
+            </div>
+
+            <div class="audit-filters">
+              <el-select v-model="aiAuditFilters.user_id" clearable filterable placeholder="用户" style="width: 160px">
+                <el-option v-for="u in aiAllUsers" :key="u.id" :label="u.username" :value="u.id" />
+              </el-select>
+              <el-select v-model="aiAuditFilters.action_type" clearable placeholder="类型" style="width: 130px">
+                <el-option label="聊天" value="chat" />
+                <el-option label="工具" value="tool" />
+              </el-select>
+              <el-input v-model="aiAuditFilters.tool_name" clearable placeholder="工具名" style="width: 160px" />
+              <el-select v-model="aiAuditFilters.status" clearable placeholder="状态" style="width: 120px">
+                <el-option label="成功" value="ok" />
+                <el-option label="失败" value="error" />
+              </el-select>
+              <el-date-picker
+                v-model="aiAuditDateRange"
+                type="daterange"
+                value-format="YYYY-MM-DD"
+                range-separator="至"
+                start-placeholder="开始"
+                end-placeholder="结束"
+                style="width: 250px"
+              />
+              <el-button type="primary" :loading="aiAuditLoading" @click="fetchAiAudit">查询</el-button>
+              <el-button @click="resetAiAuditFilters">重置</el-button>
+            </div>
+
+            <div class="stable-table-wrap audit-table">
+              <el-table :data="aiAuditLogs" v-loading="aiAuditLoading" stripe style="width: 100%">
+                <el-table-column prop="created_at" label="时间" width="150" />
+                <el-table-column label="用户" width="140">
+                  <template #default="{ row }">{{ row.real_name || row.username || '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="role" label="角色" width="100" />
+                <el-table-column prop="action_type" label="类型" width="90" />
+                <el-table-column prop="tool_name" label="工具" width="150" show-overflow-tooltip />
+                <el-table-column label="状态" width="90">
+                  <template #default="{ row }">
+                    <el-tag :type="row.status === 'ok' ? 'success' : 'danger'" size="small">{{ row.status }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="request_summary" label="请求摘要" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="result_summary" label="结果摘要" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="duration_ms" label="耗时" width="90">
+                  <template #default="{ row }">{{ row.duration_ms || 0 }}ms</template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </el-card>
+        </div>
+
         <!-- 用户管理 -->
         <div v-show="activeTab === 'users'" class="settings-section">
           <div class="section-header">
@@ -193,34 +311,36 @@
             <div class="users-toolbar">
               <el-button type="primary" size="small" @click="showAddUser = true">+ 新增用户</el-button>
             </div>
-            <el-table :data="userList" stripe v-loading="userLoading" style="width: 100%">
-              <el-table-column prop="id" label="ID" width="60" />
-              <el-table-column prop="username" label="账号" min-width="120" show-overflow-tooltip />
-              <el-table-column label="员工档案" min-width="160">
-                <template #default="{ row }">
-                  <div v-if="row.employee_id" class="employee-binding">
-                    <span class="employee-name">{{ row.employee_name || row.real_name || '-' }}</span>
-                    <span class="employee-code">{{ row.employee_code || `#${row.employee_id}` }}</span>
-                  </div>
-                  <span v-else class="unbound-text">未绑定</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="角色" width="130">
-                <template #default="{ row }">
-                  <el-tag :type="row.role === 'super_admin' ? 'danger' : row.role === 'finance' ? 'warning' : row.role === 'warehouse' ? 'primary' : 'info'" size="small">
-                    {{ row.role_label || row.role }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="created_at" label="创建时间" width="145" />
-              <el-table-column label="操作" width="220" fixed="right">
-                <template #default="{ row }">
-                  <el-button link size="small" @click="editUserEmployee(row)">{{ row.employee_id ? '改绑档案' : '绑定档案' }}</el-button>
-                  <el-button v-if="row.username !== 'fuyulnk'" link size="small" @click="editUserRole(row)">分配角色</el-button>
-                  <el-button v-if="row.username !== 'fuyulnk'" type="danger" link size="small" @click="deleteUser(row)">删除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
+            <div class="stable-table-wrap users-table">
+              <el-table :data="userList" stripe v-loading="userLoading" style="width: 100%">
+                <el-table-column prop="id" label="ID" width="60" />
+                <el-table-column prop="username" label="账号" min-width="120" show-overflow-tooltip />
+                <el-table-column label="员工档案" min-width="160">
+                  <template #default="{ row }">
+                    <div v-if="row.employee_id" class="employee-binding">
+                      <span class="employee-name">{{ row.employee_name || row.real_name || '-' }}</span>
+                      <span class="employee-code">{{ row.employee_code || `#${row.employee_id}` }}</span>
+                    </div>
+                    <span v-else class="unbound-text">未绑定</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="角色" width="130">
+                  <template #default="{ row }">
+                    <el-tag :type="row.role === 'super_admin' ? 'danger' : row.role === 'finance' ? 'warning' : row.role === 'warehouse' ? 'primary' : 'info'" size="small">
+                      {{ row.role_label || row.role }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="created_at" label="创建时间" width="145" />
+                <el-table-column label="操作" width="220" fixed="right">
+                  <template #default="{ row }">
+                    <el-button link size="small" @click="editUserEmployee(row)">{{ row.employee_id ? '改绑档案' : '绑定档案' }}</el-button>
+                    <el-button v-if="row.username !== 'fuyulnk'" link size="small" @click="editUserRole(row)">分配角色</el-button>
+                    <el-button v-if="row.username !== 'fuyulnk'" type="danger" link size="small" @click="deleteUser(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
           </el-card>
         </div>
 
@@ -299,17 +419,19 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting, Aim, Collection, InfoFilled, User, Operation } from '@element-plus/icons-vue'
 import UserAvatar from '../../components/UserAvatar.vue'
 
 const navItems = [
   { key: 'profile', label: '个人资料', icon: User },
+  { key: 'appearance', label: '个性化', icon: Setting },
   { key: 'basic', label: '基本设置', icon: Setting },
   { key: 'ai', label: 'AI 配置', icon: Aim },
   { key: 'kb', label: '知识库', icon: Collection },
   { key: 'ai-perm', label: 'AI 权限', icon: Operation },
+  { key: 'ai-audit', label: 'API统计', icon: Operation },
   { key: 'users', label: '用户管理', icon: User },
   { key: 'about', label: '关于', icon: InfoFilled },
 ]
@@ -330,6 +452,11 @@ const aiAllUsers = ref([])
 const aiSelectedUserId = ref(null)
 const aiUserOverrides = ref([])
 const aiUserRoleId = ref(null)
+const aiAuditLogs = ref([])
+const aiAuditSummary = ref({})
+const aiAuditLoading = ref(false)
+const aiAuditDateRange = ref(null)
+const aiAuditFilters = ref({ user_id: null, action_type: '', tool_name: '', status: '' })
 
 const aiRoleTableData = computed(() => {
   const map = {}
@@ -347,6 +474,17 @@ const aiRoleTableData = computed(() => {
   }
   return Object.values(map)
 })
+
+function switchSettingsTab(key) {
+  if (activeTab.value === key) return
+  activeTab.value = key
+  nextTick(() => {
+    const pageScroller = document.querySelector('.content')
+    const settingsScroller = document.querySelector('.settings-content')
+    if (pageScroller) pageScroller.scrollTop = 0
+    if (settingsScroller) settingsScroller.scrollTop = 0
+  })
+}
 
 const aiSelectedUserLabel = computed(() => {
   const u = aiAllUsers.value.find(x => x.id === aiSelectedUserId.value)
@@ -432,6 +570,41 @@ async function updateAiUserTool(toolName, allowed) {
   } catch {
     ElMessage.error('网络错误')
   }
+}
+
+async function fetchAiAudit() {
+  aiAuditLoading.value = true
+  try {
+    const params = new URLSearchParams()
+    params.set('limit', '150')
+    for (const [key, value] of Object.entries(aiAuditFilters.value)) {
+      if (value) params.set(key, value)
+    }
+    if (aiAuditDateRange.value) {
+      params.set('start_date', aiAuditDateRange.value[0])
+      params.set('end_date', aiAuditDateRange.value[1])
+    }
+    const res = await fetch(`/api/settings/ai-audit?${params}`, {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json()
+    if (json.success) {
+      aiAuditLogs.value = json.data || []
+      aiAuditSummary.value = json.summary || {}
+    } else {
+      ElMessage.error(json.message || 'API统计加载失败')
+    }
+  } catch {
+    ElMessage.error('API统计加载失败')
+  } finally {
+    aiAuditLoading.value = false
+  }
+}
+
+function resetAiAuditFilters() {
+  aiAuditFilters.value = { user_id: null, action_type: '', tool_name: '', status: '' }
+  aiAuditDateRange.value = null
+  fetchAiAudit()
 }
 
 // ====== 用户管理 ======
@@ -587,6 +760,16 @@ const fileName = ref('')
 const userName = ref('用户')
 const userAvatar = ref('')
 const pwdForm = ref({ old_password: '', new_password: '', confirm_password: '' })
+const avatarCrop = reactive({ scale: 1, x: 0, y: 0 })
+const appearance = reactive({
+  primaryColor: '#4f6df5',
+  textColor: '',
+  bgColor: ''
+})
+
+const avatarCropStyle = computed(() => ({
+  transform: `translate(${avatarCrop.x}px, ${avatarCrop.y}px) scale(${avatarCrop.scale})`
+}))
 
 const form = reactive({
   company_name: '',
@@ -600,6 +783,7 @@ const kbStatus = reactive({
   running: false,
   collection: '',
   chunks: null,
+  message: '',
 })
 
 function token() { return localStorage.getItem('token') }
@@ -631,13 +815,16 @@ async function fetchKB() {
       kbStatus.running = true
       kbStatus.collection = json.data.collection || ''
       kbStatus.chunks = json.data.chunks ?? null
+      kbStatus.message = '知识库搜索服务已连接'
     } else {
       kbStatus.running = false
       kbStatus.collection = ''
       kbStatus.chunks = null
+      kbStatus.message = json.message || '知识库服务未运行'
     }
   } catch {
     kbStatus.running = false
+    kbStatus.message = '知识库状态检查失败'
   }
   kbLoading.value = false
 }
@@ -703,7 +890,17 @@ async function reindexKB() {
     })
   } catch { return }
   reindexing.value = true
-  ElMessage.info('请在服务器执行: cd ~/.openclaw/workspace && python3 scripts/ingest-jianshang-docs.py')
+  try {
+    const res = await fetch('/api/settings/knowledge-base/reindex', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json()
+    if (json.success) ElMessage.success(json.message || '已触发索引任务')
+    else ElMessage.warning(json.message || '当前环境没有可用索引脚本')
+  } catch {
+    ElMessage.error('触发索引失败')
+  }
   reindexing.value = false
 }
 
@@ -729,6 +926,9 @@ function onFileSelect(e) {
   reader.onload = (ev) => {
     previewUrl.value = ev.target.result
     fileData.value = ev.target.result
+    avatarCrop.scale = 1
+    avatarCrop.x = 0
+    avatarCrop.y = 0
   }
   reader.readAsDataURL(file)
   e.target.value = ''
@@ -738,10 +938,11 @@ async function uploadAvatar() {
   if (!fileData.value) { ElMessage.warning('请先选择图片'); return }
   uploading.value = true
   try {
+    const croppedImage = await createCroppedAvatar(fileData.value)
     const res = await fetch('/api/profile/avatar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
-      body: JSON.stringify({ image: fileData.value }),
+      body: JSON.stringify({ image: croppedImage }),
     })
     const json = await res.json()
     if (json.success) {
@@ -757,6 +958,59 @@ async function uploadAvatar() {
     ElMessage.error('网络错误')
   }
   uploading.value = false
+}
+
+function createCroppedAvatar(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const size = 512
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(0, 0, size, size)
+      const baseScale = Math.max(size / img.width, size / img.height)
+      const scale = baseScale * avatarCrop.scale
+      const width = img.width * scale
+      const height = img.height * scale
+      const x = (size - width) / 2 + avatarCrop.x * (size / 160)
+      const y = (size - height) / 2 + avatarCrop.y * (size / 160)
+      ctx.drawImage(img, x, y, width, height)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = reject
+    img.src = src
+  })
+}
+
+function loadAppearance() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('personal-appearance') || '{}')
+    Object.assign(appearance, {
+      primaryColor: saved.primaryColor || '#4f6df5',
+      textColor: saved.textColor || '',
+      bgColor: saved.bgColor || ''
+    })
+  } catch {}
+}
+
+function saveAppearance() {
+  localStorage.setItem('personal-appearance', JSON.stringify(appearance))
+  window.dispatchEvent(new Event('personal-appearance-change'))
+  ElMessage.success('个性化设置已保存')
+}
+
+function resetAppearance() {
+  localStorage.removeItem('personal-appearance')
+  document.documentElement.style.removeProperty('--color-primary')
+  document.documentElement.style.removeProperty('--text-primary')
+  document.documentElement.style.removeProperty('--bg-page')
+  appearance.primaryColor = '#4f6df5'
+  appearance.textColor = ''
+  appearance.bgColor = ''
+  ElMessage.success('已恢复默认外观')
 }
 
 async function changePassword() {
@@ -788,35 +1042,47 @@ async function changePassword() {
 }
 
 onMounted(() => {
+  loadAppearance()
   fetchSettings()
   fetchKB()
   fetchUserInfo()
   fetchAiData()
+  fetchAiAudit()
   fetchUsers()
 })
 </script>
 
 <style scoped>
 .settings-page {
-  max-width: 1000px;
+  width: 100%;
+  max-width: none;
+  height: calc(100vh - var(--header-height) - 48px);
+  min-height: 640px;
+  overflow: hidden;
+  background: var(--bg-page);
+  scrollbar-gutter: stable;
 }
 .settings-layout {
   display: flex;
   gap: 24px;
-  align-items: flex-start;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* 左侧导航 */
 .settings-sidebar {
   width: 200px;
+  height: 100%;
   flex-shrink: 0;
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-light);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
-  position: sticky;
-  top: 84px;
+  position: static;
 }
 .settings-nav-header {
   padding: 20px 20px 12px;
@@ -856,10 +1122,18 @@ onMounted(() => {
 /* 右侧内容 */
 .settings-content {
   flex: 1;
+  width: 0;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 8px;
+  scrollbar-gutter: stable;
 }
 .settings-section {
-  animation: fade-in 0.2s ease;
+  animation: fade-in 0.16s ease;
+  contain: layout paint;
 }
 .section-header {
   margin-bottom: 24px;
@@ -878,8 +1152,8 @@ onMounted(() => {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .settings-form {
@@ -920,11 +1194,102 @@ onMounted(() => {
 .avatar-preview-wrap {
   flex-shrink: 0;
 }
+.avatar-crop-preview {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--bg-page);
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.avatar-crop-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform-origin: center;
+}
 .avatar-actions {
   flex: 1;
 }
+.avatar-crop-controls {
+  margin-top: 12px;
+  max-width: 320px;
+}
+.avatar-crop-controls label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+.color-value {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.kb-note {
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
 .settings-card-wide {
+  width: 100%;
   max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.stable-table-wrap {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+.stable-table-wrap :deep(.el-table) {
+  table-layout: fixed;
+}
+.ai-role-table :deep(.el-table) {
+  min-width: 860px;
+}
+.audit-table :deep(.el-table) {
+  min-width: 1100px;
+}
+.users-table :deep(.el-table) {
+  min-width: 860px;
+}
+.audit-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.audit-stat {
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-page);
+}
+.audit-stat span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.audit-stat strong {
+  font-size: 20px;
+  color: var(--text-primary);
+}
+.audit-stat.risk strong {
+  color: var(--color-danger);
+}
+.audit-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
 }
 .subsection-title {
   font-size: 14px;

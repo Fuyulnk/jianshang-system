@@ -66,6 +66,216 @@
 
 ## 交接记录
 
+### 2026-06-02 Codex 小工程：本地启动、设置稳定、工程权限范围
+
+- 任务：在大工程前先做几个低风险小工程，提高本地可用性和员工试用稳定性。
+- 已完成：
+  - `scripts/start-local.command` — 新增本地一键启动检查脚本；会检查后端 `3001`、前端 `5173`、知识库 `18790`，缺哪个就打开 Terminal 启动对应服务，最后打开 `http://127.0.0.1:5173/`。
+  - `.gitignore` — 忽略 `tmp-home/`，避免临时空库自检目录污染工作树。
+  - `frontend-new/src/views/system/SystemSettings.vue` — 系统设置改成固定工作区布局：二级左栏固定在工作区内，右侧内容独立滚动；切换 tab 时重置滚动；宽表保持内部横向滚动，减少切换抖动和背景色不一致。
+  - `backend/src/utils/permissions.js` — 新增 `canAccessProjectRecord / isUserLinkedToProject`，把工程可见性抽成通用权限函数，基于 `role_permissions.data_scope` 判断。
+  - `backend/src/routes/projects.js` — 工程列表、详情、编辑、推进、日志改用通用工程可见性；`projects` 数据范围为 `all` 才看全部，否则只看本人创建/负责/施工参与项目。
+  - `backend/src/routes/files.js` — 工程附件复用同一套工程可见性，避免“看不到工程但能通过文件中心看到附件”的规则不一致。
+- 验证：
+  - `bash -n scripts/start-local.command`
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/routes/files.js`
+  - `node --check backend/src/utils/permissions.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 本地后端已重启到 `3001`，`/health` 正常。
+- 注意事项：
+  - 本次没有上传服务器。
+  - 财务流水、员工档案、AI 工具结果还没有完整接入 `data_scope`，这是下一批小工程。
+  - `scripts/start-local.command` 是本机开发启动辅助，不用于服务器部署。
+
+### 2026-06-02 Codex 权限/隔离地基加固
+
+- 任务：按“员工直接试用一天会暴露大量 bug”的担忧，先补最容易引发越权、误授权和不可追溯的底层能力，不做大范围重构。
+- 已完成：
+  - `backend/src/index.js` — `role_permissions` 增加 `data_scope`；启动时确保 `users / accounts / transactions / products / employees / chat_history` 基础表，以及 `private_workspaces / resource_access_grants / access_audit_logs` 表和索引存在；默认种子 `fuyulnk / 123456` 超级管理员；默认角色权限补数据范围：管理员类 `all`，财务/仓库/工程按业务模块和项目相关区分，普通员工默认 `self / project_related`。
+  - `backend/src/utils/permissions.js` — 新增 `getModulePermission / getDataScope / canAccessPrivateResource / grantPrivateResourceAccess / logAccessAudit`，为后续“总监私有工作区”和员工隔离提供复用入口。
+  - `backend/src/routes/roles.js` — 角色权限更新支持 `data_scope`；旧前端或旧请求未传 `data_scope` 时保留原值，避免误重置成全部数据。
+  - `backend/src/routes/files.js` — 统一附件支持 `private_workspace` 归属；文件中心查询能搜索私有工作区名称；附件上传、下载、删除写入 `access_audit_logs`。
+  - `frontend-new/src/views/system/RolePermissions.vue` — 角色权限页新增“数据范围”选择，超级管理员可直接查看/调整每个岗位、每个模块的数据范围。
+  - `frontend-new/src/views/files/FileCenter.vue` — 文件中心识别“私有工作区”附件类型和关联对象。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/files.js`
+  - `node --check backend/src/routes/roles.js`
+  - `node --check backend/src/utils/permissions.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告，主 JS 约 1.21MB / gzip 约 379KB）
+  - 使用临时 `HOME=/Users/fuyulnk./Projects/jianshang-system/tmp-home` 和空库启动后端，`/health` 正常，`fuyulnk / 123456` 登录成功；临时服务已停止。
+- 注意事项：
+  - 本次没有上传服务器。
+  - 这是权限/隔离地基，不是完整终局：多数业务路由仍需要逐步使用 `getDataScope()` 做真实数据过滤，尤其 AI 工具、工程列表、财务流水、员工档案。
+  - `private_workspaces` 目前只有表和权限工具，尚未做总监工作区页面、导入器和主动授权界面。
+  - 后续建议补一个超级管理员可看的“访问日志/API统计”入口，把 `access_audit_logs` 和 AI 审计统一筛选展示。
+
+### 2026-06-01 Codex 统一文件中心第一版 + AI 审计页
+
+- 任务：按“明天来看结果”的节奏，先补真实使用前会卡住的文件上传/下载底座，并给超级管理员补 AI 审计入口。
+- 已完成：
+  - `backend/src/index.js` — 新增 `attachments` 统一附件表和索引；注册 `fileRoutes`；文件仍放 `backend/data/`，配合现有部署排除规则保护线上文件。
+  - `backend/src/routes/files.js` — 新增统一附件接口：`GET /api/files`、`POST /api/files/upload`、`GET /api/files/:id/download`、`DELETE /api/files/:id`；文件不走 public，下载必须鉴权；第一版沿用 base64 JSON 上传，单文件限制 10MB。
+  - `frontend-new/src/components/AttachmentPanel.vue` — 新增可复用附件面板，支持选择文件、拖拽加入待上传、确认上传、下载、删除。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` — 工程详情页接入“工程附件”。
+  - `frontend-new/src/views/transactions/TransactionList.vue` — 每条交易流水增加“附件”入口，可上传/下载凭证附件。
+  - `backend/src/routes/settings.js` — 新增 `/api/settings/ai-audit`，超级管理员/管理员可筛选查看 AI 审计记录；继续保留知识库重建入口。
+  - `frontend-new/src/views/system/SystemSettings.vue` — 系统设置新增“AI 审计”tab，展示 24 小时请求数、工具调用、失败/风险、输出 tokens 和审计明细。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/files.js`
+  - `node --check backend/src/routes/settings.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 本地 `PORT=3042 npm start` 后，用 `boss / 123456` 登录；实测工程附件上传、列表、软删除成功；`GET /api/settings/ai-audit` 返回成功。临时后端已停止。
+- 注意事项：
+  - 这次没有上传服务器。
+  - 当前附件上传仍是 10MB base64 第一版；后续如果要支持月底大表、高清图片、合同扫描件，应升级为 multipart/分片上传。
+  - `chat_files` 还没有并入 `attachments`，后续可以做一次迁移/兼容层，把群聊文件、工程附件、财务凭证统一到同一套文件中心。
+  - 附件删除当前是软删除，实体文件暂不立即删除；后续可加定时清理已软删文件。
+
+### 2026-06-02 Codex 文件中心入口和凭证上传体验修正
+
+- 任务：按用户现场反馈，修正“工程附件位置太靠下、统一文件中心找不到、新建流水不能直接带附件、AI 审计命名不直观”。
+- 已完成：
+  - `backend/src/routes/files.js` — 新增 `GET /api/files/recent`，按当前用户权限返回最近附件，支持归属类型和关键词筛选。
+  - `frontend-new/src/views/files/FileCenter.vue` — 新增“文件中心”页面，展示最近附件、归属对象、上传人、时间、大小，并支持打开关联对象、下载、删除。
+  - `frontend-new/src/router/index.js`、`frontend-new/src/layouts/MainLayout.vue` — 左侧菜单新增“文件中心”入口，工程/财务/仓库/管理员等有相关模块权限的用户可见。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` — 工程附件从页面下方挪到当前工作单下方、阶段详情上方，减少编辑工程资料和上传附件之间的滚动距离。
+  - `frontend-new/src/views/transactions/TransactionList.vue` — 新增交易弹窗增加“凭证附件”待上传区；保存流水成功后自动把待上传凭证挂到该流水。
+  - `frontend-new/src/views/system/SystemSettings.vue` — “AI 审计”文案改为“API统计”。
+- 验证：
+  - `node --check backend/src/routes/files.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 本地后端已重启到 `PORT=3001`，`curl http://127.0.0.1:3001/health` 正常。
+  - 2026-06-02 已部署服务器：上线前备份 `/root/jianshang-system-backup-20260602-103831.tgz`；rsync 排除 `.env / .env.* / data/ / public/avatars/ / node_modules`；`pm2 restart jianshang-web` 成功；线上 `/health`、`/`、`/assets/index-D5KSirzK.js`、`/jianshang-logo.jpeg` 返回正常；`/api/files/recent` 未登录返回 401，说明新路由已生效。
+- 注意事项：
+  - 文件中心当前是“最近附件”视图，后续可加文件预览、批量下载、按项目/客户/月份归档。
+
+### 2026-06-02 Codex 控制台交易统计动态窗口修正
+
+- 任务：修复控制台“今日交易”误把历史测试流水总数显示成今日交易的问题。
+- 已完成：
+  - `frontend-new/src/views/Dashboard.vue` — 控制台交易卡片改为动态窗口：当天有交易显示“今日交易”；当天没有但昨天有则显示“昨日交易”；否则显示“近7日交易”；近7日都没有则显示“近7日无交易”。
+- 验证：
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 2026-06-02 已随文件中心体验修正一起部署服务器，备份同上：`/root/jianshang-system-backup-20260602-103831.tgz`。
+- 注意事项：
+  - 控制台交易统计仍依赖 `transactions.created_at`；如果后续给流水增加“业务发生日期”，控制台应优先按业务日期统计。
+
+### 2026-05-31 Codex 群聊文件上传/拖拽上传
+
+- 任务：给群聊补文件上传、拖拽上传和下载能力。
+- 已完成：
+  - `backend/src/index.js` — `messages` 表补 `message_type / file_id`；新增 `chat_files` 表；后端 `bodyLimit` 调到 20MB，配合 8MB 文件 base64 上传。
+  - `backend/src/routes/chat.js` — 新增 `POST /api/conversations/:id/files`，群成员才能上传；文件保存到 `backend/data/chat_uploads/`，不走 public；新增 `GET /api/chat/files/:id/download`，会话成员才能下载；消息列表返回文件元信息。
+  - `frontend-new/src/views/chat/ChatIndex.vue` — 群聊输入区新增“文件”按钮；消息区支持拖拽上传；文件消息显示为文件卡片，下载通过鉴权接口拿 blob。
+- 2026-05-31 追加修正：
+  - 文件按钮/拖拽现在只是加入“待发送”队列，不会立刻发出；待发送文件悬浮显示在输入框上方，可继续输入文字、继续添加多个文件，也可移除单个文件，最后点“发送”才真正上传。
+  - 图片消息在聊天区内直接预览，仍保留下载原图按钮；普通文件继续显示文件卡片。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/chat.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 本地 `PORT=3036 npm start` 后，登录、上传 `codex-upload-test.txt` 到总群、再通过 `/api/chat/files/:id/download` 下载，返回 `hello world`；测试消息和文件已从本地库/本地上传目录清理。
+- 注意事项：
+  - 这是群聊文件的第一版，采用 base64 JSON 上传，没有新增 npm 依赖；单文件限制 8MB。
+  - 后续统一文件中心时，应把 `chat_files` 和工程/财务/仓库附件合并或抽象到统一 `attachments` 表，支持更大的 multipart/分片上传、预览、附件归档和审计。
+  - `backend/data/` 必须继续排除在 rsync 之外，避免线上聊天文件被部署删除。
+
+### 2026-05-31 Codex 财务导出与分析上线
+
+- 任务：补财务下载能力，并参考现有飞书 Base 调整导出表格式。
+- 已完成：
+  - `backend/src/routes/transactions.js` — 新增 `/api/transactions/export`，默认导出 Excel 可打开的格式化 `.xls`；表头参考飞书 `收支明细表`，包含 `日期 / 账户 / 金额 / 分类 / 凭证 / 对方 / 事由 / 收支类型 / 录入人 / 备注 / 状态 / 账户类型`；`format=csv` 保留纯 CSV。
+  - `backend/src/routes/finance.js` — 新增 `/api/finance/analysis`，输出本月净现金流、环比、支出排行、高额支出、疑似重复流水、负余额账户和系统提醒。
+  - `frontend-new/src/views/transactions/TransactionList.vue` — 增加“导出当前筛选”。
+  - `frontend-new/src/views/finance/FinanceOverview.vue` — 增加“下载流水”和实时财务分析卡片。
+  - `HANDOFF.md` — 记录文件中心、财务月报、飞书 Base 字段参考和后续 `借款核销 / 报销审批 / 资金总览` 方向。
+- 验证：
+  - `node --check backend/src/routes/transactions.js`
+  - `node --check backend/src/routes/finance.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 已部署正式服务器：先创建 `/root/jianshang-system-backup-20260531-151837.tgz`，再 rsync；同步时排除 `.env / .env.* / data/ / public/avatars/ / node_modules`；`pm2 restart jianshang-web` 成功。
+  - `curl http://8.135.8.37/health` 返回正常；`/jianshang-logo.jpeg` 返回 200；线上 `fuyulnk` 仍为 `super_admin`。
+- 注意事项：
+  - 当前 `.xls` 是 Excel 兼容 HTML，不是真正原生多 Sheet `.xlsx`；适合先解决财务下载查看，专业月报后续再做原生 `.xlsx`。
+  - `凭证` 列目前为占位，必须等统一文件中心和附件表完成后才能接真实凭证图片/附件下载。
+
+### 2026-05-30 Codex 夜间透支小修：聊天、仓库录入、外观和基础角色
+
+- 任务：按用户临下班前集中反馈，先补一批明显影响试用观感的“怪/假/卡”点。
+- 已完成：
+  - `backend/src/index.js` — 启动时确保 `roles / role_permissions / conversations / conversation_participants / messages` 基础表存在；新增 `engineering`（工程部）角色；为工程部默认开启工程订单相关权限；补齐新增角色的 AI 工具默认权限行。
+  - `backend/src/routes/chat.js` — 关闭新建私聊逻辑；会话列表自动创建并维护 `财务群 / 仓库群 / 工程群 / 总群`，按角色自动加入成员；自建群聊不再要求选择成员。
+  - `frontend-new/src/views/chat/ChatIndex.vue` — 新建对话弹窗改为“添加群聊”，移除私聊/选择成员。
+  - `frontend-new/src/views/products/ProductList.vue` — 新增产品支持产品名称历史下拉；分类支持预设 + 历史分类 + 自由输入；单位改为可选择/可自定义，预设 `kg/g/ml/L/桶/罐/支/把/套/份/个/颗/箱/卷/米/平方`。
+  - `frontend-new/src/layouts/MainLayout.vue`、`frontend-new/src/views/Login.vue` — 使用用户提供的简尚 logo；主题默认按时间自动切换，`18:00` 后进入夜间主题，手动点击主题按钮后转为手动模式。
+  - `frontend-new/src/components/AiPetWidget.vue` — AI 浮窗缩放手柄移到左上角，拖拽逻辑改为从左上放大/缩小。
+  - `frontend-new/src/views/system/SystemSettings.vue` — 头像上传前增加缩放、左右、上下裁剪；保存时前端生成裁剪后的正方形 PNG 再上传；新增“个性化设置”tab，可改当前浏览器的主色、文字色、背景色，不会影响全公司；知识库页改得更诚实，能触发后端索引接口，找不到索引脚本时返回明确提示。
+  - `backend/src/routes/settings.js` — 新增 `/api/settings/knowledge-base/reindex`，如果服务器存在 OpenClaw 知识库索引脚本则后台触发，否则返回“未找到索引脚本”。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/chat.js`
+  - `node --check backend/src/routes/settings.js`
+  - `node --check backend/src/routes/projects.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 2026-05-31 已部署正式服务器；`pm2 restart jianshang-web` 成功；`curl http://8.135.8.37/health` 返回正常。
+  - 线上已确认 `engineering|工程部` 存在；`conversations` 表已补 `created_by`；已直接创建 `财务群 / 仓库群 / 工程群 / 总群`，并加入现有超级管理员。
+- 注意事项：
+  - 2026-05-31 部署时第一次 rsync 仍使用了 `--delete` 且未排除 `public/avatars/`，导致线上旧头像 `avatar_1_d788f3e9.png` 被删；备份中没有该文件，已把 `fuyulnk.avatar_url` 切换到仍存在的 `/avatars/avatar_1_d4474a0d.png`，避免破图。
+  - 后续部署命令必须同时排除 `.env` 和 `public/avatars/`：`--exclude .env --exclude public/avatars/`，不要让构建同步清掉用户上传头像。
+  - 个性化设置目前是浏览器本地 `localStorage`，符合“不影响全局”的要求；后续如果要跨设备同步，再做 `user_preferences` 表。
+  - 默认群当前按用户访问会话列表时自动维护；新注册用户进入聊天页后会被加入对应默认群。
+  - 知识库“重新索引”取决于服务器是否真的存在索引脚本；后续建议做成可视化文档库，显示索引目录、最后索引时间、失败日志。
+
+### 2026-05-30 Codex 工程订单流程试运行修补
+
+- 任务：按用户完整走流程后反馈，修复工程订单“结算金额看不清、必须维修才能完结、编辑/推进割裂、施工组和材料节点缺预留”的问题。
+- 已完成：
+  - `backend/src/routes/projects.js` — 主工程流程改为 `材料回库 -> 项目完结`，售后改为项目完结后的独立报修分支；结算金额作为完结必填；施工成员也纳入项目可见、编辑和施工阶段推进权限；项目列表按施工成员过滤；可分配人员返回 `availability_status / busy_project_name / busy_until`。
+  - `backend/src/index.js`、`backend/src/migrate_projects.js` — `projects` 表补 `crew_member_user_ids / crew_status / material_out_status / material_out_note / material_return_status / material_return_note`，为后续仓库出库/回库联动和员工出工状态做字段预留。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` — 详情页新增“当前工作单”，每个状态只展示当前要填的表单和下一步按钮；原来的“编辑项目 + 状态推进”割裂体验收敛为一步操作；结算金额改成大输入框 + 大号金额预览；已完结项目显示“发起售后单”，明确售后不再阻塞主工程完结；阶段详情补施工成员、人员状态、材料出库/回库状态；暗色模式阶段表格不再露白。
+  - `frontend-new/src/views/projects/ProjectList.vue` — 阶段统计改为“项目完结 / 售后服务”，避免售后混在主工程完结里。
+- 验证：
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/migrate_projects.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 本地临时库接口自检：创建工程、安排临时施工员、施工员在列表可见项目、施工员更新人员状态并推进施工阶段、材料回库、填写 `71234` 结算金额、无需售后直接完结；随后删除测试项目和临时施工员。
+  - Chrome 视觉自检：工程详情页当前工作单、结算金额大输入、项目完结后的售后入口、暗色阶段表格均正常。
+  - 已部署正式服务器；部署命令已排除 `.env`；`pm2 restart jianshang-web` 成功，`curl http://8.135.8.37/health` 返回正常。
+- 注意事项：
+  - 材料出库/回库当前只是状态和备注字段，尚未真正生成仓库单；后续接仓库系统时应以项目状态触发/关联出库单、回库单和成本核算。
+  - `crew_status` 现在是项目内人员状态，不是完整排班系统；后续要做员工日历/占用时间、班组长、成员角色和预计释放日期。
+  - 临时自检发现：如果用全新的空数据库直接 `npm start`，`backend/src/index.js` 仍会因为核心表未初始化而失败；现有线上/本地已有库不受影响，但后续应整理“启动即建全量基础表”或明确先跑初始化脚本。
+
+### 2026-05-30 Codex 工程订单保存与施工地址结构化
+
+- 任务：修复线上“新建项目点保存没反应”，并把施工地址改成省/市 + 详细地址的结构化录入。
+- 原因：
+  - 线上 `projects` 表是旧结构，缺 `created_by` 字段，导致 `POST /api/projects` 报 `table projects has no column named created_by`。
+  - 前端创建失败时没有明确错误提示，用户看到的是按钮点了没反应。
+- 已完成：
+  - `backend/src/index.js` — 启动时确保 `projects / project_logs` 表存在；补齐 `created_by / address_province / address_city / address_detail` 迁移；旧地址回填到 `address_detail`；旧项目默认归到 `fuyulnk` 用户名下。
+  - `backend/src/routes/projects.js` — 新建/编辑项目支持独立保存省、市、详细地址，并继续兼容旧 `address` 字段；操作日志写入失败不再阻断项目保存。
+  - `backend/src/migrate_projects.js` — 项目表结构同步新增地址拆分字段和 `created_by` 迁移。
+  - `frontend-new/src/utils/chinaRegions.js` — 新增省/市预设数据和地址拼接工具。
+  - `frontend-new/src/views/projects/ProjectList.vue` — 新建项目弹窗改为“省/市选择 + 详细地址”；保存失败会显示具体错误。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` — 编辑项目地址同样改为结构化录入，详情页展示拼接后的完整地址。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/migrate_projects.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 本地用临时数据库启动 `PORT=3020`，登录 `boss / 123456` 调 `POST /api/projects` 创建项目成功，并确认地址字段保存为 `广东省 / 深圳市 / 南山区测试小区1栋101`；随后已删除测试项目。
+  - 已部署正式服务器并重启 `pm2 restart jianshang-web`；`curl http://8.135.8.37/health` 返回正常；线上 `projects` 表已确认存在 `created_by / address_province / address_city / address_detail`。
+- 注意事项：
+  - 本次第一次按旧命令 rsync 时把本地 `.env` 也同步到了服务器，导致后端临时监听 `3001`，nginx `/health` 出现 502；已把服务器 `.env` 的端口恢复为 `PORT=3000` 并重启，当前正常。
+  - 后续正式部署命令必须加 `--exclude .env`，不要再覆盖服务器环境配置。
+  - 当前只做到省/市 + 详细地址；如果以后要更像外卖地址，可继续加区/街道、小区联想、常用地址簿。
+
 ### 2026-05-29 Codex 员工档案绑定与历史接口权限收紧
 
 - 任务：继续推进员工身份隔离，让系统账号可以绑定 `employees` 员工档案，并收紧历史模块“登录即可访问”的接口风险。
@@ -143,6 +353,109 @@
   - 本地启动时知识库脚本会尝试监听 `18790`；如果已有知识库服务占用，会打印 `Address already in use`，不影响后端主服务。
 
 ## 下一步建议优先级
+
+### P0：文件上传/下载与财务月底汇总能力
+
+- 当前系统只有头像上传，业务模块还没有统一文件上传/下载；财务、工程、仓库后续都会卡在这里，不能只做某个页面的临时附件。
+- 已先补最小可用的财务下载：
+  - `GET /api/transactions/export`：按交易流水当前筛选导出 Excel 可打开的格式化 `.xls`，包含标题、导出时间、筛选条件、总收入、总支出、净额和明细表；如需纯数据可传 `format=csv`。
+  - `GET /api/finance/analysis`：先用确定性 SQL 做实时分析，输出本月净现金流、环比、本月支出排行、高额支出、疑似重复流水、负余额账户和系统提醒。
+  - 前端 `交易流水` 增加“导出当前筛选”，`财务总览` 增加“下载流水”和“实时财务分析”卡片。
+- 下一步建议做统一文件中心，而不是每个模块各写一套：
+  - 新增 `attachments` 表：`id / entity_type / entity_id / original_name / stored_name / mime_type / size / checksum / uploaded_by / created_at / deleted_at`。
+  - 文件存储放在 `backend/data/uploads/`，不要放 `public/`；下载必须走鉴权接口，避免知道路径就能访问。
+  - 接口建议：`POST /api/files/upload`、`GET /api/files?entity_type=&entity_id=`、`GET /api/files/:id/download`、`DELETE /api/files/:id`。
+  - 权限复用业务模块权限：工程附件看 `projects` 权限，财务附件看 `transactions/finance` 权限，仓库附件看 `products` 权限。
+  - 前端做一个可复用 `AttachmentPanel`，先挂到工程订单、交易流水、产品/仓库三类核心对象上。
+- 财务专业分析建议分三阶段：
+  - 第一阶段：SQL/统计规则实时分析，先保证准确、可解释、可导出。
+  - 第二阶段：月度汇总包，导出 CSV/XLSX，包含账户余额、流水明细、分类汇总、项目结算/未结算。
+  - 第三阶段：AI 财务分析只读这些确定性结果并生成解释、风险点和月报草稿，不让 AI 直接凭感觉算账。
+- 表格格式注意：
+  - 当前 `.xls` 是 Excel 兼容 HTML 格式，不需要新增后端依赖，适合先解决“财务能下载、能看、能筛”的问题。
+  - 2026-05-31 已参考飞书 Base `ULuCbAAHKaGp4psEZn9crt4vn4a` 的 `收支明细表`：可见字段顺序是 `日期 / 账户 / 金额 / 分类 / 凭证图片 / 对方 / 事由 / 收支类型 / 录入人 / 备注 / 状态 / 父记录 / 创建时间`；当前导出已按这个思路调整，`凭证` 先占位，等文件中心完成后接真实附件。
+  - 飞书 Base 还有 `借款核销表 / 资金总览表 / 报销明细表`，说明系统后续不能只做交易流水，还要拆出借款核销、报销审批和账户资金总览。
+  - 真正专业月报建议后续升级为原生 `.xlsx` 多 Sheet：`月度摘要 / 账户明细 / 分类汇总 / 项目结算 / 异常检查`，并加入冻结窗格、筛选、公式和图表。
+- 注意部署：
+  - `backend/data/` 已被 rsync 排除，后续上传文件应天然保留在线上，不会被部署删掉。
+  - 之后如新增上传依赖（例如 multipart 解析），部署步骤需要跑 `npm install --prefix backend`。
+
+### 2026-05-29 下班前 AI 板块补足清单
+
+本节是 Codex 对当前 AI 板块的代码扫读结论，供 2026-05-30 接着做。当前判断：AI 权限、用户隔离、审计、限流已经有第一层底座，但距离“让员工放心随便问、让 AI 可靠代办”还差几个硬边界。
+
+#### P0：先补 AI 写入类工具的后端硬确认
+
+- 当前 `create_transaction / create_account` 已是 AI 工具，权限上可以按角色开关；但“创建前必须确认”主要写在 system prompt 里，后端没有强制确认表。
+- 下一步建议新增 `ai_action_confirmations`：
+  - AI 第一次识别到写入意图时，只创建 `pending` 记录并返回待确认摘要。
+  - 用户明确确认后，前端带 `confirmation_id` 再执行真实写入。
+  - 金额、删除、结算、项目跨阶段推进、客户确认等高风险动作必须走这条链路。
+- 不要把二次确认只交给模型判断；模型可以提示，后端必须兜底。
+
+#### P0：AI 工具结果继续复用业务权限和数据范围
+
+- `get_projects` 已按 `created_by / manager_user_id / assignee_user_id` 对普通员工过滤，这是对的。
+- 但 `get_accounts / get_transactions / get_products / get_employees / get_system_stats` 目前主要依赖 `ai_role_tools` 判断“能不能调用”，工具内部没有统一复用 `role_permissions` 和业务接口的数据范围。
+- 下一步建议把 AI 工具执行器拆薄：
+  - 工具权限决定“能不能调用这个工具”。
+  - 模块权限决定“这个人能不能看账户/流水/库存/员工”。
+  - 数据范围决定“能看全部、部门、自己负责、还是只看摘要”。
+- 财务、仓管、工程、普通员工的 AI 输出字段也要分级；例如仓管可能能看工程材料相关信息，但不一定要看客户电话、总金额、结算金额。
+
+#### P0：把 AI 审计后台做出来
+
+- `ai_audit_logs` 表已经有了，聊天和工具调用也在写入，但目前没有给超级管理员看的筛选页。
+- 下一步建议在系统设置加一个“AI 审计”tab：
+  - 按用户、员工、角色、工具名、读/写、成功/失败、时间筛选。
+  - 默认只展示摘要，不展示完整敏感参数。
+  - 写入类工具、失败请求、越权尝试单独高亮。
+- 审计不是为了复杂，是为了以后真的给员工用时能回答两个问题：谁问了什么、AI 有没有动过业务数据。
+
+#### P1：修正聊天会话续写体验
+
+- `AiPetWidget.vue` 和旧 `AiChat.vue` 都会加载最近聊天历史，但加载后没有恢复对应 `session_id`；用户看起来是在接着上一段聊，后端实际可能新建会话。
+- 下一步建议 `/api/chat/history` 返回会话列表时带 `session_id / title / updated_at`，前端打开最近会话时同步设置 `sessionId`。
+- 同时加“新会话”按钮，避免所有问题都混在最后一个会话里。
+
+#### P1：让 AI 回复变成真正流式
+
+- 当前 `/api/chat` 使用 SSE 返回，但后端是先等 DeepSeek 完整返回，再一次性写出 `finalContent`，所以体验上不是真正逐字/分段流式。
+- 下一步可先不动工具调用链，优先给普通问答做真实 stream；工具调用场景可以继续先完整执行，再流式总结。
+- 这样能明显改善用户体感，尤其 AI 浮窗作为常驻助手时，等待感会少很多。
+
+#### P1：AI 浮窗升级为“工作面板”
+
+- 当前浮窗已经支持拖动、隐藏、缩放、还原尺寸，拖动/缩放误选文字的问题也做了第一轮处理。
+- 下一阶段建议补：
+  - 会话列表 / 新会话。
+  - 停靠模式：右侧贴边、底部小条、桌宠本体三种形态。
+  - 当前上下文入口：最近工程、当前页面、当前客户/工单。
+  - 明确的任务状态：查询中、等待确认、已执行、失败。
+- 视觉上继续保留桌宠入口，但聊天面板应更像“工作区”，而不是一个置顶小网页。
+
+#### P1：知识库服务产品化
+
+- 当前代码把 `127.0.0.1:18790` 当知识库搜索服务，OpenClaw 网关不是这个端口。
+- 现在知识库更像本机脚本服务，后续需要：
+  - 明确知识库文档目录和索引刷新入口。
+  - 后台显示健康状态、索引时间、文档数量。
+  - 线上用 PM2 或 systemd 常驻，而不是后端启动时顺手 spawn。
+  - AI 回答引用知识库时给出来源摘要，避免员工分不清是系统数据、制度知识，还是模型推断。
+
+#### P2：AI 成本和限流后台可配置
+
+- 目前限流默认值写在代码里，且只按聊天次数做第一层控制。
+- 后续建议加系统设置：
+  - 按角色配置每分钟/每天次数。
+  - 按角色配置单次最大输出 tokens。
+  - 批量录入类工具使用 `batch_id`，不要把一次财务批量录入机械地拆成很多次限制。
+  - 审计页展示模型、耗时、token 消耗，方便后续调成本。
+
+#### P2：清理旧 AI 组件入口
+
+- `frontend-new/src/components/AiChat.vue` 仍保留旧悬浮气泡实现，当前主入口应是 `AiPetWidget.vue`。
+- 后续确认没有页面引用旧组件后，可以删除或归档，避免 Claude/Codex 后面误改旧入口。
 
 ### P0：AI 权限、员工隔离和审计安全底座
 

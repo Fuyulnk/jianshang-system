@@ -9,7 +9,7 @@
 
     <div class="login-card">
       <div class="login-header">
-        <div class="logo-icon">简</div>
+        <img class="logo-icon" src="/jianshang-logo.jpeg" alt="简尚涂装" />
         <h2>简尚系统</h2>
         <p class="subtitle">一体化业务管理平台</p>
       </div>
@@ -234,12 +234,10 @@ const handleRegister = async () => {
 .logo-icon {
   width: 60px;
   height: 60px;
-  line-height: 60px;
   border-radius: 16px;
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
-  color: white;
-  font-size: 26px;
-  font-weight: bold;
+  object-fit: contain;
+  background: #fff;
+  padding: 6px;
   margin: 0 auto 16px;
 }
 

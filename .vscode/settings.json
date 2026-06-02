@@ -1,0 +1,15 @@
+{
+  "terminal.integrated.scrollback": 10000,
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/dist": true
+  },
+  "[vue]": {
+    "editor.defaultFormatter": "Vue.volar"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "editor.minimap.enabled": false,
+  "workbench.colorTheme": "Dark+"
+}

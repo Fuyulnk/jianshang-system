@@ -9,6 +9,17 @@ function requireFinanceAccess(request, reply) {
   return true
 }
 
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100
+}
+
+function percentChange(current, previous) {
+  const cur = Number(current) || 0
+  const prev = Number(previous) || 0
+  if (!prev) return cur ? 100 : 0
+  return Math.round(((cur - prev) / Math.abs(prev)) * 1000) / 10
+}
+
 export default function financeRoutes(server, db) {
   // 财务总览：每个账户的收入/支出汇总 + 余额
   server.get('/api/finance/overview', async (request, reply) => {
@@ -95,5 +106,142 @@ export default function financeRoutes(server, db) {
     `).all(...params)
 
     return { success: true, data }
+  })
+
+  // 实时财务分析：先做确定性 SQL 统计，后续再让 AI 基于这些结果解释。
+  server.get('/api/finance/analysis', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+
+    const activeWhere = "(status != 'cancelled' OR status IS NULL)"
+    const thisMonth = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END), 0) as income,
+        COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0) as expense,
+        COUNT(*) as count
+      FROM transactions
+      WHERE ${activeWhere}
+        AND created_at >= datetime('now', 'localtime', 'start of month')
+    `).get()
+
+    const lastMonth = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END), 0) as income,
+        COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0) as expense,
+        COUNT(*) as count
+      FROM transactions
+      WHERE ${activeWhere}
+        AND created_at >= datetime('now', 'localtime', 'start of month', '-1 month')
+        AND created_at < datetime('now', 'localtime', 'start of month')
+    `).get()
+
+    const recentTrend = db.prepare(`
+      SELECT
+        date(created_at) as day,
+        COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END), 0) as income,
+        COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0) as expense
+      FROM transactions
+      WHERE ${activeWhere}
+        AND created_at >= datetime('now', 'localtime', '-30 days')
+      GROUP BY date(created_at)
+      ORDER BY day ASC
+    `).all().map(row => ({
+      day: row.day,
+      income: roundMoney(row.income),
+      expense: roundMoney(row.expense),
+      net: roundMoney(row.income - row.expense)
+    }))
+
+    const topExpenseCategories = db.prepare(`
+      SELECT COALESCE(category, '未分类') as category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+      FROM transactions
+      WHERE ${activeWhere}
+        AND type = 'expense'
+        AND created_at >= datetime('now', 'localtime', 'start of month')
+      GROUP BY COALESCE(category, '未分类')
+      ORDER BY total DESC
+      LIMIT 6
+    `).all()
+
+    const avgExpense = db.prepare(`
+      SELECT COALESCE(AVG(amount), 0) as avg_amount
+      FROM transactions
+      WHERE ${activeWhere}
+        AND type = 'expense'
+        AND created_at >= datetime('now', 'localtime', '-90 days')
+    `).get().avg_amount
+    const highExpenseFloor = Math.max(Number(avgExpense || 0) * 2, 1000)
+    const highExpenses = db.prepare(`
+      SELECT t.id, t.created_at, t.amount, t.category, t.description, t.party, a.name as account_name
+      FROM transactions t
+      LEFT JOIN accounts a ON t.account_id = a.id
+      WHERE (t.status != 'cancelled' OR t.status IS NULL)
+        AND t.type = 'expense'
+        AND t.amount >= ?
+      ORDER BY t.amount DESC
+      LIMIT 8
+    `).all(highExpenseFloor)
+
+    const duplicateCandidates = db.prepare(`
+      SELECT
+        date(created_at) as day,
+        type,
+        amount,
+        COALESCE(category, '') as category,
+        COALESCE(party, '') as party,
+        COUNT(*) as count
+      FROM transactions
+      WHERE ${activeWhere}
+        AND created_at >= datetime('now', 'localtime', '-60 days')
+      GROUP BY date(created_at), type, amount, COALESCE(category, ''), COALESCE(party, '')
+      HAVING COUNT(*) > 1
+      ORDER BY count DESC, day DESC
+      LIMIT 8
+    `).all()
+
+    const negativeAccounts = db.prepare(`
+      SELECT id, name, type, current_balance
+      FROM accounts
+      WHERE current_balance < 0
+      ORDER BY current_balance ASC
+    `).all()
+
+    const monthNet = roundMoney(thisMonth.income - thisMonth.expense)
+    const suggestions = []
+    if (monthNet < 0) suggestions.push('本月净现金流为负，建议优先检查大额支出和未回款项目。')
+    if (highExpenses.length) suggestions.push('存在高额支出记录，月底汇总时建议逐笔核对发票、合同或报销凭证。')
+    if (duplicateCandidates.length) suggestions.push('发现疑似重复流水，建议财务导出明细后按日期、金额、对方复核。')
+    if (negativeAccounts.length) suggestions.push('存在负余额账户，建议确认是否为垫付、未同步入账或账户余额录入错误。')
+    if (!suggestions.length) suggestions.push('当前未发现明显异常，月底可按账户和分类导出流水做人工复核。')
+
+    return {
+      success: true,
+      data: {
+        generated_at: new Date().toISOString(),
+        this_month: {
+          income: roundMoney(thisMonth.income),
+          expense: roundMoney(thisMonth.expense),
+          net: monthNet,
+          count: thisMonth.count,
+          income_change_percent: percentChange(thisMonth.income, lastMonth.income),
+          expense_change_percent: percentChange(thisMonth.expense, lastMonth.expense)
+        },
+        last_month: {
+          income: roundMoney(lastMonth.income),
+          expense: roundMoney(lastMonth.expense),
+          net: roundMoney(lastMonth.income - lastMonth.expense),
+          count: lastMonth.count
+        },
+        recent_trend: recentTrend,
+        top_expense_categories: topExpenseCategories.map(row => ({
+          ...row,
+          total: roundMoney(row.total)
+        })),
+        high_expenses: highExpenses.map(row => ({ ...row, amount: roundMoney(row.amount) })),
+        duplicate_candidates: duplicateCandidates.map(row => ({ ...row, amount: roundMoney(row.amount) })),
+        negative_accounts: negativeAccounts.map(row => ({ ...row, current_balance: roundMoney(row.current_balance) })),
+        suggestions
+      }
+    }
   })
 }

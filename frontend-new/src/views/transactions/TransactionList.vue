@@ -6,7 +6,10 @@
           <h2>交易流水</h2>
           <p class="page-desc">按账户分组的交易记录</p>
         </div>
-        <el-button type="primary" @click="showAdd = true">+ 新增交易</el-button>
+        <div class="header-actions">
+          <el-button :icon="Download" :loading="exporting" @click="exportTransactions">导出当前筛选</el-button>
+          <el-button type="primary" @click="openAddDialog">+ 新增交易</el-button>
+        </div>
       </div>
 
       <!-- 筛选栏 -->
@@ -96,8 +99,9 @@
                 <el-table-column prop="category" label="分类" width="100" />
                 <el-table-column prop="description" label="备注" min-width="140" />
                 <el-table-column prop="party" label="对方" width="110" />
-                <el-table-column label="操作" width="70" fixed="right">
+                <el-table-column label="操作" width="120" fixed="right">
                   <template #default="{ row }">
+                    <el-button link size="small" @click="openAttachmentDialog(row)">附件</el-button>
                     <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
                   </template>
                 </el-table-column>
@@ -137,11 +141,40 @@
         <el-form-item label="对方">
           <el-input v-model="addForm.party" placeholder="交易对方" />
         </el-form-item>
+        <el-form-item label="凭证附件">
+          <div class="receipt-uploader">
+            <input ref="receiptInput" class="hidden-input" type="file" multiple @change="onReceiptSelect" />
+            <div class="receipt-actions">
+              <el-button :icon="Paperclip" @click="receiptInput?.click()">选择凭证</el-button>
+              <span class="receipt-tip">可先选发票、截图、收据，保存流水后自动归档</span>
+            </div>
+            <div v-if="pendingReceipts.length" class="receipt-list">
+              <div v-for="item in pendingReceipts" :key="item.id" class="receipt-item">
+                <span class="receipt-kind">{{ receiptKind(item.file) }}</span>
+                <div class="receipt-info">
+                  <span class="receipt-name">{{ item.file.name }}</span>
+                  <span class="receipt-size">{{ formatFileSize(item.file.size) }}</span>
+                </div>
+                <el-button link type="danger" @click="removeReceipt(item.id)">移除</el-button>
+              </div>
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAdd = false">取消</el-button>
         <el-button type="primary" @click="handleAdd" :loading="saving">确定</el-button>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="showAttachments" :title="attachmentDialogTitle" width="720px">
+      <AttachmentPanel
+        v-if="selectedTransaction"
+        entity-type="transaction"
+        :entity-id="selectedTransaction.id"
+        title="流水附件"
+        compact
+      />
     </el-dialog>
   </div>
 </template>
@@ -150,7 +183,8 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowRight } from '@element-plus/icons-vue'
+import { ArrowRight, Download, Paperclip } from '@element-plus/icons-vue'
+import AttachmentPanel from '../../components/AttachmentPanel.vue'
 
 const route = useRoute()
 const transactions = ref([])
@@ -159,6 +193,11 @@ const categories = ref([])
 const loading = ref(false)
 const showAdd = ref(false)
 const saving = ref(false)
+const exporting = ref(false)
+const showAttachments = ref(false)
+const selectedTransaction = ref(null)
+const receiptInput = ref(null)
+const pendingReceipts = ref([])
 const addForm = ref({ account_id: null, type: 'expense', amount: 0, category: '', description: '', party: '' })
 
 const filters = ref({ type: '', account_id: null, account_type: '', category: '' })
@@ -203,6 +242,13 @@ const groups = computed(() => {
     else map[key].expense += tx.amount
   }
   return Object.values(map)
+})
+
+const attachmentDialogTitle = computed(() => {
+  if (!selectedTransaction.value) return '流水附件'
+  const tx = selectedTransaction.value
+  const type = tx.type === 'income' ? '收入' : '支出'
+  return `${type} ¥${Number(tx.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })} 的附件`
 })
 
 function buildQuery() {
@@ -254,6 +300,39 @@ async function fetchCategories() {
   } catch {}
 }
 
+function openAddDialog() {
+  addForm.value = { account_id: null, type: 'expense', amount: 0, category: '', description: '', party: '' }
+  pendingReceipts.value = []
+  showAdd.value = true
+}
+
+async function exportTransactions() {
+  exporting.value = true
+  try {
+    const qs = buildQuery()
+    qs.delete('pageSize')
+    qs.set('format', 'xls')
+    const res = await fetch(`/api/transactions/export?${qs}`, {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    if (!res.ok) throw new Error('导出失败')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `简尚交易流水-${new Date().toISOString().slice(0, 10)}.xls`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    ElMessage.success('已开始下载')
+  } catch (error) {
+    ElMessage.error(error.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 function doSearch() { fetchList() }
 
 function resetFilters() {
@@ -276,15 +355,88 @@ async function handleAdd() {
     })
     const json = await res.json()
     if (json.success) {
+      if (pendingReceipts.value.length) {
+        await uploadTransactionReceipts(json.id)
+      }
       ElMessage.success('新增成功')
       showAdd.value = false
       addForm.value = { account_id: null, type: 'expense', amount: 0, category: '', description: '', party: '' }
+      pendingReceipts.value = []
       fetchList()
       fetchCategories()
     }
   } finally {
     saving.value = false
   }
+}
+
+function onReceiptSelect(event) {
+  const files = Array.from(event.target.files || [])
+  for (const file of files) {
+    if (file.size > 10 * 1024 * 1024) {
+      ElMessage.warning(`${file.name} 超过 10MB，暂不上传`)
+      continue
+    }
+    pendingReceipts.value.push({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      file
+    })
+  }
+  event.target.value = ''
+}
+
+function removeReceipt(id) {
+  pendingReceipts.value = pendingReceipts.value.filter(item => item.id !== id)
+}
+
+async function uploadTransactionReceipts(transactionId) {
+  const uploadedIds = new Set()
+  try {
+    for (const item of pendingReceipts.value) {
+      const data = await readAsDataUrl(item.file)
+      const res = await fetch('/api/files/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+        body: JSON.stringify({
+          entity_type: 'transaction',
+          entity_id: transactionId,
+          name: item.file.name,
+          mime_type: item.file.type || 'application/octet-stream',
+          size: item.file.size,
+          data
+        })
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.message || `${item.file.name} 上传失败`)
+      uploadedIds.add(item.id)
+    }
+  } catch (error) {
+    pendingReceipts.value = pendingReceipts.value.filter(item => !uploadedIds.has(item.id))
+    ElMessage.warning(`流水已保存，部分附件未上传：${error.message || '上传失败'}`)
+  }
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = event => resolve(event.target.result)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+function receiptKind(file) {
+  if ((file.type || '').startsWith('image/')) return '图片'
+  if ((file.type || '').includes('pdf')) return 'PDF'
+  if (/\.(xls|xlsx|csv)$/i.test(file.name)) return '表格'
+  return '文件'
+}
+
+function formatFileSize(size) {
+  const bytes = Number(size || 0)
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
 }
 
 async function handleDelete(row) {
@@ -297,6 +449,11 @@ async function handleDelete(row) {
     ElMessage.success('已删除')
     fetchList()
   } catch {}
+}
+
+function openAttachmentDialog(row) {
+  selectedTransaction.value = row
+  showAttachments.value = true
 }
 
 watch(() => route.query, (q) => {
@@ -322,6 +479,68 @@ onMounted(() => { fetchList(); fetchAccounts(); fetchCategories() })
 }
 .filter-bar :deep(.el-form-item) { margin-bottom: 0; }
 .filter-bar :deep(.el-form-item__label) { color: var(--text-secondary); }
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.receipt-uploader {
+  width: 100%;
+}
+.hidden-input {
+  display: none;
+}
+.receipt-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.receipt-tip,
+.receipt-size {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.receipt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.receipt-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-page);
+}
+.receipt-kind {
+  min-width: 44px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  font-size: 12px;
+  text-align: center;
+}
+.receipt-info {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.receipt-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .income { color: var(--color-success); font-weight: 600; }
 .expense { color: #ef4444; font-weight: 600; }

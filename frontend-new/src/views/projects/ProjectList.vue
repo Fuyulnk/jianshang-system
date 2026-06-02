@@ -16,7 +16,7 @@
         <el-select v-model="phaseFilter" placeholder="按阶段筛选" clearable style="width:140px" @change="fetchList">
           <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
-        <el-button v-if="canCreateProjects" type="primary" @click="showForm = true; formMode = 'create'">新建项目</el-button>
+        <el-button v-if="canCreateProjects" type="primary" @click="openCreateForm">新建项目</el-button>
       </div>
 
       <el-table :data="list" v-loading="loading" stripe style="width:100%" @row-dblclick="goDetail">
@@ -109,7 +109,17 @@
           </el-col>
         </el-row>
         <el-form-item label="施工地址">
-          <el-input v-model="form.address" placeholder="详细地址" />
+          <div class="address-fields">
+            <el-cascader
+              v-model="form.addressRegion"
+              :options="chinaRegionOptions"
+              :props="addressCascaderProps"
+              clearable
+              filterable
+              placeholder="省 / 市"
+            />
+            <el-input v-model="form.address_detail" placeholder="小区、楼栋、门牌号等详细地址" />
+          </div>
         </el-form-item>
         <el-row :gutter="16">
           <el-col :span="12">
@@ -140,6 +150,12 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  addressCascaderProps,
+  buildAddressPayload,
+  chinaRegionOptions,
+  defaultAddressRegion
+} from '../../utils/chinaRegions'
 
 const router = useRouter()
 const list = ref([])
@@ -160,6 +176,8 @@ function emptyForm() {
     customer: '',
     phone: '',
     address: '',
+    addressRegion: [...defaultAddressRegion],
+    address_detail: '',
     source: '',
     manager_user_id: null,
     assignee_user_id: null,
@@ -182,7 +200,8 @@ const phaseOptions = [
   { value: '2', label: '准备阶段' },
   { value: '3', label: '施工过程' },
   { value: '4', label: '完工验收' },
-  { value: '5', label: '售后服务' },
+  { value: '5', label: '项目完结' },
+  { value: '6', label: '售后服务' },
 ]
 
 const stats = ref([])
@@ -228,7 +247,7 @@ async function fetchAssignees() {
 }
 
 function computeStats(data) {
-  const counts = { all: data.length, '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 }
+  const counts = { all: data.length, '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0 }
   for (const p of data) {
     if (p.phase && counts[p.phase] !== undefined) counts[p.phase]++
   }
@@ -238,7 +257,8 @@ function computeStats(data) {
     { key: '2', label: '准备阶段', count: counts['2'], active: phaseFilter.value === '2' },
     { key: '3', label: '施工过程', count: counts['3'], active: phaseFilter.value === '3' },
     { key: '4', label: '完工验收', count: counts['4'], active: phaseFilter.value === '4' },
-    { key: '5', label: '售后服务', count: counts['5'], active: phaseFilter.value === '5' },
+    { key: '5', label: '项目完结', count: counts['5'], active: phaseFilter.value === '5' },
+    { key: '6', label: '售后服务', count: counts['6'], active: phaseFilter.value === '6' },
   ]
 }
 
@@ -251,6 +271,12 @@ function goDetail(row) {
   router.push(`/main/projects/${row.id}`)
 }
 
+function openCreateForm() {
+  formMode.value = 'create'
+  form.value = emptyForm()
+  showForm.value = true
+}
+
 async function handleSave() {
   if (!form.value.name || !form.value.customer) {
     ElMessage.warning('请填写项目名称和客户名称')
@@ -258,7 +284,8 @@ async function handleSave() {
   }
   saving.value = true
   try {
-    const body = { ...form.value }
+    const body = { ...form.value, ...buildAddressPayload(form.value) }
+    delete body.addressRegion
     body.total_amount = parseFloat(body.total_amount) || 0
     body.deposit_amount = parseFloat(body.deposit_amount) || 0
     body.manager_user_id = body.manager_user_id || 0
@@ -268,14 +295,28 @@ async function handleSave() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
       body: JSON.stringify(body)
     })
-    const json = await res.json()
+    const json = await readJson(res)
+    if (!res.ok || !json.success) {
+      throw new Error(json.message || '创建失败，请检查权限或服务器日志')
+    }
     if (json.success) {
       ElMessage.success('创建成功')
       showForm.value = false
       form.value = emptyForm()
       fetchList()
     }
+  } catch (err) {
+    ElMessage.error(err.message || '创建失败，请稍后重试')
   } finally { saving.value = false }
+}
+
+async function readJson(res) {
+  const text = await res.text()
+  try {
+    return text ? JSON.parse(text) : {}
+  } catch {
+    return { success: false, message: text.slice(0, 120) || '服务器返回异常' }
+  }
 }
 
 async function handleDelete(row) {
@@ -305,5 +346,19 @@ onMounted(() => {
 }
 .project-page :deep(.el-table .cell) {
   word-break: keep-all;
+}
+.address-fields {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+}
+.address-fields :deep(.el-cascader) {
+  width: 100%;
+}
+@media (max-width: 720px) {
+  .address-fields {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -28,6 +28,60 @@
       </el-col>
     </el-row>
 
+    <!-- 实时分析 -->
+    <el-card class="page-card analysis-card">
+      <div class="page-header">
+        <div>
+          <h2>实时财务分析</h2>
+          <p class="page-desc">先用系统流水做确定性统计，后续再接 AI 解释和月报</p>
+        </div>
+        <div class="header-actions">
+          <el-button :icon="Download" :loading="exporting" @click="exportAllTransactions">下载流水</el-button>
+          <el-button :icon="Refresh" @click="fetchData" :loading="loading">刷新</el-button>
+        </div>
+      </div>
+
+      <el-row :gutter="16" class="analysis-metrics">
+        <el-col :span="8">
+          <div class="analysis-metric">
+            <span>本月净现金流</span>
+            <strong :class="analysis.this_month.net >= 0 ? 'income' : 'expense'">{{ formatMoney(analysis.this_month.net) }}</strong>
+          </div>
+        </el-col>
+        <el-col :span="8">
+          <div class="analysis-metric">
+            <span>收入环比</span>
+            <strong :class="analysis.this_month.income_change_percent >= 0 ? 'income' : 'expense'">{{ formatPercent(analysis.this_month.income_change_percent) }}</strong>
+          </div>
+        </el-col>
+        <el-col :span="8">
+          <div class="analysis-metric">
+            <span>支出环比</span>
+            <strong :class="analysis.this_month.expense_change_percent <= 0 ? 'income' : 'expense'">{{ formatPercent(analysis.this_month.expense_change_percent) }}</strong>
+          </div>
+        </el-col>
+      </el-row>
+
+      <div class="analysis-grid">
+        <div class="analysis-block">
+          <h3>本月支出排行</h3>
+          <div v-if="analysis.top_expense_categories.length" class="rank-list">
+            <div v-for="item in analysis.top_expense_categories" :key="item.category" class="rank-row">
+              <span>{{ item.category }}</span>
+              <strong>{{ formatMoney(item.total) }}</strong>
+            </div>
+          </div>
+          <el-empty v-else description="暂无支出分类" :image-size="64" />
+        </div>
+        <div class="analysis-block">
+          <h3>系统提醒</h3>
+          <ul class="suggestions">
+            <li v-for="item in analysis.suggestions" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+      </div>
+    </el-card>
+
     <!-- 球型可视化 -->
     <el-row :gutter="20" style="margin-bottom: 20px;">
       <el-col :span="12">
@@ -45,7 +99,7 @@
           <h2>资金总览</h2>
           <p class="page-desc">所有账户的收支汇总与当前余额，相当于飞书资金总览表</p>
         </div>
-        <el-button @click="fetchData" :loading="loading" icon="Refresh">刷新</el-button>
+        <el-button @click="fetchData" :loading="loading" :icon="Refresh">刷新</el-button>
       </div>
 
       <el-table :data="accounts" stripe v-loading="loading" style="width: 100%" :summary-method="summaries" show-summary>
@@ -121,14 +175,27 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { Download, Refresh } from '@element-plus/icons-vue'
 import FinanceSphere from '../../components/FinanceSphere.vue'
 
 const router = useRouter()
 const loading = ref(false)
+const exporting = ref(false)
 const accounts = ref([])
 const totals = ref({ total_assets: 0, total_income: 0, total_expense: 0, account_count: 0 })
 const incomeCategories = ref([])
 const expenseCategories = ref([])
+const analysis = ref({
+  this_month: { income: 0, expense: 0, net: 0, count: 0, income_change_percent: 0, expense_change_percent: 0 },
+  last_month: { income: 0, expense: 0, net: 0, count: 0 },
+  recent_trend: [],
+  top_expense_categories: [],
+  high_expenses: [],
+  duplicate_candidates: [],
+  negative_accounts: [],
+  suggestions: ['暂无分析数据']
+})
 
 function token() { return localStorage.getItem('token') }
 
@@ -137,15 +204,22 @@ function formatMoney(v) {
   return (n >= 0 ? '' : '-') + '¥' + Math.abs(n).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
 }
 
+function formatPercent(v) {
+  const n = Number(v) || 0
+  return `${n > 0 ? '+' : ''}${n.toFixed(1)}%`
+}
+
 async function fetchData() {
   loading.value = true
   try {
-    const [overviewRes, catRes] = await Promise.all([
+    const [overviewRes, catRes, analysisRes] = await Promise.all([
       fetch('/api/finance/overview', { headers: { Authorization: `Bearer ${token()}` } }),
-      fetch('/api/finance/categories', { headers: { Authorization: `Bearer ${token()}` } })
+      fetch('/api/finance/categories', { headers: { Authorization: `Bearer ${token()}` } }),
+      fetch('/api/finance/analysis', { headers: { Authorization: `Bearer ${token()}` } })
     ])
     const overview = await overviewRes.json()
     const cats = await catRes.json()
+    const nextAnalysis = await analysisRes.json()
 
     if (overview.success) {
       accounts.value = overview.data.accounts
@@ -155,6 +229,7 @@ async function fetchData() {
       incomeCategories.value = cats.data.filter(c => c.type === 'income')
       expenseCategories.value = cats.data.filter(c => c.type === 'expense')
     }
+    if (nextAnalysis.success) analysis.value = nextAnalysis.data
   } finally {
     loading.value = false
   }
@@ -175,6 +250,30 @@ function summaries(param) {
 
 function viewTransactions(row) {
   router.push(`/main/transactions?account_id=${row.id}`)
+}
+
+async function exportAllTransactions() {
+  exporting.value = true
+  try {
+    const res = await fetch('/api/transactions/export?format=xls', {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    if (!res.ok) throw new Error('下载失败')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `简尚财务流水-${new Date().toISOString().slice(0, 10)}.xls`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    ElMessage.success('已开始下载')
+  } catch (error) {
+    ElMessage.error(error.message || '下载失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 onMounted(fetchData)
@@ -200,4 +299,70 @@ onMounted(fetchData)
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
 .page-header h2 { margin: 0; font-size: 18px; color: var(--text-primary); }
 .page-desc { margin: 4px 0 0; font-size: 13px; color: var(--text-tertiary); }
+
+.analysis-card { margin-bottom: 20px; }
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.analysis-metrics { margin-bottom: 16px; }
+.analysis-metric {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-page));
+}
+.analysis-metric span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.analysis-metric strong { font-size: 18px; }
+.analysis-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.analysis-block {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  background: var(--bg-card);
+}
+.analysis-block h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rank-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.suggestions {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  line-height: 1.8;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .analysis-grid { grid-template-columns: 1fr; }
+  .page-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .header-actions { justify-content: flex-start; }
+}
 </style>

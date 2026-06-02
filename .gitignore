@@ -54,3 +54,8 @@ ecosystem.config.js
 # OS temp
 *.tmp
 *.temp
+tmp-home/
+node_modules/
+dist/
+.claude/
+outputs/

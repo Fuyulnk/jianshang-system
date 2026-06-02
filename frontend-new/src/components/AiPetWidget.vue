@@ -273,8 +273,8 @@ function onResize(e) {
   const maxWidth = Math.max(MIN_BUBBLE_SIZE.width, viewport.value.width - VIEWPORT_MARGIN * 2)
   const maxHeight = Math.max(MIN_BUBBLE_SIZE.height, viewport.value.height - VIEWPORT_MARGIN * 2)
   bubbleSize.value = {
-    width: clamp(resizeState.value.startWidth + e.clientX - resizeState.value.startX, MIN_BUBBLE_SIZE.width, maxWidth),
-    height: clamp(resizeState.value.startHeight + e.clientY - resizeState.value.startY, MIN_BUBBLE_SIZE.height, maxHeight)
+    width: clamp(resizeState.value.startWidth - (e.clientX - resizeState.value.startX), MIN_BUBBLE_SIZE.width, maxWidth),
+    height: clamp(resizeState.value.startHeight - (e.clientY - resizeState.value.startY), MIN_BUBBLE_SIZE.height, maxHeight)
   }
 }
 
@@ -715,14 +715,14 @@ onUnmounted(() => {
 .bubble-send.loading { opacity: 0.6; cursor: not-allowed; }
 .bubble-resize-handle {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
+  left: 4px;
+  top: 4px;
   width: 22px;
   height: 22px;
   cursor: nwse-resize;
-  border-right: 2px solid color-mix(in srgb, var(--color-primary) 50%, transparent);
-  border-bottom: 2px solid color-mix(in srgb, var(--color-primary) 50%, transparent);
-  border-radius: 0 0 6px 0;
+  border-left: 2px solid color-mix(in srgb, var(--color-primary) 58%, transparent);
+  border-top: 2px solid color-mix(in srgb, var(--color-primary) 58%, transparent);
+  border-radius: 6px 0 0 0;
   opacity: 0.5;
   transition: opacity 0.15s;
   user-select: none;

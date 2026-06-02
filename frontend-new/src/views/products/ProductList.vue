@@ -33,13 +33,39 @@
     <el-dialog v-model="showAdd" title="新增产品" width="400px">
       <el-form :model="addForm" label-width="80px">
         <el-form-item label="产品名称">
-          <el-input v-model="addForm.name" />
+          <el-autocomplete
+            v-model="addForm.name"
+            :fetch-suggestions="queryProductSuggestions"
+            clearable
+            style="width: 100%"
+            placeholder="输入或选择曾录入的产品"
+            @select="applyProductSuggestion"
+          />
         </el-form-item>
         <el-form-item label="分类">
-          <el-input v-model="addForm.category" />
+          <el-select
+            v-model="addForm.category"
+            filterable
+            allow-create
+            clearable
+            default-first-option
+            style="width: 100%"
+            placeholder="选择或输入分类"
+          >
+            <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+          </el-select>
         </el-form-item>
         <el-form-item label="单位">
-          <el-input v-model="addForm.unit" placeholder="如：kg、个、箱" />
+          <el-select
+            v-model="addForm.unit"
+            filterable
+            allow-create
+            default-first-option
+            style="width: 100%"
+            placeholder="选择或输入单位"
+          >
+            <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+          </el-select>
         </el-form-item>
         <el-form-item label="库存">
           <el-input-number v-model="addForm.stock" :min="0" style="width: 100%" />
@@ -57,7 +83,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const list = ref([])
@@ -65,6 +91,36 @@ const loading = ref(false)
 const showAdd = ref(false)
 const saving = ref(false)
 const addForm = ref({ name: '', category: '', unit: 'kg', stock: 0, min_stock: 0 })
+const presetCategories = ['诺瓦艺术漆', '本杰明艺术漆', '艺术漆辅料', '基层材料', '工具耗材', '施工工具', '劳保用品', '设备配件', '其他']
+const presetUnits = ['kg', 'g', 'ml', 'L', '桶', '罐', '支', '把', '套', '份', '个', '颗', '箱', '卷', '米', '平方']
+
+const productMemory = computed(() => {
+  const map = new Map()
+  for (const item of list.value) {
+    const name = String(item.name || '').trim()
+    if (!name) continue
+    if (!map.has(name)) map.set(name, { value: name, categories: new Set(), units: new Set() })
+    const memory = map.get(name)
+    if (item.category) memory.categories.add(item.category)
+    if (item.unit) memory.units.add(item.unit)
+  }
+  return [...map.values()].map(item => ({
+    value: item.value,
+    categories: [...item.categories],
+    units: [...item.units],
+    categoryText: [...item.categories].join(' / '),
+  }))
+})
+
+const categoryOptions = computed(() => {
+  const learned = list.value.map(item => item.category).filter(Boolean)
+  return [...new Set([...presetCategories, ...learned])]
+})
+
+const unitOptions = computed(() => {
+  const learned = list.value.map(item => item.unit).filter(Boolean)
+  return [...new Set([...presetUnits, ...learned])]
+})
 
 function token() { return localStorage.getItem('token') }
 
@@ -101,6 +157,27 @@ async function handleAdd() {
     saving.value = false
   }
 }
+
+function queryProductSuggestions(query, cb) {
+  const keyword = String(query || '').trim().toLowerCase()
+  const result = productMemory.value
+    .filter(item => !keyword || item.value.toLowerCase().includes(keyword))
+    .slice(0, 10)
+  cb(result)
+}
+
+function applyProductSuggestion(item) {
+  addForm.value.name = item.value
+  if (item.categories.length === 1) addForm.value.category = item.categories[0]
+  if (item.units.length === 1) addForm.value.unit = item.units[0]
+}
+
+watch(() => addForm.value.name, (name) => {
+  const exact = productMemory.value.find(item => item.value === name)
+  if (!exact) return
+  if (exact.categories.length === 1 && !addForm.value.category) addForm.value.category = exact.categories[0]
+  if (exact.units.length === 1 && !addForm.value.unit) addForm.value.unit = exact.units[0]
+})
 
 async function handleDelete(row) {
   try {
