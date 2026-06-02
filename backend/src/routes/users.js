@@ -127,7 +127,11 @@ export default function userRoutes(server, db) {
       reply.code(403).send({ success: false, message: '系统所有者账号不能删除' })
       return
     }
-    db.prepare('DELETE FROM users WHERE id = ?').run(request.params.id)
+    const result = db.prepare('DELETE FROM users WHERE id = ?').run(request.params.id)
+    if (result.changes === 0) {
+      reply.code(404).send({ success: false, message: '用户不存在' })
+      return
+    }
     return { success: true }
   })
 

@@ -197,9 +197,16 @@ server.get('/api', async () => ({
   name: '简尚系统', version: '1.0.0', message: '欢迎使用简尚系统 API'
 }))
 
-// CORS
+// CORS — 只允许前端来源
+const ALLOWED_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173', 'http://8.135.8.37:3000']
 server.addHook('onRequest', (request, reply, done) => {
-  reply.header('Access-Control-Allow-Origin', '*')
+  const origin = request.headers.origin
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    reply.header('Access-Control-Allow-Origin', origin)
+  } else if (!origin) {
+    // 同源请求或无 origin（如 curl）放行
+    reply.header('Access-Control-Allow-Origin', '*')
+  }
   reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   if (request.method === 'OPTIONS') { reply.code(204).send(); return }
@@ -277,7 +284,13 @@ const start = async () => {
       console.log(`用户 ${socket.user.username} 已连接`)
 
       socket.on('join:conversation', (convId) => {
-        socket.join(`conv:${convId}`)
+        // 校验用户是否为会话参与者
+        const participant = db.prepare(
+          'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?'
+        ).get(convId, socket.user.userId)
+        if (participant) {
+          socket.join(`conv:${convId}`)
+        }
       })
 
       socket.on('leave:conversation', (convId) => {

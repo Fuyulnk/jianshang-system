@@ -1,5 +1,7 @@
 # 简尚系统开发规范
 
+接手本项目必须先读根目录 `AGENTS.md`。`AGENTS.md` 是多 AI 协作与安全开发硬规则，优先级高于本文件里的普通说明。
+
 ## 技术栈
 - 前端：Vue 3 (Composition API) + Vite + Element Plus + Vue Router + Socket.io Client
 - 后端：Node.js + Fastify (ESM) + better-sqlite3 + Socket.io + JWT

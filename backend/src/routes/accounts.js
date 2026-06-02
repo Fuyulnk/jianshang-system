@@ -55,10 +55,19 @@ export default function accountRoutes(server, db) {
     return { success: true }
   })
 
-  // 删除账户
+  // 删除账户（关联交易归零，避免孤儿数据）
   server.delete('/api/accounts/:id', async (request, reply) => {
     if (!requireAccountAccess(db, request, reply, 'can_delete')) return
 
+    const account = db.prepare('SELECT id FROM accounts WHERE id = ?').get(request.params.id)
+    if (!account) {
+      reply.code(404).send({ success: false, message: '账户不存在' })
+      return
+    }
+    const txCount = db.prepare('SELECT COUNT(*) as cnt FROM transactions WHERE account_id = ?').get(request.params.id)
+    if (txCount.cnt > 0) {
+      db.prepare("UPDATE transactions SET account_id = NULL WHERE account_id = ?").run(request.params.id)
+    }
     db.prepare('DELETE FROM accounts WHERE id = ?').run(request.params.id)
     return { success: true }
   })

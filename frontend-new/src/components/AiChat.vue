@@ -91,7 +91,11 @@ async function loadHistory() {
       const sessions = Object.values(json.data)
       if (sessions.length > 0) {
         messages.value = sessions[sessions.length - 1]
-        sessionId.value = null
+        // 从历史消息中提取 session_id，保持上下文连续
+        const lastMsg = sessions[sessions.length - 1]
+        if (lastMsg.length > 0 && lastMsg[0].session_id) {
+          sessionId.value = lastMsg[0].session_id
+        }
       }
     }
   } catch {}

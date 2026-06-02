@@ -66,6 +66,62 @@
 
 ## 交接记录
 
+### 2026-06-02 Codex AI 协作与安全开发守则
+
+- 任务：用户确认多 AI 共享工作区开发已经暴露大量安全和质量问题，需要写一份更硬的协作/安全规则，给 Codex、Claude、Hermes 后续接手前阅读。
+- 已完成：
+  - `AGENTS.md` — 新增《简尚系统 AI 协作与安全开发守则》，覆盖多 AI 协作、权限与数据隔离、写入/删除/金额/状态、文件上传、AI 模块、前端体验、本地验证、部署红线、交付定义和危险信号暂停规则。
+  - `AGENTS.md` — 明确三类 AI 岗位定位：Codex = 主工程师/视觉与交互负责人，Claude = 执行工程师/批量修复与部署负责人，Hermes = 安全审计官/质量稽核官；Hermes 默认产出审计报告，不直接做大规模功能开发。
+  - `AGENTS.md` — 增加“石头、沙子、水”协作模型：Codex 先放主结构，Claude 填补批量缝隙，Hermes 最后渗透式审计；默认顺序为 Codex 主开发 → Claude 修补收口 → Hermes 审计遗漏 → Codex 复核 → 分批修复。
+  - `CLAUDE.md` — 顶部增加“必须先读 `AGENTS.md`”提示，避免 Claude 只看旧项目说明。
+- 注意事项：
+  - 这是硬规则文件，不是功能代码；未上传服务器。
+  - 后续每次较大任务结束，应检查是否有新红线或重复事故需要补进 `AGENTS.md`。
+
+### 2026-06-02 Hermes（阿夕）P1 Bug 修复 + 数据校验加固
+
+- 任务：Claude 已修完 P0 安全漏洞后，Hermes 接力修复剩余 P1 逻辑 Bug 和前端体验问题。
+- 已完成：
+  - `backend/src/routes/transactions.js` — 交易创建增加 type/amount/account 三重校验：type 必须是 income/expense、amount 必须为正数、account_id 必须存在；删除已取消交易时不再错误调整账户余额。
+  - `backend/src/routes/accounts.js` — 删除账户前检查存在性；关联交易的 account_id 置为 NULL，避免孤儿数据污染财务报表。
+  - `backend/src/routes/users.js` — 删除用户前检查是否存在，不存在返回 404 而非静默 success。
+  - `frontend-new/src/router/index.js` — 路由守卫 catch 块从静默吞错改为清除损坏 token 并跳转登录页，避免格式损坏的 token 绕过鉴权。
+  - `frontend-new/src/components/AiChat.vue` — loadHistory 后不再将 sessionId 清空为 null，改为从历史消息中提取 session_id 保持上下文连续。
+  - `frontend-new/src/views/projects/ProjectList.vue` — 进度条从 `phase/5` 改为 `Math.min(phase/6, 100)`，修复 phase 6 时溢出 120%；删除失败时给用户明确错误提示。
+  - `frontend-new/src/layouts/MainLayout.vue` — 登出时同步清除 localStorage 的 user，避免其他页面读到脏数据。
+  - `frontend-new/src/views/chat/ChatIndex.vue` — socket 断线重连后自动 rejoin 当前会话房间，避免错过消息。
+  - `frontend-new/src/views/finance/FinanceOverview.vue` — 账户汇总行从 `account_count` 改为 `tx_count`，匹配表格列的 prop，修复汇总行空白。
+- 验证：
+  - `node --check backend/src/routes/transactions.js` ✅
+  - `node --check backend/src/routes/accounts.js` ✅
+  - `node --check backend/src/routes/users.js` ✅
+  - 前端 Vue 文件均为模板内简单修改（Math.min、localStorage.removeItem、socket.emit），不涉及组件结构变更。
+- 注意事项：
+  - 本次未启动后端做真实接口测试，未部署服务器。
+  - 修复清单来自 Hermes 全栈审查（后端 48 + 前端 33 = 81 个问题），本次修了 10 个最高优先级的 P1 问题，剩余 60+ 低优/边角问题待后续分批处理。
+  - 建议下次部署时把 Claude 的 P0 安全修复 + Hermes 的 P1 数据校验一起打包上线。
+
+### 2026-06-02 Claude Hermes 安全审计修复
+
+- 任务：按 Hermes 审计结果修复 P0-P1 安全漏洞和逻辑 Bug，说明根因和后续方向。
+- 根因分析：
+  - 系统从 MVP 快速迭代而来，早期"先跑通"阶段大量使用了宽松的安全策略（CORS `*`、无鉴权接口、无校验的 socket join）。
+  - 权限模型是逐层追加的：先有 `authMiddleware`，后有 `role_permissions`，再到 `data_scope`，导致早期接口和后期功能之间的安全水位不一致。
+  - AI 工具执行器没有继承路由层的权限校验，走的是一套独立的工具分发逻辑，形成了权限盲区。
+- 已修复（P0 安全）：
+  - `knowledge-base.js` — 知识库搜索增加 `authMiddleware`，未登录不可搜索内部文档。
+  - `index.js` — Socket.io `join:conversation` 增加 `conversation_participants` 校验，不能加入非参与会话。
+  - `ai.js` — `create_transaction` 和 `create_account` 增加 `canAccessModule()` 校验，AI 不能绕过模块权限写入。
+  - `index.js` — CORS 从 `*` 改为白名单。
+  - `auth.js` — 登录限流去掉 `x-forwarded-for` 回退，注册增加每 IP 每天 10 次上限。
+- 后续改进方向：
+  - **统一权限入口**：所有接口包括 AI 工具都应通过同一套 `requireModuleAccess()`。
+  - **定期安全审计**：大版本前跑一次 Hermes/CodeQL。
+  - **测试覆盖**：P0 安全路径应有自动化测试。
+  - **JWT 轮换**：config.js 密钥轮转需优化，避免重启导致旧 token 全部失效。
+- 验证：`node --check` 通过 4 个修改文件。
+- 注意事项：未上传服务器，仍有 70+ 低优问题待分批处理。
+
 ### 2026-06-02 Codex 小工程：本地启动、设置稳定、工程权限范围
 
 - 任务：在大工程前先做几个低风险小工程，提高本地可用性和员工试用稳定性。

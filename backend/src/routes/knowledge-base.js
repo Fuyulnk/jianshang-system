@@ -1,9 +1,12 @@
 // 知识库搜索接口 - 代理到 Python 搜索服务器
+import { authMiddleware } from '../middleware/auth.js'
+
 const SEARCH_SERVER = 'http://127.0.0.1:18790'
 
 export default function kbRoutes(server, db) {
-  // 知识库搜索
+  // 知识库搜索（需登录）
   server.post('/api/knowledge-base/search', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
     const { query, top_k = 5, threshold = 0.25 } = request.body || {}
     if (!query) {
       return reply.code(400).send({ success: false, message: '查询内容不能为空' })

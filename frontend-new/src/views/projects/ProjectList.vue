@@ -42,7 +42,7 @@
       </el-table-column>
       <el-table-column label="进度" width="180">
         <template #default="{ row }">
-          <el-progress :percentage="(row.phase / 5) * 100" :stroke-width="8" style="max-width:150px" />
+          <el-progress :percentage="Math.min((row.phase / 6) * 100, 100)" :stroke-width="8" style="max-width:150px" />
         </template>
       </el-table-column>
       <el-table-column prop="total_amount" label="金额(元)" width="120" align="right">
@@ -328,7 +328,9 @@ async function handleDelete(row) {
       ElMessage.success('已删除')
       fetchList()
     }
-  } catch {}
+  } catch (err) {
+    ElMessage.error('删除失败：' + (err.message || '未知错误'))
+  }
 }
 
 onMounted(() => {

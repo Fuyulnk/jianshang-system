@@ -32,6 +32,7 @@ backend/src/public/
 **/.claude/
 .claude/settings.local.json
 **/.claude/settings.local.json
+.codegraph/
 
 # Deprecated/local artifacts kept out of the collaboration baseline
 frontend/

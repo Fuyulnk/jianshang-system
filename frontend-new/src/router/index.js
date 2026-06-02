@@ -69,7 +69,14 @@ router.beforeEach((to, from) => {
           return '/'
         }
       }
-    } catch {}
+    } catch {
+      // token 格式损坏，清除并跳转登录
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      if (to.name !== 'Login') {
+        return '/'
+      }
+    }
   }
 })
 

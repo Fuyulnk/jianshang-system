@@ -1,6 +1,7 @@
 // AI 聊天模块 - 调 DeepSeek API + 工具调用 + 流式返回
 import crypto from 'crypto'
 import { authMiddleware } from '../middleware/auth.js'
+import { canAccessModule } from '../utils/permissions.js'
 
 const KB_SERVER = 'http://127.0.0.1:18790'
 const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
@@ -243,6 +244,9 @@ function executeTool(name, args, db, user) {
       return JSON.stringify({ success: false, message: `未知工具: ${name}` })
 
     case 'create_transaction': {
+      if (!canAccessModule(db, user, 'transactions', 'can_create')) {
+        return JSON.stringify({ success: false, message: '没有创建交易的权限' })
+      }
       if (!args.account_id || !args.amount || args.amount <= 0) {
         return JSON.stringify({ success: false, message: '参数无效：account_id 和 amount（正数）必填' })
       }
@@ -261,6 +265,9 @@ function executeTool(name, args, db, user) {
     }
 
     case 'create_account': {
+      if (!canAccessModule(db, user, 'accounts', 'can_create')) {
+        return JSON.stringify({ success: false, message: '没有创建账户的权限' })
+      }
       if (!args.name) return JSON.stringify({ success: false, message: '账户名称必填' })
       db.prepare('INSERT INTO accounts (name, type) VALUES (?, ?)').run(args.name, args.type || 'personal')
       return JSON.stringify({ success: true, message: `账户「${args.name}」创建成功` })

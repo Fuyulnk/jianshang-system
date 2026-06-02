@@ -7,7 +7,7 @@ import { authMiddleware } from '../middleware/auth.js'
 const loginAttempts = new Map()
 
 function checkLoginLimit(request) {
-  const ip = request.ip || request.headers['x-forwarded-for'] || 'unknown'
+  const ip = request.ip || 'unknown'
   const record = loginAttempts.get(ip)
   if (record && record.lockUntil > Date.now()) {
     return {
@@ -100,8 +100,21 @@ export default function authRoutes(server, db) {
     }
   })
 
-  // 注册
+  // 注册（限制每IP每天最多10次）
+  const registerAttempts = new Map()
   server.post('/api/register', async (request, reply) => {
+    const ip = request.ip || 'unknown'
+    const regRecord = registerAttempts.get(ip) || { count: 0, date: '' }
+    const today = new Date().toISOString().split('T')[0]
+    if (regRecord.date !== today) {
+      regRecord.count = 0
+      regRecord.date = today
+    }
+    regRecord.count++
+    registerAttempts.set(ip, regRecord)
+    if (regRecord.count > 10) {
+      return { success: false, message: '注册过于频繁，请明天再试' }
+    }
     const { username, password, name, phone, department } = request.body
     if (!username || !password) {
       return { success: false, message: '账号和密码不能为空' }

@@ -218,7 +218,12 @@ function token() { return localStorage.getItem('token') }
 // Socket.io
 function connectSocket() {
   socket.value = io({ auth: { token: token() } })
-  socket.value.on('connect', () => {})
+  socket.value.on('connect', () => {
+    // 断线重连后自动 rejoin 当前会话
+    if (currentConvId.value) {
+      socket.value.emit('join:conversation', currentConvId.value)
+    }
+  })
   socket.value.on('message:new', (msg) => {
     if (msg.conversation_id === currentConvId.value) {
       if (!messages.value.some(item => item.id === msg.id)) messages.value.push(msg)

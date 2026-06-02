@@ -242,7 +242,7 @@ function summaries(param) {
     else if (col.property === 'current_balance') sums[col.property] = formatMoney(totals.value.total_assets)
     else if (col.property === 'total_income') sums[col.property] = formatMoney(totals.value.total_income)
     else if (col.property === 'total_expense') sums[col.property] = formatMoney(totals.value.total_expense)
-    else if (col.property === 'account_count') sums[col.property] = accounts.value.length
+    else if (col.property === 'tx_count') sums[col.property] = accounts.value.length
     else sums[col.property] = ''
   })
   return sums

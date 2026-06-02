@@ -229,6 +229,7 @@ async function fetchMenu() {
 
 const handleLogout = () => {
   localStorage.removeItem('token')
+  localStorage.removeItem('user')
   router.push('/')
 }
 
