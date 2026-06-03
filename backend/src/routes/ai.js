@@ -2,25 +2,27 @@
 import crypto from 'crypto'
 import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule } from '../utils/permissions.js'
+import { missingCoreFields, normalizeProjectDraft, parseProjectHandoverText } from '../utils/projectImport.js'
 
 const KB_SERVER = 'http://127.0.0.1:18790'
 const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
 
 const PROJECT_STATUS_LABELS = {
-  info_confirmed: { phase: 1, label: '信息确认', phaseLabel: '项目前期' },
-  survey_done: { phase: 1, label: '工勘完成', phaseLabel: '项目前期' },
-  condition_met: { phase: 2, label: '条件确认', phaseLabel: '准备阶段' },
-  team_assigned: { phase: 2, label: '班组安排', phaseLabel: '准备阶段' },
-  briefing_done: { phase: 2, label: '开工交底', phaseLabel: '准备阶段' },
-  material_out: { phase: 3, label: '材料出库', phaseLabel: '施工过程' },
-  in_progress: { phase: 3, label: '施工中', phaseLabel: '施工过程' },
-  inspection_done: { phase: 3, label: '检查完成', phaseLabel: '施工过程' },
-  completed: { phase: 4, label: '已完工', phaseLabel: '完工验收' },
-  material_returned: { phase: 4, label: '材料回库', phaseLabel: '完工验收' },
-  settled: { phase: 4, label: '已结算', phaseLabel: '完工验收' },
-  repair_requested: { phase: 5, label: '报修待处理', phaseLabel: '售后服务' },
-  repair_assigned: { phase: 5, label: '维修中', phaseLabel: '售后服务' },
-  repair_done: { phase: 5, label: '维修完成', phaseLabel: '售后服务' },
+  info_confirmed: { phase: 1, label: '待工勘', phaseLabel: '接收工单' },
+  survey_done: { phase: 1, label: '待确认开工条件', phaseLabel: '接收工单' },
+  condition_met: { phase: 2, label: '待排班组', phaseLabel: '施工准备' },
+  team_assigned: { phase: 2, label: '待开工交底', phaseLabel: '施工准备' },
+  briefing_done: { phase: 2, label: '待出库', phaseLabel: '施工准备' },
+  material_out: { phase: 3, label: '待进场', phaseLabel: '施工执行' },
+  in_progress: { phase: 3, label: '施工中', phaseLabel: '施工执行' },
+  inspection_done: { phase: 3, label: '待验收', phaseLabel: '施工执行' },
+  completed: { phase: 4, label: '待材料回库', phaseLabel: '交付结算' },
+  material_returned: { phase: 4, label: '待结算', phaseLabel: '交付结算' },
+  settled: { phase: 5, label: '待完结确认', phaseLabel: '完结归档' },
+  closed: { phase: 5, label: '已完结', phaseLabel: '完结归档' },
+  repair_requested: { phase: 6, label: '售后待安排', phaseLabel: '售后处理' },
+  repair_assigned: { phase: 6, label: '售后处理中', phaseLabel: '售后处理' },
+  repair_done: { phase: 6, label: '售后已完成', phaseLabel: '售后处理' },
 }
 
 function getConfig(db) {
@@ -95,12 +97,12 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'get_projects',
-      description: '获取工程订单列表，可按阶段筛选',
+      description: '获取项目工单列表，可按阶段筛选',
       parameters: {
         type: 'object',
         properties: {
           phase: { type: 'number', description: '阶段编号 1=项目前期 2=准备 3=施工 4=验收 5=售后' },
-          status: { type: 'string', description: '工程状态，如 in_progress、completed、settled' }
+          status: { type: 'string', description: '工单状态，如 in_progress、completed、settled' }
         },
         required: []
       }
@@ -145,6 +147,46 @@ const TOOLS = [
           type: { type: 'string', enum: ['company', 'personal'], description: '账户类型' }
         },
         required: ['name', 'type']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'parse_project_handover',
+      description: '把门店/渠道交接文字拆分成一个或多个项目工单草稿，只解析不入库',
+      parameters: {
+        type: 'object',
+        properties: {
+          raw_text: { type: 'string', description: '微信、电话记录或交接单文字' }
+        },
+        required: ['raw_text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_project_workorder',
+      description: '在用户明确确认后创建项目工单；不允许替用户跳过确认',
+      parameters: {
+        type: 'object',
+        properties: {
+          confirmed: { type: 'boolean', description: '用户是否已明确确认创建' },
+          name: { type: 'string', description: '工单名称' },
+          customer: { type: 'string', description: '业主/客户' },
+          phone: { type: 'string', description: '业主电话' },
+          source: { type: 'string', description: '来源门店/渠道' },
+          order_taker: { type: 'string', description: '门店接单人' },
+          order_date: { type: 'string', description: '接单日期 YYYY-MM-DD' },
+          external_order_no: { type: 'string', description: '门店单号/合同号' },
+          address_province: { type: 'string', description: '省份' },
+          address_city: { type: 'string', description: '城市' },
+          address_detail: { type: 'string', description: '详细地址' },
+          handover_note: { type: 'string', description: '交接备注' },
+          total_amount: { type: 'number', description: '合同金额' }
+        },
+        required: ['confirmed', 'name', 'customer']
       }
     }
   }
@@ -272,6 +314,54 @@ function executeTool(name, args, db, user) {
       db.prepare('INSERT INTO accounts (name, type) VALUES (?, ?)').run(args.name, args.type || 'personal')
       return JSON.stringify({ success: true, message: `账户「${args.name}」创建成功` })
     }
+
+    case 'parse_project_handover': {
+      const rawText = String(args.raw_text || '')
+      const drafts = parseProjectHandoverText(rawText).map(draft => ({
+        ...draft,
+        missing_fields: missingCoreFields(draft)
+      }))
+      return JSON.stringify({ success: true, count: drafts.length, data: drafts })
+    }
+
+    case 'create_project_workorder': {
+      if (!canAccessModule(db, user, 'projects', 'can_create')) {
+        return JSON.stringify({ success: false, message: '没有创建项目工单的权限' })
+      }
+      if (!args.confirmed) {
+        return JSON.stringify({ success: false, message: '创建项目工单前必须先让用户确认' })
+      }
+      const draft = normalizeProjectDraft(args)
+      if (!draft.name || !draft.customer) {
+        return JSON.stringify({ success: false, message: '工单名称和业主/客户必填' })
+      }
+      const address = [draft.address_province, draft.address_city, draft.address_detail].filter(Boolean).join(' ')
+      const result = db.prepare(`
+        INSERT INTO projects (
+          name, customer, phone, address, address_province, address_city, address_detail,
+          source, order_taker, order_date, external_order_no, handover_note,
+          total_amount, deposit_amount, manager_user_id, assignee_user_id, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)
+      `).run(
+        draft.name,
+        draft.customer,
+        draft.phone,
+        address,
+        draft.address_province,
+        draft.address_city,
+        draft.address_detail,
+        draft.source,
+        draft.order_taker,
+        draft.order_date,
+        draft.external_order_no,
+        draft.handover_note,
+        Number(draft.total_amount || 0),
+        user.userId
+      )
+      db.prepare('INSERT INTO project_logs (project_id, action, operator, content) VALUES (?, ?, ?, ?)')
+        .run(result.lastInsertRowid, 'AI创建工单', user.username || '', '用户确认后由简尚 AI 创建项目工单')
+      return JSON.stringify({ success: true, id: result.lastInsertRowid, message: `已创建项目工单「${draft.name}」` })
+    }
   }
 }
 
@@ -380,10 +470,19 @@ function summarize(value, limit = 500) {
 function getSystemPrompt(username) {
   return `你是简尚系统的智能助手，名字叫"简尚小助手"。
 
+## 简尚真实业务
+简尚不是销售 CRM，门店/渠道负责签单和交接，简尚负责施工承接。项目工单流程是：
+1. 接收工单：补齐来源门店/渠道、门店接单人、业主电话、详细地址，并完成工勘。
+2. 施工准备：确认开工条件、安排施工负责人/班组、完成开工交底、仓库确认材料出库。
+3. 施工执行：确认进场、记录施工过程、完工检查。
+4. 交付结算：完工验收、材料回库、财务结算。
+5. 完结归档：确认完结；后续如有问题进入售后处理。
+
 ## 你的能力
 1. 回答关于公司财务、制度、流程、产品、合同等方面的问题
 2. 帮助用户理解简尚系统的功能
 3. **直接查询系统数据并回答** - 你可以调用工具获取账户、交易、产品、员工、项目等实时数据
+4. 帮用户把门店/微信交接内容拆成项目工单草稿
 
 ## 知识库
 你有一个公司文档知识库可供查询。系统会自动搜索相关文档提供给你参考。
@@ -391,7 +490,9 @@ function getSystemPrompt(username) {
 ## 工具使用规则
 - 当用户问及具体数据时（如"查账户余额"、"今天收入多少"、"库存还有多少"等），直接调用对应工具查询
 - 当用户要求新增数据时（如"记一笔账"、"新增一个账户"等），直接调用对应工具创建
-- 创建操作前**必须向用户确认关键信息**（金额、账户、类型等），得到确认后再执行
+- 创建操作前**必须向用户确认关键信息**（金额、账户、类型、工单客户、电话、地址等），得到确认后再执行
+- 当用户粘贴门店/微信交接内容时，优先调用 parse_project_handover 拆成草稿；只给用户确认清单，不要直接创建
+- 只有用户明确说确认创建后，才允许调用 create_project_workorder
 - 查询得到数据后，用简洁易懂的语言整理给用户
 - 涉及金额用中文数字单位（元/万元）
 - 数据量较大时给出汇总和关键信息，不要罗列全部原始数据
@@ -513,7 +614,7 @@ export default function aiRoutes(server, db) {
         try { args = JSON.parse(tc.function.arguments) } catch {}
         const resultData = executeTool(tc.function.name, args, db, user)
         logAiAudit(db, user, {
-          actionType: ['create_transaction', 'create_account'].includes(tc.function.name) ? 'tool_write' : 'tool_read',
+          actionType: ['create_transaction', 'create_account', 'parse_project_handover', 'create_project_workorder'].includes(tc.function.name) ? 'tool_write' : 'tool_read',
           toolName: tc.function.name,
           requestSummary: args,
           resultSummary: resultData,

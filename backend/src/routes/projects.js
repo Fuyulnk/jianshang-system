@@ -3,32 +3,27 @@ import { canAccessModule, canAccessProjectRecord, getDataScope } from '../utils/
 
 // 项目状态流转规则（各阶段子状态）
 const STATUS_LABELS = {
-  // 阶段1：项目前期
-  info_confirmed:  { phase: 1, label: '信息确认', phaseLabel: '项目前期' },
-  survey_done:     { phase: 1, label: '工勘完成', phaseLabel: '项目前期' },
-  // 阶段2：准备阶段
-  condition_met:   { phase: 2, label: '条件确认', phaseLabel: '准备阶段' },
-  team_assigned:   { phase: 2, label: '班组安排', phaseLabel: '准备阶段' },
-  briefing_done:   { phase: 2, label: '开工交底', phaseLabel: '准备阶段' },
-  // 阶段3：施工过程
-  material_out:    { phase: 3, label: '材料出库', phaseLabel: '施工过程' },
-  in_progress:     { phase: 3, label: '施工中', phaseLabel: '施工过程' },
-  inspection_done: { phase: 3, label: '检查完成', phaseLabel: '施工过程' },
-  // 阶段4：完工验收
-  completed:       { phase: 4, label: '已完工', phaseLabel: '完工验收' },
-  material_returned: { phase: 4, label: '材料回库', phaseLabel: '完工验收' },
-  settled:         { phase: 5, label: '已结算', phaseLabel: '项目完结' },
-  closed:          { phase: 5, label: '项目完结', phaseLabel: '项目完结' },
-  // 阶段5：售后服务
-  repair_requested: { phase: 6, label: '报修待处理', phaseLabel: '售后服务' },
-  repair_assigned:  { phase: 6, label: '维修中', phaseLabel: '售后服务' },
-  repair_done:      { phase: 6, label: '维修完成', phaseLabel: '售后服务' },
+  info_confirmed:  { phase: 1, label: '待工勘', phaseLabel: '接收工单' },
+  survey_done:     { phase: 1, label: '待确认开工条件', phaseLabel: '接收工单' },
+  condition_met:   { phase: 2, label: '待排班组', phaseLabel: '施工准备' },
+  team_assigned:   { phase: 2, label: '待开工交底', phaseLabel: '施工准备' },
+  briefing_done:   { phase: 2, label: '待出库', phaseLabel: '施工准备' },
+  material_out:    { phase: 3, label: '待进场', phaseLabel: '施工执行' },
+  in_progress:     { phase: 3, label: '施工中', phaseLabel: '施工执行' },
+  inspection_done: { phase: 3, label: '待验收', phaseLabel: '施工执行' },
+  completed:       { phase: 4, label: '待材料回库', phaseLabel: '交付结算' },
+  material_returned: { phase: 4, label: '待结算', phaseLabel: '交付结算' },
+  settled:         { phase: 5, label: '待完结确认', phaseLabel: '完结归档' },
+  closed:          { phase: 5, label: '已完结', phaseLabel: '完结归档' },
+  repair_requested: { phase: 6, label: '售后待安排', phaseLabel: '售后处理' },
+  repair_assigned:  { phase: 6, label: '售后处理中', phaseLabel: '售后处理' },
+  repair_done:      { phase: 6, label: '售后已完成', phaseLabel: '售后处理' },
 }
 
 const STATUS_ORDER = Object.keys(STATUS_LABELS)
 
 const PROJECT_TRANSITIONS = {
-  info_confirmed: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], required: ['survey'] },
+  info_confirmed: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], required: ['handover', 'survey'] },
   survey_done: { next: 'condition_met', roles: ['super_admin', 'admin', 'finance'] },
   condition_met: { next: 'team_assigned', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee'] },
   team_assigned: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['briefing_date'] },
@@ -88,7 +83,7 @@ export default function projectRoutes(server, db) {
     const { status, phase, keyword } = request.query
 
     if (!canProjectAccess(db, request.user, 'can_view')) {
-      reply.code(403).send({ success: false, message: '无权限查看工程订单' })
+      reply.code(403).send({ success: false, message: '无权限查看项目工单' })
       return
     }
 
@@ -120,9 +115,14 @@ export default function projectRoutes(server, db) {
     }
 
     if (keyword) {
-      sql += ' AND (p.name LIKE ? OR p.customer LIKE ? OR p.phone LIKE ?)'
+      sql += `
+        AND (
+          p.name LIKE ? OR p.customer LIKE ? OR p.phone LIKE ?
+          OR p.source LIKE ? OR p.order_taker LIKE ? OR p.external_order_no LIKE ?
+        )
+      `
       const k = `%${keyword}%`
-      params.push(k, k, k)
+      params.push(k, k, k, k, k, k)
     }
 
     if (status) {
@@ -158,13 +158,14 @@ export default function projectRoutes(server, db) {
   server.post('/api/projects', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
     if (!canProjectAccess(db, request.user, 'can_create')) {
-      reply.code(403).send({ success: false, message: '无权限新建工程订单' })
+      reply.code(403).send({ success: false, message: '无权限新建项目工单' })
       return
     }
     const userId = request.user.userId
     const {
       name, customer, phone, source, total_amount, deposit_amount,
-      manager_user_id, assignee_user_id
+      manager_user_id, assignee_user_id,
+      order_taker, order_date, external_order_no, handover_note
     } = request.body
     if (!name || !customer) return { success: false, message: '项目名称和客户为必填' }
     const address = normalizeAddress(request.body)
@@ -172,10 +173,11 @@ export default function projectRoutes(server, db) {
     const result = db.prepare(`
       INSERT INTO projects (
         name, customer, phone, address, address_province, address_city, address_detail,
-        source, total_amount, deposit_amount,
+        source, order_taker, order_date, external_order_no, handover_note,
+        total_amount, deposit_amount,
         manager_user_id, assignee_user_id, created_by
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       name,
       customer,
@@ -185,6 +187,10 @@ export default function projectRoutes(server, db) {
       address.city,
       address.detail,
       source || '',
+      order_taker || '',
+      order_date || '',
+      external_order_no || '',
+      handover_note || '',
       toNumber(total_amount),
       toNumber(deposit_amount),
       toInt(manager_user_id),
@@ -233,7 +239,9 @@ export default function projectRoutes(server, db) {
       return
     }
 
-    const baseFields = ['name', 'customer', 'phone', 'address', 'address_province', 'address_city', 'address_detail', 'source', 'survey_report', 'survey_date',
+    const baseFields = ['name', 'customer', 'phone', 'address', 'address_province', 'address_city', 'address_detail', 'source',
+      'order_taker', 'order_date', 'external_order_no', 'handover_note',
+      'survey_report', 'survey_date',
       'team_leader', 'crew_member_user_ids', 'crew_status', 'briefing_date', 'condition_note',
       'material_out_status', 'material_out_note', 'material_return_status', 'material_return_note',
       'start_date', 'expected_end_date', 'construction_note',
@@ -309,7 +317,7 @@ export default function projectRoutes(server, db) {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(request.params.id)
     if (!project) return reply.code(404).send({ success: false, message: '项目不存在' })
     if (!canProjectAccess(db, request.user, 'can_delete')) {
-      reply.code(403).send({ success: false, message: '无权限删除工程订单' })
+      reply.code(403).send({ success: false, message: '无权限删除项目工单' })
       return
     }
 
@@ -362,7 +370,7 @@ function canUpdateProject(db, user, project) {
 function canAdvanceProject(user, project, targetStatus) {
   const transition = PROJECT_TRANSITIONS[project.status]
   if (!transition || transition.next !== targetStatus) {
-    return { ok: false, message: '只能按工程流程顺序推进状态' }
+    return { ok: false, message: '只能按项目工单流程顺序推进状态' }
   }
 
   const roleAllowed = transition.roles.includes(user.role)
@@ -381,6 +389,7 @@ function canAdvanceProject(user, project, targetStatus) {
 function missingRequired(project, required) {
   const missing = []
   for (const key of required) {
+    if (key === 'handover') missing.push(...missingHandoverFields(project))
     if (key === 'survey' && !project.survey_report && !project.survey_date) missing.push('工勘记录或工勘日期')
     if (key === 'assignee' && !project.assignee_user_id && !project.team_leader && !hasCrewMembers(project)) missing.push('施工负责人、班组长或施工成员')
     if (key === 'briefing_date' && !project.briefing_date) missing.push('交底日期')
@@ -390,6 +399,18 @@ function missingRequired(project, required) {
     if (key === 'settlement_amount' && !Number(project.settlement_amount)) missing.push('结算金额')
   }
   return missing
+}
+
+function missingHandoverFields(project) {
+  const fields = [
+    ['source', '来源门店/渠道'],
+    ['order_taker', '门店接单人'],
+    ['phone', '业主电话'],
+    ['address_detail', '详细地址']
+  ]
+  return fields
+    .filter(([field]) => !String(project[field] || '').trim())
+    .map(([, label]) => label)
 }
 
 function toInt(value) {

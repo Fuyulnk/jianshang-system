@@ -66,6 +66,157 @@
 
 ## 交接记录
 
+### 2026-06-03 Codex 简尚 AI 工单导入助手 V1
+
+- 任务：按用户计划新增“AI 工单导入助手”，让员工粘贴微信/门店交接内容或上传 CSV/XLS/XLSX，由 AI/解析器拆成项目工单草稿，人工确认后批量创建项目工单。
+- 已完成：
+  - 后端新增 `project_import_batches` / `project_import_items` 表，记录导入批次、AI 草稿、人工确认值、字段修正 diff、缺核心字段、疑似重复工单和创建后的项目 ID。
+  - 后端新增 `/api/project-imports/parse`、`/api/project-imports/:id`、`/api/project-imports/:id/confirm`，支持文本解析、CSV/XLS/XLSX 解析、去重提示、批量确认创建。
+  - 新增 `xlsx` 依赖用于后端解析表格；安装时 npm audit 提示 12 个依赖漏洞（4 moderate / 8 high），本轮未做 `npm audit fix`，避免引入无关依赖变动。
+  - 简尚 AI system prompt 已同步施工承接流程：门店交接、工勘、排班、交底、出库、进场、施工、验收、回库、结算、完结。
+  - AI 工具新增 `parse_project_handover` 和 `create_project_workorder`，权限页可见；创建工单工具要求用户确认并检查项目创建权限。
+  - 项目工单页新增“AI 导入工单”入口；弹窗支持粘贴文本/上传表格、编辑草稿、查看缺核心/可能重复、勾选后批量创建。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/project-imports.js`
+  - `node --check backend/src/utils/projectImport.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 使用临时空库 `HOME=/private/tmp/jianshang-import-test-home PORT=3060 npm start` 实测：
+    - 未登录访问导入解析返回 401。
+    - 超级管理员登录成功。
+    - 多客户微信文本可拆出 2 条草稿。
+    - 批量确认可创建 2 条项目工单。
+    - 再次导入相同手机号/门店单号可返回“可能重复”。
+    - XLSX 表格可解析出草稿。
+    - 普通员工账号无项目创建权限时导入解析返回 403。
+  - 临时测试后端已停止，3060 端口未占用。
+- 注意事项：
+  - 本次没有上传服务器。
+  - 本轮 V1 不做截图 OCR、微信自动接入、飞书自动同步。
+  - 导入草稿里的“是否施工/是否备货/备货备注”目前写入导入记录，并在创建项目时追加到交接备注；未新增项目表独立字段。
+
+### 2026-06-03 Claude 项目工单流程校准 + P1 修复 上线
+
+- 任务：Codex 完成项目工单施工承接流程校准（状态流程文案、资料完整度硬校验、下一步动作指引），Hermes 审计发现 P1 标签不一致已修复，打包部署上线。
+- 已完成：
+  - 前端构建 → rsync → PM2 重启。
+  - 部署前备份：`/root/jianshang-system-backup-20260603-104400.tgz`。
+  - 验证：`/health` 正常，`pm2 list` online。
+- 包含的改动：
+  - Codex：状态流程施工承接口径、核心资料硬校验、详情页下一步动作。
+  - Claude：修复前后端阶段标签不一致（Hermes P1-1/P1-2）。
+- 注意事项：无。
+
+### 2026-06-03 Claude 修复 Hermes 审计 P1 标签不一致
+
+- 任务：Hermes 终审发现前后端阶段标签不一致（2 个 P1），上线前修复。
+- 已修复：
+  - `ProjectDetail.vue` — 阶段 4 标签从"交付验收"改为"交付结算"、阶段 5 从"结算完结"改为"完结归档"，对齐后端 `projects.js` 的 `phaseLabel`。
+  - `ProjectList.vue` — 看板和筛选统计的 6 个阶段标签全部更新为后端口径（接收工单/施工准备/施工执行/交付结算/完结归档/售后处理）。
+- 验证：`npm run build` 通过。
+- 注意事项：未上传服务器，本次改动与 Codex 项目工单流程合并在下一次部署一起上线。
+
+### 2026-06-03 Codex 项目工单施工承接流程校准
+
+- 任务：按用户确认，先不做仓库出库联动，继续把项目工单流程真正贴合“门店/渠道签单，简尚承接施工”的业务。
+- 已完成：
+  - `backend/src/routes/projects.js` — 工单状态标签改为施工承接口径：待工勘、待确认开工条件、待排班组、待开工交底、待出库、待进场、施工中、待验收、待材料回库、待结算、已完结。
+  - `backend/src/routes/projects.js` — 从待工勘推进到下一步时，新增核心交接资料硬校验：来源门店/渠道、门店接单人、业主电话、详细地址；仍要求工勘记录或工勘日期。
+  - `frontend-new/src/views/projects/ProjectList.vue` — 阶段筛选和看板改为接收工单、施工准备、施工执行、交付结算、完结归档、售后处理；资料标签区分“缺核心”和“待完善”。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` — 当前工作单文案重写为施工承接下一步动作；详情页显示必须补齐项和建议完善项；缺核心资料时在当前工作单下方明确提示不能推进原因。
+  - `backend/src/index.js` — 工程部默认说明同步为“项目工单、施工班组相关权限”，避免权限页继续使用旧口径。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/projects.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 使用临时空库 `HOME=/private/tmp/jianshang-workflow-test-home PORT=3057 npm start` 实测：缺核心资料推进到 `survey_done` 返回 403；补齐来源、接单人、电话、地址和工勘记录后可推进，状态标签返回“待确认开工条件”。临时后端已停止。
+- 注意事项：
+  - 本次没有上传服务器。
+  - 下一步适合做仓库出库联动 V1：项目工单发起出库申请 → 仓库确认 → 库存扣减 → 工单材料出库状态更新。
+
+### 2026-06-02 Claude 项目工单部署上线
+
+- 任务：Codex 完成项目工单改造（业务校准 + 工作台视觉重构），Hermes 终审通过，部署上线。
+- 已完成：
+  - 前端构建 → rsync 到服务器（排除 .env/data/node_modules/avatars）→ PM2 重启。
+  - 部署前服务器备份：`/root/jianshang-system-backup-20260602-202800.tgz`。
+  - 验证：`/health` 返回正常，`pm2 list` 显示 `jianshang-web` online。
+- 注意事项：无。
+
+### 2026-06-02 Claude 部署回滚 + 项目工单初审
+
+- 任务：部署内部开单中心 V1 后用户发现不符实际业务（简尚无销售，门店接单简尚施工），立即回滚；随后 Codex 改为项目工单方案，Claude 做部署前初审。
+- 已完成：
+  - 构建前端并 rsync 推送到服务器（含 orders 模块）→ 用户确认不符合业务 → 从部署前备份回滚，服务器恢复上线状态。
+  - 初审 Codex 项目工单改造（`ProjectList.vue` / `ProjectDetail.vue` / `projects` 表字段）：
+    - `node --check backend/src/index.js` ✅
+    - `node --check backend/src/routes/projects.js` ✅
+    - `node --check frontend-new`：`npm run build` 通过，Vite chunk 警告已知
+  - 初审结论：前后端语法正确，构建通过，业务方向与用户确认一致，可以部署。
+- 验证：`node --check` + `npm run build`。
+- 注意事项：未上传服务器。本次部署回滚教训已写入 AGENTS.md "部署红线"。
+
+### 2026-06-02 Codex 项目工单工作台视觉重构
+
+- 任务：用户反馈上一轮只是业务纠偏，看起来“没改啥”；本轮把项目工单页面改成更像施工承接工作台，而不是普通数据表。
+- 已完成：
+  - `ProjectList.vue` — 增加工单工作台头部说明和 4 个看板指标：资料待补、待工勘、待排班/备货、施工进行。
+  - `ProjectList.vue` — 表格增加“门店交接”合并列、资料完整度标签、施工地址列；搜索提示改为面向工单/业主/门店/单号。
+  - `ProjectList.vue` — 新建工单弹窗按“门店交接 / 施工承接 / 金额信息”分区，录入顺序更贴近真实交接流程。
+  - `ProjectDetail.vue` — 顶部新增“门店交接资料”和“施工承接状态”摘要区，直接显示来源、接单人、接单日期、门店单号、地址、交接备注、负责人、班组长、预计完工。
+  - `ProjectDetail.vue` — 本地阶段名称改成施工承接口径：接收工单、施工准备、施工执行、交付验收、结算完结。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/projects.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+- 注意事项：
+  - 本次没有上传服务器。
+  - 尝试使用 Browser 插件做本地视觉截图，但当前环境返回 `Browser is not available: browser`，未完成自动截图验收。
+
+### 2026-06-02 Codex 业务校准：内部开单改为项目工单
+
+- 任务：用户补充真实业务：简尚没有销售，门店/渠道签单，简尚作为施工方承接施工；因此撤回上一轮“内部开单中心”独立入口，改为在现有工程流程上做“项目工单”。
+- 已完成：
+  - 回收上一轮新增的独立 `orders` 后端路由、前端“内部开单”菜单、订单列表/详情/表单组件和订单附件归属逻辑。
+  - `projects` 增加门店/渠道交接字段：`order_taker`、`order_date`、`external_order_no`、`handover_note`；`source` 继续作为来源门店/渠道使用。
+  - 工程列表和详情文案改为“项目工单/工单详情”，新建工单表单补充来源门店/渠道、门店接单人、接单日期、门店单号/合同号、交接备注。
+  - 项目搜索支持来源、接单人、门店单号；文件中心和角色权限文案同步为“项目工单/工单附件”。
+  - 启动时清理误加入的 `role_permissions.module = 'orders'` 权限行，避免权限页残留错误模块。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/routes/files.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/ai-permissions.js`
+  - `node --check backend/src/utils/permissions.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 使用临时空库 `HOME=/private/tmp/jianshang-project-workorder-home PORT=3056 npm start` 实测：超级管理员登录成功；新建项目工单可保存来源门店、接单人、接单日期、门店单号和交接备注；详情读取正常；按门店单号搜索命中。临时后端已停止。
+- 注意事项：
+  - 这条记录覆盖上一条“内部开单中心 V1”的业务方向；技术上保留了有价值的字段/日志/附件思路，但不再另起订单模块。
+  - 本次没有上传服务器。
+
+### 2026-06-02 Codex 内部开单中心 V1
+
+- 任务：按用户确认的 V1 计划新增“内部开单中心”，作为内部业务入口；工程订单保留为施工执行层。
+- 已完成：
+  - 后端新增 `orders / order_logs` 表、自动订单编号 `DD-YYYYMMDD-001`、订单列表/详情/创建/编辑/状态推进/创建关联工程接口。
+  - 权限新增 `orders` 模块；普通员工只能看自己创建的订单，财务/仓库/工程按业务相关查看，管理员看全部。
+  - 附件中心支持 `entity_type = order`，订单附件和统一文件中心都走同一套鉴权下载/删除。
+  - 前端新增“内部开单”菜单、订单列表、订单详情、创建/编辑表单、订单附件、操作日志、创建工程入口。
+  - 订单确认后普通员工不能修改客户、电话、地址、金额、施工/备货标记等关键字段；管理员可改但会写日志。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/orders.js`
+  - `node --check backend/src/routes/files.js`
+  - `node --check backend/src/utils/permissions.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 使用临时空库 `HOME=/private/tmp/jianshang-order-test-home PORT=3055 npm start` 实测：未登录 401；超级管理员登录成功；连续创建订单编号为 `DD-20260602-001/002`；手机号搜索命中；状态推进成功；需要施工订单可创建并关联工程；普通员工确认订单后修改金额返回 403。
+- 注意事项：
+  - 本次没有上传服务器。
+  - V1 暂未做自动扣库存、自动生成交易流水、打印、飞书/企业微信通知和仪表盘统计。
+  - 临时测试后端已停止；真实本地服务如已运行，需要重启后才会创建新表和新权限行。
+
 ### 2026-06-02 Codex AI 协作与安全开发守则
 
 - 任务：用户确认多 AI 共享工作区开发已经暴露大量安全和质量问题，需要写一份更硬的协作/安全规则，给 Codex、Claude、Hermes 后续接手前阅读。
@@ -121,6 +272,17 @@
   - **JWT 轮换**：config.js 密钥轮转需优化，避免重启导致旧 token 全部失效。
 - 验证：`node --check` 通过 4 个修改文件。
 - 注意事项：未上传服务器，仍有 70+ 低优问题待分批处理。
+
+### 2026-06-02 Claude Git 基线推送 + CodeGraph + 记忆备份
+
+- 任务：把长期脏工作树推送到 GitHub 新仓库，安装代码图谱工具加速后续开发，备份 AI 记忆到独立仓库。
+- 已完成：
+  - 创建 GitHub 仓库 `Fuyulnk/jianshang-system`（私有），推送完整代码（31 个文件，含后端路由、前端视图、配置、脚本）；gitignore 已排除 node_modules/dist/.env/*.db。
+  - 安装 `@colbymchenry/codegraph` 并在项目根目录初始化索引（53 文件 / 991 节点 / 2362 关系，2.25MB SQLite）；已配置为 MCP Server，重启后可用。
+  - 创建 GitHub 仓库 `Fuyulnk/wangshu-memory`（私有），备份 Claude Code 记忆文件（17 个 markdown + 知识图谱 JSONL）。
+- 注意事项：
+  - 简尚系统代码仓库如需转为开源，等系统完善后再改可见性。
+  - CodeGraph MCP Server 在 `.mcp.json` 中配置，重启 Claude Code 后自动加载，无需手动启动。
 
 ### 2026-06-02 Codex 小工程：本地启动、设置稳定、工程权限范围
 

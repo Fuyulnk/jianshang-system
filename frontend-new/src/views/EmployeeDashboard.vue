@@ -53,7 +53,7 @@
       <div class="quick-actions">
         <div class="quick-item" @click="$router.push('/main/projects')">
           <el-icon :size="22"><List /></el-icon>
-          <span>工程订单</span>
+          <span>项目工单</span>
         </div>
         <div class="quick-item" @click="$router.push('/main/chat')" v-if="hasChat">
           <el-icon :size="22"><ChatDotSquare /></el-icon>

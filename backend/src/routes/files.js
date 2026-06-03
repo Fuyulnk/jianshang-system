@@ -32,9 +32,9 @@ export default function fileRoutes(server, db) {
       params.push(entityType)
     }
     if (keyword) {
-      conditions.push('(a.original_name LIKE ? OR p.name LIKE ? OR t.description LIKE ? OR t.party LIKE ? OR w.name LIKE ?)')
+      conditions.push('(a.original_name LIKE ? OR p.name LIKE ? OR p.customer LIKE ? OR t.description LIKE ? OR t.party LIKE ? OR w.name LIKE ?)')
       const like = `%${keyword}%`
-      params.push(like, like, like, like, like)
+      params.push(like, like, like, like, like, like)
     }
 
     const rows = db.prepare(`

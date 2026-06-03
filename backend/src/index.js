@@ -21,6 +21,7 @@ import userRoutes from './routes/users.js'
 import roleRoutes from './routes/roles.js'
 import chatRoutes from './routes/chat.js'
 import projectRoutes from './routes/projects.js'
+import projectImportRoutes from './routes/project-imports.js'
 import settingsRoutes from './routes/settings.js'
 import financeRoutes from './routes/finance.js'
 import employeeDashboardRoutes from './routes/employee-dashboard.js'
@@ -74,12 +75,16 @@ try {
     updateEmployeeCode.run(generateEmployeeCode(db), employee.id)
   }
 } catch {}
-// 工程订单分配字段：先以系统用户为责任主体，后续可再和员工档案强绑定。
+// 项目工单分配字段：先以系统用户为责任主体，后续可再和员工档案强绑定。
 try { db.exec('ALTER TABLE projects ADD COLUMN manager_user_id INTEGER DEFAULT 0') } catch {}
 try { db.exec('ALTER TABLE projects ADD COLUMN assignee_user_id INTEGER DEFAULT 0') } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN address_province TEXT DEFAULT ''") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN address_city TEXT DEFAULT ''") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN address_detail TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN order_taker TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN order_date TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN external_order_no TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE projects ADD COLUMN handover_note TEXT DEFAULT ''") } catch {}
 try { db.exec('ALTER TABLE projects ADD COLUMN created_by INTEGER DEFAULT 0') } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN crew_member_user_ids TEXT DEFAULT '[]'") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN crew_status TEXT DEFAULT 'pending'") } catch {}
@@ -98,9 +103,42 @@ try {
   if (owner) db.prepare('UPDATE chat_history SET user_id = ? WHERE COALESCE(user_id, 0) = 0').run(owner.id)
 } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_chat_history_user_session ON chat_history(user_id, session_id, id)') } catch {}
-try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_assignee ON projects(assignee_user_id)') } catch {}
-try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_manager ON projects(manager_user_id)') } catch {}
-try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_created_by ON projects(created_by)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_assignee ON projects(assignee_user_id)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_manager ON projects(manager_user_id)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_created_by ON projects(created_by)') } catch {}
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_import_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_type TEXT NOT NULL DEFAULT 'text',
+      file_name TEXT DEFAULT '',
+      raw_summary TEXT DEFAULT '',
+      raw_content TEXT DEFAULT '',
+      item_count INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'parsed',
+      created_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS project_import_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id INTEGER NOT NULL,
+      item_index INTEGER DEFAULT 0,
+      ai_draft TEXT DEFAULT '{}',
+      confirmed_draft TEXT DEFAULT '{}',
+      field_diff TEXT DEFAULT '{}',
+      missing_fields TEXT DEFAULT '[]',
+      duplicate_matches TEXT DEFAULT '[]',
+      status TEXT DEFAULT 'draft',
+      project_id INTEGER DEFAULT 0,
+      error_message TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_import_batches_created_by ON project_import_batches(created_by, created_at);
+    CREATE INDEX IF NOT EXISTS idx_project_import_items_batch ON project_import_items(batch_id, status);
+  `)
+} catch {}
 // 升级上来的老用户标记已完成（仅一次）
 const migrated = db.prepare("SELECT value FROM app_config WHERE key = 'migrate_onboarding'").get()
 if (!migrated) {
@@ -153,7 +191,8 @@ const toolCount = db.prepare('SELECT COUNT(*) as c FROM ai_role_tools').get().c
 if (toolCount === 0) {
   const allTools = [
     'get_accounts', 'get_transactions', 'get_today_summary', 'get_products',
-    'get_employees', 'get_projects', 'get_system_stats', 'create_transaction', 'create_account'
+    'get_employees', 'get_projects', 'get_system_stats', 'create_transaction', 'create_account',
+    'parse_project_handover', 'create_project_workorder'
   ]
   const roles = db.prepare('SELECT id, name FROM roles').all()
   const stmt = db.prepare('INSERT OR IGNORE INTO ai_role_tools (role_id, tool_name, allowed) VALUES (?, ?, ?)')
@@ -226,6 +265,7 @@ userRoutes(server, db)
 roleRoutes(server, db)
 chatRoutes(server, db, realtime)
 projectRoutes(server, db)
+projectImportRoutes(server, db)
 settingsRoutes(server, db)
 financeRoutes(server, db)
 employeeDashboardRoutes(server, db)
@@ -438,6 +478,10 @@ function ensureProjectTables(db) {
       address_city TEXT DEFAULT '',
       address_detail TEXT DEFAULT '',
       source TEXT DEFAULT '',
+      order_taker TEXT DEFAULT '',
+      order_date TEXT DEFAULT '',
+      external_order_no TEXT DEFAULT '',
+      handover_note TEXT DEFAULT '',
       status TEXT DEFAULT 'info_confirmed',
       manager_user_id INTEGER DEFAULT 0,
       assignee_user_id INTEGER DEFAULT 0,
@@ -683,7 +727,7 @@ function ensureCoreTables(db) {
     ['admin', '管理员', '日常管理权限'],
     ['finance', '财务部', '账户、流水、结算相关权限'],
     ['warehouse', '仓库部', '产品库存、材料出入库相关权限'],
-    ['engineering', '工程部', '工程订单、施工班组相关权限'],
+    ['engineering', '工程部', '项目工单、施工班组相关权限'],
     ['employee', '员工', '普通员工工作台权限'],
   ]
   const roleStmt = db.prepare('INSERT OR IGNORE INTO roles (name, label, description) VALUES (?, ?, ?)')
@@ -709,6 +753,7 @@ function ensureCoreTables(db) {
       permStmt.run(role.id, module, perm.view, perm.create, perm.edit, perm.delete, perm.scope)
     }
   }
+  try { db.prepare("DELETE FROM role_permissions WHERE module = 'orders'").run() } catch {}
   migrateRolePermissionScopes(db)
 }
 
@@ -770,7 +815,8 @@ function defaultPermission(role, module) {
 function ensureAiToolPermissionRows(db) {
   const allTools = [
     'get_accounts', 'get_transactions', 'get_today_summary', 'get_products',
-    'get_employees', 'get_projects', 'get_system_stats', 'create_transaction', 'create_account'
+    'get_employees', 'get_projects', 'get_system_stats', 'create_transaction', 'create_account',
+    'parse_project_handover', 'create_project_workorder'
   ]
   const roles = db.prepare('SELECT id, name FROM roles').all()
   const stmt = db.prepare('INSERT OR IGNORE INTO ai_role_tools (role_id, tool_name, allowed) VALUES (?, ?, ?)')
@@ -784,8 +830,9 @@ function ensureAiToolPermissionRows(db) {
 
 function defaultAiToolAllowed(role, tool) {
   if (role === 'super_admin') return 1
+  if (role === 'admin') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees', 'get_projects', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
   if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats'].includes(tool) ? 1 : 0
   if (role === 'warehouse') return ['get_products', 'get_system_stats'].includes(tool) ? 1 : 0
-  if (role === 'engineering') return ['get_projects', 'get_products', 'get_system_stats'].includes(tool) ? 1 : 0
+  if (role === 'engineering') return ['get_projects', 'get_products', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
   return ['get_system_stats', 'get_projects'].includes(tool) ? 1 : 0
 }

@@ -40,7 +40,7 @@ function resetFilters() {
 }
 
 function entityLabel(row) {
-  if (row.entity_type === 'project') return '工程'
+  if (row.entity_type === 'project') return '工单'
   if (row.entity_type === 'transaction') return '流水'
   if (row.entity_type === 'product') return '库存'
   if (row.entity_type === 'private_workspace') return '私有区'
@@ -48,7 +48,7 @@ function entityLabel(row) {
 }
 
 function entityText(row) {
-  if (row.entity_type === 'project') return row.project_name ? `${row.project_name} / ${row.project_customer || '-'}` : `工程 #${row.entity_id}`
+  if (row.entity_type === 'project') return row.project_name ? `${row.project_name} / ${row.project_customer || '-'}` : `工单 #${row.entity_id}`
   if (row.entity_type === 'transaction') {
     const type = row.transaction_type === 'income' ? '收入' : '支出'
     const amount = Number(row.transaction_amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
@@ -141,7 +141,7 @@ onMounted(fetchFiles)
       <div class="page-header">
         <div>
           <h2>文件中心</h2>
-          <p class="page-desc">工程附件、流水凭证和仓库资料统一归档</p>
+          <p class="page-desc">工单附件、流水凭证和仓库资料统一归档</p>
         </div>
         <div class="file-stats">
           <span>{{ files.length }} 个文件</span>
@@ -151,7 +151,7 @@ onMounted(fetchFiles)
 
       <div class="filter-bar">
         <el-select v-model="filters.entity_type" clearable placeholder="文件归属" style="width: 140px" @change="fetchFiles">
-          <el-option label="工程附件" value="project" />
+          <el-option label="工单附件" value="project" />
           <el-option label="流水凭证" value="transaction" />
           <el-option label="库存资料" value="product" />
           <el-option label="私有工作区" value="private_workspace" />

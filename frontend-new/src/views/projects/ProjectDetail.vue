@@ -6,14 +6,14 @@
         <el-button @click="$router.push('/main/projects')">← 返回列表</el-button>
         <div class="header-info">
           <h2>{{ project.name }}</h2>
-          <span class="header-meta">客户：{{ project.customer }} | 电话：{{ project.phone || '无' }} | 状态：{{ project.status_label }}</span>
+          <span class="header-meta">业主：{{ project.customer }} | 电话：{{ project.phone || '无' }} | 来源：{{ project.source || '未填写' }} | 状态：{{ project.status_label }}</span>
           <div class="assignment-line">
             <el-tag size="small" type="info">负责人：{{ displayUser(project.manager_real_name, project.manager_username) }}</el-tag>
             <el-tag size="small" type="success">施工负责人：{{ displayUser(project.assignee_real_name, project.assignee_username) }}</el-tag>
           </div>
         </div>
         <el-button type="primary" @click="showEdit = true" v-if="canEditProject">
-          {{ canManageProject ? '编辑项目' : '更新施工记录' }}
+          {{ canManageProject ? '编辑工单' : '更新施工记录' }}
         </el-button>
       </div>
 
@@ -24,6 +24,78 @@
           <div class="step-dot">{{ p.phase }}</div>
           <div class="step-label">{{ p.label }}</div>
         </div>
+      </div>
+
+      <div class="workorder-summary">
+        <el-card class="summary-card handover-summary" shadow="never">
+          <template #header>
+            <div class="summary-header">
+              <span>门店交接资料</span>
+              <el-tag v-if="requiredMissingFields.length" type="danger" size="small">缺核心 {{ requiredMissingFields.length }} 项</el-tag>
+              <el-tag v-else-if="suggestedMissingFields.length" type="warning" size="small">待完善 {{ suggestedMissingFields.length }} 项</el-tag>
+              <el-tag v-else type="success" size="small">资料齐</el-tag>
+            </div>
+          </template>
+          <div class="handover-grid">
+            <div class="summary-item">
+              <span>来源门店/渠道</span>
+              <strong>{{ project.source || '未填写' }}</strong>
+            </div>
+            <div class="summary-item">
+              <span>门店接单人</span>
+              <strong>{{ project.order_taker || '未填写' }}</strong>
+            </div>
+            <div class="summary-item">
+              <span>接单日期</span>
+              <strong>{{ project.order_date || '未填写' }}</strong>
+            </div>
+            <div class="summary-item">
+              <span>门店单号/合同号</span>
+              <strong>{{ project.external_order_no || '未填写' }}</strong>
+            </div>
+            <div class="summary-item wide">
+              <span>施工地址</span>
+              <strong>{{ formattedAddress || '未填写' }}</strong>
+            </div>
+            <div class="summary-item wide">
+              <span>交接备注</span>
+              <strong>{{ project.handover_note || '未填写' }}</strong>
+            </div>
+          </div>
+          <div v-if="requiredMissingFields.length" class="missing-line danger">
+            必须补齐：{{ requiredMissingFields.join('、') }}
+          </div>
+          <div v-if="suggestedMissingFields.length" class="missing-line">
+            建议完善：{{ suggestedMissingFields.join('、') }}
+          </div>
+        </el-card>
+
+        <el-card class="summary-card execution-summary" shadow="never">
+          <template #header>
+            <div class="summary-header">
+              <span>施工承接状态</span>
+              <el-tag :type="project.status === 'closed' ? 'success' : 'primary'" size="small">{{ project.status_label }}</el-tag>
+            </div>
+          </template>
+          <div class="execution-list">
+            <div>
+              <span>项目负责人</span>
+              <strong>{{ displayUser(project.manager_real_name, project.manager_username) }}</strong>
+            </div>
+            <div>
+              <span>施工负责人</span>
+              <strong>{{ displayUser(project.assignee_real_name, project.assignee_username) }}</strong>
+            </div>
+            <div>
+              <span>班组长</span>
+              <strong>{{ project.team_leader || '未安排' }}</strong>
+            </div>
+            <div>
+              <span>预计完工</span>
+              <strong>{{ project.expected_end_date || '未填写' }}</strong>
+            </div>
+          </div>
+        </el-card>
       </div>
 
       <!-- 当前阶段工作单 -->
@@ -161,7 +233,7 @@
             <div class="closed-state">
               <el-icon><Select /></el-icon>
               <div>
-                <strong>项目已完结</strong>
+                <strong>工单已完结</strong>
                 <span>如后续客户报修，可单独发起售后，不影响主工程完结。</span>
               </div>
             </div>
@@ -171,6 +243,11 @@
             <el-form-item label="售后处理备注"><el-input v-model="editForm.construction_note" type="textarea" :rows="2" placeholder="维修安排、现场处理结果" /></el-form-item>
           </template>
         </el-form>
+
+        <div v-if="project.status === 'info_confirmed' && requiredMissingFields.length" class="task-blocker">
+          <strong>当前不能推进：</strong>
+          <span>请先补齐 {{ requiredMissingFields.join('、') }}。</span>
+        </div>
 
         <div class="work-actions">
           <el-button v-if="currentTask.next && canRunCurrentTask" type="primary" size="large" :loading="saving" @click="saveAndAdvance(currentTask.next)">
@@ -187,7 +264,7 @@
         class="project-attachments"
         entity-type="project"
         :entity-id="project.id"
-        title="工程附件"
+        title="工单附件"
       />
 
       <!-- 阶段详情 -->
@@ -196,13 +273,17 @@
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Document /></el-icon> 项目前期</span>
+              <span><el-icon><Document /></el-icon> 门店交接</span>
               <el-tag size="small" :type="project.phase >= 1 ? 'success' : 'info'">{{ project.phase >= 1 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
           <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="项目来源">{{ project.source || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="来源门店/渠道">{{ project.source || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="门店接单人">{{ project.order_taker || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="接单日期">{{ project.order_date || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="门店单号/合同号">{{ project.external_order_no || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="施工地址">{{ formattedAddress || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="交接备注" :span="2">{{ project.handover_note || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="工勘报告">{{ project.survey_report || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="工勘日期">{{ project.survey_date || '未填写' }}</el-descriptions-item>
           </el-descriptions>
@@ -295,16 +376,16 @@
     </template>
 
     <!-- 编辑弹窗 -->
-    <el-dialog v-model="showEdit" title="编辑项目" width="700px">
+    <el-dialog v-model="showEdit" title="编辑项目工单" width="760px">
       <el-form :model="editForm" label-width="100px">
         <el-tabs>
           <el-tab-pane v-if="canManageProject" label="基本信息">
             <el-row :gutter="16">
               <el-col :span="12">
-                <el-form-item label="项目名称"><el-input v-model="editForm.name" /></el-form-item>
+                <el-form-item label="工单名称"><el-input v-model="editForm.name" /></el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="客户名称"><el-input v-model="editForm.customer" /></el-form-item>
+                <el-form-item label="业主/客户"><el-input v-model="editForm.customer" /></el-form-item>
               </el-col>
             </el-row>
             <el-row :gutter="16">
@@ -312,14 +393,27 @@
                 <el-form-item label="联系电话"><el-input v-model="editForm.phone" /></el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="项目来源">
-                  <el-select v-model="editForm.source" placeholder="来源" style="width:100%">
-                    <el-option label="销售" value="销售" /><el-option label="转介绍" value="转介绍" />
-                    <el-option label="门店" value="门店" /><el-option label="其他" value="其他" />
+                <el-form-item label="来源门店/渠道">
+                  <el-select v-model="editForm.source" filterable allow-create default-first-option placeholder="选择或输入来源" style="width:100%">
+                    <el-option label="门店" value="门店" /><el-option label="微信交接" value="微信交接" />
+                    <el-option label="电话交接" value="电话交接" /><el-option label="直接客户" value="直接客户" />
+                    <el-option label="其他渠道" value="其他渠道" />
                   </el-select>
                 </el-form-item>
               </el-col>
             </el-row>
+            <el-row :gutter="16">
+              <el-col :span="8">
+                <el-form-item label="门店接单人"><el-input v-model="editForm.order_taker" /></el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="接单日期"><el-input v-model="editForm.order_date" placeholder="2026-01-01" /></el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="门店单号"><el-input v-model="editForm.external_order_no" placeholder="合同号/门店单号" /></el-form-item>
+              </el-col>
+            </el-row>
+            <el-form-item label="交接备注"><el-input v-model="editForm.handover_note" type="textarea" :rows="2" /></el-form-item>
             <el-form-item label="施工地址">
               <div class="address-fields">
                 <el-cascader
@@ -440,11 +534,11 @@ const editForm = ref({})
 const assignees = ref([])
 
 const phases = [
-  { phase: 1, label: '项目前期' },
-  { phase: 2, label: '准备阶段' },
-  { phase: 3, label: '施工过程' },
-  { phase: 4, label: '完工验收' },
-  { phase: 5, label: '项目完结' },
+  { phase: 1, label: '接收工单' },
+  { phase: 2, label: '施工准备' },
+  { phase: 3, label: '施工执行' },
+  { phase: 4, label: '交付结算' },
+  { phase: 5, label: '完结归档' },
 ]
 
 // 当前用户角色
@@ -468,6 +562,25 @@ const isAssignedEmployee = computed(() => {
 })
 const canEditProject = computed(() => canManageProject.value || (userRole === 'employee' && isAssignedEmployee.value))
 const formattedAddress = computed(() => formatProjectAddress(project.value || {}))
+const requiredMissingFields = computed(() => {
+  if (!project.value) return []
+  const checks = [
+    ['source', '来源门店/渠道'],
+    ['order_taker', '门店接单人'],
+    ['phone', '业主电话'],
+    ['address_detail', '详细地址']
+  ]
+  return checks.filter(([field]) => !String(project.value[field] || '').trim()).map(([, label]) => label)
+})
+const suggestedMissingFields = computed(() => {
+  if (!project.value) return []
+  const checks = [
+    ['order_date', '接单日期'],
+    ['external_order_no', '门店单号'],
+    ['handover_note', '交接备注']
+  ]
+  return checks.filter(([field]) => !String(project.value[field] || '').trim()).map(([, label]) => label)
+})
 const crewMembers = computed(() => {
   const ids = parseCrewMemberIds(project.value?.crew_member_user_ids)
   return ids.map(id => assignees.value.find(user => user.id === id)).filter(Boolean)
@@ -483,44 +596,44 @@ const TASK_FALLBACK = {
 
 const TASKS = {
   info_confirmed: {
-    title: '补充工勘信息',
-    desc: '填完工勘日期或工勘记录后，直接进入工勘完成。',
-    action: '保存并标记工勘完成',
+    title: '核对门店资料并完成工勘',
+    desc: '先补齐来源、接单人、业主电话和地址，再填写工勘记录或工勘日期。',
+    action: '资料齐全，标记工勘完成',
     next: 'survey_done',
     roles: ['super_admin', 'admin', 'engineering']
   },
   survey_done: {
     title: '确认开工条件',
-    desc: '记录现场是否具备开工条件，确认后进入开工准备。',
-    action: '保存并确认开工条件',
+    desc: '记录现场保护、水电、基层和进场条件，确认后进入施工准备。',
+    action: '确认条件，进入排班',
     next: 'condition_met',
     roles: ['super_admin', 'admin', 'finance']
   },
   condition_met: {
     title: '安排施工组',
-    desc: '安排班组长、施工负责人和施工成员，系统会显示成员是否已被其他项目占用。',
-    action: '保存施工组并进入班组安排',
+    desc: '安排班组长、施工负责人和施工成员，系统会提示人员是否已被其他工单占用。',
+    action: '保存班组，进入交底',
     next: 'team_assigned',
     roles: ['super_admin', 'admin', 'engineering']
   },
   team_assigned: {
     title: '完成开工交底',
-    desc: '填写交底日期后，进入材料出库准备。',
-    action: '保存并标记交底完成',
+    desc: '填写交底日期，确认班组已知道施工范围、工艺和现场注意事项。',
+    action: '交底完成，转仓库出库',
     next: 'briefing_done',
     roles: ['super_admin', 'admin', 'engineering']
   },
   briefing_done: {
-    title: '确认材料出库',
-    desc: '当前先记录材料出库状态，后续会联动仓库出库单。',
-    action: '确认材料出库',
+    title: '仓库确认材料出库',
+    desc: '当前先记录材料出库状态，下一步会独立做出库单联动库存。',
+    action: '确认出库，等待进场',
     next: 'material_out',
     roles: ['super_admin', 'admin', 'warehouse']
   },
   material_out: {
-    title: '开始施工',
+    title: '确认进场开工',
     desc: '填写开工日期并更新人员进场状态，施工成员会被视为占用。',
-    action: '保存并开始施工',
+    action: '确认进场，开始施工',
     next: 'in_progress',
     roles: ['super_admin', 'admin', 'engineering', 'employee'],
     assignedOnly: true
@@ -528,41 +641,41 @@ const TASKS = {
   in_progress: {
     title: '记录施工过程',
     desc: '记录施工进度、现场问题或协调事项，完成后进入检查。',
-    action: '保存并标记检查完成',
+    action: '施工记录完成，进入验收',
     next: 'inspection_done',
     roles: ['super_admin', 'admin', 'engineering', 'employee'],
     assignedOnly: true
   },
   inspection_done: {
     title: '完工验收',
-    desc: '填写完工和验收日期，进入材料回库。',
-    action: '保存并标记已完工',
+    desc: '填写完工和验收日期，确认现场已具备交付条件。',
+    action: '验收完成，转材料回库',
     next: 'completed',
     roles: ['super_admin', 'admin', 'engineering']
   },
   completed: {
     title: '确认材料回库',
     desc: '当前先记录材料回库状态，后续会联动仓库回库单和项目成本。',
-    action: '确认材料回库',
+    action: '确认回库，转财务结算',
     next: 'material_returned',
     roles: ['super_admin', 'admin', 'warehouse']
   },
   material_returned: {
     title: '财务结算',
     desc: '填写最终结算金额后，可以直接完结项目；没有售后也能正常闭环。',
-    action: '结算完成并完结项目',
+    action: '结算完成，完结工单',
     next: 'closed',
     roles: ['super_admin', 'admin', 'finance']
   },
   settled: {
-    title: '确认项目完结',
-    desc: '旧项目的已结算状态可以补确认后完结。',
-    action: '确认项目完结',
+    title: '确认工单完结',
+    desc: '旧工单的已结算状态可以补确认后完结。',
+    action: '确认工单完结',
     next: 'closed',
     roles: ['super_admin', 'admin', 'finance']
   },
   closed: {
-    title: '项目已完结',
+    title: '工单已完结',
     desc: '主工程流程已经结束。后续客户报修时再单独发起售后。',
     action: '',
     next: '',
@@ -688,7 +801,9 @@ async function handleSave() {
 
 async function saveProjectFields() {
   const body = { ...buildAddressPayload(editForm.value) }
-  const fields = ['name', 'customer', 'phone', 'address', 'address_province', 'address_city', 'address_detail', 'source', 'survey_report', 'survey_date',
+  const fields = ['name', 'customer', 'phone', 'address', 'address_province', 'address_city', 'address_detail', 'source',
+    'order_taker', 'order_date', 'external_order_no', 'handover_note',
+    'survey_report', 'survey_date',
     'team_leader', 'crew_member_user_ids', 'crew_status', 'briefing_date', 'condition_note',
     'material_out_status', 'material_out_note', 'material_return_status', 'material_return_note',
     'start_date', 'expected_end_date', 'construction_note',
@@ -800,6 +915,69 @@ onMounted(() => {
 .phase-step.current .step-dot { box-shadow: 0 0 0 4px rgba(79,109,245,0.25); }
 .step-label { font-size: 13px; color: var(--text-tertiary); }
 .phase-step.active .step-label { color: var(--color-primary); font-weight: 500; }
+.workorder-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.summary-card {
+  border: 1px solid var(--border-light);
+}
+.summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 700;
+}
+.handover-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.summary-item,
+.execution-list > div {
+  min-width: 0;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 86%, var(--bg-page));
+}
+.summary-item.wide {
+  grid-column: span 2;
+}
+.summary-item span,
+.execution-list span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.summary-item strong,
+.execution-list strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.missing-line {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #f59e0b 12%, var(--bg-card));
+  color: #b45309;
+  font-size: 13px;
+}
+.missing-line.danger {
+  background: color-mix(in srgb, #ef4444 12%, var(--bg-card));
+  color: #b91c1c;
+}
+.execution-list {
+  display: grid;
+  gap: 10px;
+}
 .work-card {
   margin-bottom: 20px;
   border: 1px solid color-mix(in srgb, var(--color-primary) 28%, var(--border-light));
@@ -835,6 +1013,17 @@ onMounted(() => {
   gap: 10px;
   align-items: center;
   padding-top: 6px;
+}
+.task-blocker {
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #ef4444 10%, var(--bg-card));
+  color: #b91c1c;
+  font-size: 13px;
+}
+.task-blocker strong {
+  margin-right: 4px;
 }
 .option-status {
   float: right;
@@ -935,6 +1124,15 @@ onMounted(() => {
   width: 100%;
 }
 @media (max-width: 720px) {
+  .workorder-summary {
+    grid-template-columns: 1fr;
+  }
+  .handover-grid {
+    grid-template-columns: 1fr;
+  }
+  .summary-item.wide {
+    grid-column: auto;
+  }
   .address-fields {
     grid-template-columns: 1fr;
   }

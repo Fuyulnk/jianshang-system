@@ -55,7 +55,7 @@ const roles = ref([])
 const moduleLabels = {
   dashboard: '控制台', accounts: '账户管理', transactions: '交易流水',
   products: '产品库存', employees: '员工管理', users: '用户管理', roles: '角色权限',
-  projects: '工程订单', chat: '聊天'
+  projects: '项目工单', chat: '聊天', finance: '财务总览'
 }
 
 const permTypes = [

@@ -25,7 +25,7 @@
 
           <el-menu-item index="/main/projects" v-if="hasPerm('projects')">
             <el-icon><List /></el-icon>
-            <span>工程订单</span>
+            <span>项目工单</span>
           </el-menu-item>
 
           <el-menu-item index="/main/files" v-if="hasFileCenterAccess">
