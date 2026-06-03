@@ -30,6 +30,13 @@
       </el-table>
     </el-card>
 
+    <MaterialRequestPanel
+      v-if="canHandleMaterialRequests"
+      mode="warehouse"
+      title="待处理出库申请"
+      @updated="fetchList"
+    />
+
     <el-dialog v-model="showAdd" title="新增产品" width="400px">
       <el-form :model="addForm" label-width="80px">
         <el-form-item label="产品名称">
@@ -85,6 +92,7 @@
 <script setup>
 import { computed, ref, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import MaterialRequestPanel from '../../components/material/MaterialRequestPanel.vue'
 
 const list = ref([])
 const loading = ref(false)
@@ -93,6 +101,14 @@ const saving = ref(false)
 const addForm = ref({ name: '', category: '', unit: 'kg', stock: 0, min_stock: 0 })
 const presetCategories = ['诺瓦艺术漆', '本杰明艺术漆', '艺术漆辅料', '基层材料', '工具耗材', '施工工具', '劳保用品', '设备配件', '其他']
 const presetUnits = ['kg', 'g', 'ml', 'L', '桶', '罐', '支', '把', '套', '份', '个', '颗', '箱', '卷', '米', '平方']
+
+const userRole = computed(() => {
+  try {
+    const t = localStorage.getItem('token')
+    return JSON.parse(atob(t.split('.')[1])).role || ''
+  } catch { return '' }
+})
+const canHandleMaterialRequests = computed(() => ['super_admin', 'admin', 'warehouse'].includes(userRole.value))
 
 const productMemory = computed(() => {
   const map = new Map()

@@ -21,6 +21,20 @@
       </div>
     </el-card>
 
+    <SurveyReportGenerator v-if="showEngineeringTools" />
+
+    <el-card v-if="showEngineeringTools" class="sop-card" shadow="never">
+      <template #header>
+        <span>现场勘察 SOP</span>
+      </template>
+      <div class="sop-grid">
+        <div v-for="item in surveySop" :key="item.title" class="sop-item">
+          <strong>{{ item.title }}</strong>
+          <span>{{ item.desc }}</span>
+        </div>
+      </div>
+    </el-card>
+
     <!-- 待办分组 -->
     <div class="task-section" v-for="g in groups" :key="g.key">
       <div class="section-head">
@@ -65,17 +79,25 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { List, ChatDotSquare } from '@element-plus/icons-vue'
 import UserAvatar from '../components/UserAvatar.vue'
+import SurveyReportGenerator from '../components/projects/SurveyReportGenerator.vue'
 
 const router = useRouter()
 const user = ref({})
 const employeeCode = ref('')
 const groups = ref([])
 const hasChat = ref(true)
+const showEngineeringTools = computed(() => ['engineering', 'employee', 'admin', 'super_admin'].includes(user.value.role))
+const surveySop = [
+  { title: '1. 先拍全局', desc: '入户、客餐厅、卧室、阳台、卫生间先拍完整环境，确认作业面和保护。' },
+  { title: '2. 再拍问题', desc: '墙面沙眼、点补未打磨、乳胶漆滴流、磕碰污染、柜体门窗和踢脚线未完成要单独拍。' },
+  { title: '3. 标注整改', desc: '每张问题图写清区域、问题、责任方和进场前必须处理的条件。' },
+  { title: '4. 判断进场', desc: '按可进场、有条件进场、暂不建议进场三档输出，不要只把照片丢给总监判断。' }
+]
 
 function token() { return localStorage.getItem('token') }
 
@@ -258,6 +280,40 @@ onMounted(fetchDashboard)
   flex-shrink: 0;
 }
 
+.sop-card {
+  margin-bottom: 24px;
+  border-radius: var(--radius-md) !important;
+  border: 1px solid var(--border-light) !important;
+}
+
+.sop-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.sop-item {
+  min-width: 0;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--bg-page));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--border-light));
+}
+
+.sop-item strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.sop-item span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .quick-card {
   border-radius: var(--radius-md) !important;
   border: 1px solid var(--border-light) !important;
@@ -285,5 +341,17 @@ onMounted(fetchDashboard)
   border-color: var(--color-primary);
   color: var(--color-primary);
   background: rgba(79,109,245,0.04);
+}
+
+@media (max-width: 900px) {
+  .sop-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .sop-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -98,6 +98,8 @@
         </el-card>
       </div>
 
+      <ProjectDocumentSummary :project="project" />
+
       <!-- 当前阶段工作单 -->
       <el-card class="work-card" shadow="never">
         <template #header>
@@ -260,6 +262,13 @@
         </div>
       </el-card>
 
+      <MaterialRequestPanel
+        :project-id="project.id"
+        mode="project"
+        title="材料出库联动"
+        @updated="fetchDetail"
+      />
+
       <AttachmentPanel
         class="project-attachments"
         entity-type="project"
@@ -269,11 +278,11 @@
 
       <!-- 阶段详情 -->
       <div class="phase-panels">
-        <!-- 阶段1: 项目前期 -->
+        <!-- 阶段1: 门店交接/工勘 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Document /></el-icon> 门店交接</span>
+              <span><el-icon><Document /></el-icon> 门店交接 / 工勘</span>
               <el-tag size="small" :type="project.phase >= 1 ? 'success' : 'info'">{{ project.phase >= 1 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -289,11 +298,11 @@
           </el-descriptions>
         </el-card>
 
-        <!-- 阶段2: 准备阶段 -->
+        <!-- 阶段2: 复尺交底/排班 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Tools /></el-icon> 准备阶段</span>
+              <span><el-icon><Tools /></el-icon> 复尺交底 / 排班</span>
               <el-tag size="small" :type="project.phase >= 2 ? 'success' : 'info'">{{ project.phase >= 2 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -310,11 +319,11 @@
           </el-descriptions>
         </el-card>
 
-        <!-- 阶段3: 施工过程 -->
+        <!-- 阶段3: 出库进场/施工 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><House /></el-icon> 施工过程</span>
+              <span><el-icon><House /></el-icon> 出库进场 / 施工</span>
               <el-tag size="small" :type="project.phase >= 3 ? 'success' : 'info'">{{ project.phase >= 3 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -327,11 +336,11 @@
           </el-descriptions>
         </el-card>
 
-        <!-- 阶段4: 完工验收 -->
+        <!-- 阶段4: 验收回库/结算 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Select /></el-icon> 完工验收</span>
+              <span><el-icon><Select /></el-icon> 验收回库 / 结算</span>
               <el-tag size="small" :type="project.phase >= 4 ? 'success' : 'info'">{{ project.phase >= 4 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -516,6 +525,8 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Document, Tools, House, Select, Edit, Service } from '@element-plus/icons-vue'
 import AttachmentPanel from '../../components/AttachmentPanel.vue'
+import MaterialRequestPanel from '../../components/material/MaterialRequestPanel.vue'
+import ProjectDocumentSummary from '../../components/projects/ProjectDocumentSummary.vue'
 import {
   addressCascaderProps,
   buildAddressPayload,
@@ -534,11 +545,11 @@ const editForm = ref({})
 const assignees = ref([])
 
 const phases = [
-  { phase: 1, label: '接收工单' },
-  { phase: 2, label: '施工准备' },
-  { phase: 3, label: '施工执行' },
-  { phase: 4, label: '交付结算' },
-  { phase: 5, label: '完结归档' },
+  { phase: 1, label: '门店交接/工勘' },
+  { phase: 2, label: '复尺交底/排班' },
+  { phase: 3, label: '出库进场/施工' },
+  { phase: 4, label: '验收回库/结算' },
+  { phase: 5, label: '完工归档' },
 ]
 
 // 当前用户角色
@@ -597,20 +608,20 @@ const TASK_FALLBACK = {
 const TASKS = {
   info_confirmed: {
     title: '核对门店资料并完成工勘',
-    desc: '先补齐来源、接单人、业主电话和地址，再填写工勘记录或工勘日期。',
+    desc: '先补齐来源、接单人、业主电话和地址，再填写工勘记录，或从工程部工作台关联勘察表。',
     action: '资料齐全，标记工勘完成',
     next: 'survey_done',
     roles: ['super_admin', 'admin', 'engineering']
   },
   survey_done: {
-    title: '确认开工条件',
-    desc: '记录现场保护、水电、基层和进场条件，确认后进入施工准备。',
+    title: '确认开工条件/复尺',
+    desc: '记录现场保护、水电、基层、复尺结果和进场条件，确认后进入排班交底。',
     action: '确认条件，进入排班',
     next: 'condition_met',
     roles: ['super_admin', 'admin', 'finance']
   },
   condition_met: {
-    title: '安排施工组',
+    title: '安排施工组与班组长',
     desc: '安排班组长、施工负责人和施工成员，系统会提示人员是否已被其他工单占用。',
     action: '保存班组，进入交底',
     next: 'team_assigned',
@@ -618,14 +629,14 @@ const TASKS = {
   },
   team_assigned: {
     title: '完成开工交底',
-    desc: '填写交底日期，确认班组已知道施工范围、工艺和现场注意事项。',
+    desc: '填写交底日期，确认班组已知道施工范围、材料、工艺、保护和现场注意事项。',
     action: '交底完成，转仓库出库',
     next: 'briefing_done',
     roles: ['super_admin', 'admin', 'engineering']
   },
   briefing_done: {
     title: '仓库确认材料出库',
-    desc: '当前先记录材料出库状态，下一步会独立做出库单联动库存。',
+    desc: '按项目工单发起出库，仓库确认后联动库存并进入待进场。',
     action: '确认出库，等待进场',
     next: 'material_out',
     roles: ['super_admin', 'admin', 'warehouse']
@@ -655,7 +666,7 @@ const TASKS = {
   },
   completed: {
     title: '确认材料回库',
-    desc: '当前先记录材料回库状态，后续会联动仓库回库单和项目成本。',
+    desc: '记录余料、损耗和回库状态，后续会联动仓库回库单和项目成本。',
     action: '确认回库，转财务结算',
     next: 'material_returned',
     roles: ['super_admin', 'admin', 'warehouse']

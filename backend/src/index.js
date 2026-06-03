@@ -22,6 +22,7 @@ import roleRoutes from './routes/roles.js'
 import chatRoutes from './routes/chat.js'
 import projectRoutes from './routes/projects.js'
 import projectImportRoutes from './routes/project-imports.js'
+import materialRequestRoutes from './routes/material-requests.js'
 import settingsRoutes from './routes/settings.js'
 import financeRoutes from './routes/finance.js'
 import employeeDashboardRoutes from './routes/employee-dashboard.js'
@@ -266,6 +267,7 @@ roleRoutes(server, db)
 chatRoutes(server, db, realtime)
 projectRoutes(server, db)
 projectImportRoutes(server, db)
+materialRequestRoutes(server, db)
 settingsRoutes(server, db)
 financeRoutes(server, db)
 employeeDashboardRoutes(server, db)
@@ -578,6 +580,31 @@ function ensureCoreTables(db) {
       updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
     );
 
+    CREATE TABLE IF NOT EXISTS material_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      status TEXT DEFAULT 'requested',
+      note TEXT DEFAULT '',
+      requested_by INTEGER DEFAULT 0,
+      confirmed_by INTEGER DEFAULT 0,
+      confirmed_at TEXT DEFAULT '',
+      confirm_note TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS material_request_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      product_name TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      unit TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      note TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS employees (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       employee_code TEXT UNIQUE,
@@ -717,6 +744,9 @@ function ensureCoreTables(db) {
   try { db.exec("ALTER TABLE role_permissions ADD COLUMN data_scope TEXT DEFAULT 'all'") } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id, deleted_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_uploaded_by ON attachments(uploaded_by, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_requests_project ON material_requests(project_id, status, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_requests_status ON material_requests(status, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_request_items_request ON material_request_items(request_id)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_private_workspaces_owner ON private_workspaces(owner_user_id, archived_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_resource_access_grants_resource ON resource_access_grants(resource_type, resource_id, user_id, revoked_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_access_audit_user_time ON access_audit_logs(user_id, created_at)') } catch {}

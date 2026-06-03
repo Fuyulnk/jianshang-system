@@ -66,6 +66,95 @@
 
 ## 交接记录
 
+### 2026-06-03 Codex V1 阶段测试 + Hermes P1 修复 + 勘察表关联工单
+
+- 任务：按用户要求做 V1 阶段性完整测试，并修复 Hermes 终审提出的 3 个 P1；同时把工程部勘察表生成器从“单独导出”补成“可选择项目工单并确认关联”的闭环。
+- 已完成：
+  - `backend/src/routes/material-requests.js`：
+    - 出库申请列表查询补齐 `projects.created_by / manager_user_id / assignee_user_id / crew_member_user_ids`，修复 `project_related` 角色看不到自己项目出库申请的问题。
+    - 出库确认改成事务内条件扣减：`UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?`，库存不足时整笔事务回滚，避免并发确认导致负库存。
+    - 取消出库申请后检查同项目是否还有其他待确认申请；没有则把 `projects.material_out_status` 回退为 `pending`。
+  - `frontend-new/src/components/projects/SurveyReportGenerator.vue`：
+    - 新增“关联项目工单”区域，可加载当前用户可见项目并选择目标工单。
+    - 点击“确认关联”后，把生成的勘察 HTML 上传到项目附件，并回写 `survey_date / survey_report / condition_note`，让项目详情单据链可识别。
+  - `backend/src/routes/projects.js`、`frontend-new/src/views/projects/ProjectDetail.vue`：
+    - 项目阶段文案对齐总监表格线：门店交接/工勘、复尺交底/排班、出库进场/施工、验收回库/结算、完工归档。
+    - 当前工作单说明改为提示可从工程部工作台关联勘察表。
+- 验证：
+  - `node --check backend/src/routes/material-requests.js`
+  - `node --check backend/src/routes/projects.js`
+  - `git diff --check`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite 大 chunk 警告）
+  - 使用隔离临时库 `HOME=/private/tmp/jianshang-v1-test PORT=3065 npm start` 实测：
+    - P1-1：`employee` 角色能看到自己关联项目的出库申请。
+    - P1-2：库存不足的确认出库会被拒绝，库存保持不变。
+    - P1-3：取消最后一个待确认出库申请后，项目 `material_out_status` 回退到 `pending`。
+- 视觉/交互审查记录：
+  - 本地 Vite 已启动并打开登录页，登录页视觉正常。
+  - 本轮 Browser 插件和 Chrome/Safari 的脚本登录均被本机安全/剪贴板限制拦截，未能稳定进入登录后的页面做人眼全流程截图；已通过构建、源码结构、接口自测覆盖功能正确性。
+  - 后续如果要做真正全页面视觉体检，建议用户手动登录本地系统后让 Codex 接管已登录窗口，或开启 Chrome “允许 Apple 事件中的 JavaScript”。
+- 注意事项：
+  - 本次没有上传服务器。
+  - 出库申请的“限制项目阶段”仍是 P2，建议后续补：只有交底完成/待出库附近状态允许发起出库，避免员工在错误阶段申请材料。
+  - 多处前端 `catch {}` 静默吞错仍是 P2，后续应逐页改成可见提示或最少 `console.warn`。
+
+### 2026-06-03 Codex 工程部现场勘察表生成器 V1 + 单据链汇总
+
+- 任务：根据总监真实工作树里的标准完工单据链，先把长期高频的“现场勘察 PPT”沉淀为工程部工作台工具，并在工单详情里显示单据链汇总。
+- 已完成：
+  - 新增 `handoff/门店交接到施工承接流程V1.md`：业务主线 SOP，明确门店/渠道交接到简尚施工承接、出库、班组、成本、财务归档的完整流程基准。
+  - 新增 `frontend-new/src/components/projects/SurveyReportGenerator.vue`：现场勘察表生成器，支持填写项目/客户/勘察人/天气/进场判断，上传现场图片并人工标注区域、问题、说明。
+  - 勘察表生成器支持“生成汇总”、打印/PDF、导出 HTML，草稿保存到本机 `localStorage`。
+  - `frontend-new/src/views/EmployeeDashboard.vue` 接入生成器，并新增“现场勘察 SOP”卡片：先拍全局、再拍问题、标注整改、判断进场。
+  - 新增 `frontend-new/src/components/projects/ProjectDocumentSummary.vue`：项目单据链汇总，按现场勘察、二次勘察/复尺、施工交底、材料出库/回库、班组工费结算、完工成本核算、财务结算识别附件和系统字段。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` 接入单据链汇总。
+- 验证：
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite 大 chunk 警告）。
+  - 本地 Vite 预览打开 `/main/employee-dashboard`，确认“现场勘察表生成器”和“现场勘察 SOP”可见，暗色主题下表单和上传区可读。
+- 注意事项：
+  - 本次没有上传服务器。
+  - V1 不做 AI 识图、不做真正 PPTX 导出、不自动挂项目附件；先固定模板和 SOP。后续 V2 可接 AI 图片识别、PPTX 生成、自动归档到项目附件。
+  - 工单详情“单据链汇总”需要项目附件已经上传到系统后才能识别真实文件名；工作树批量导入前，它更多是流程检查卡。
+  - 本地工单详情视觉因后端接口连接不稳定未完整截图复核，已由构建保证组件语法通过。
+
+### 2026-06-03 Codex 项目工单出库联动 V1
+
+- 任务：按用户确认，先不等真实工单样本，做项目工单到仓库出库的联动骨架，让模块不再孤立。
+- 已完成：
+  - 后端新增 `material_requests` / `material_request_items` 表，记录项目工单出库申请、材料明细、申请人、确认人、确认时间和状态。
+  - 后端新增 `/api/material-requests`、`POST /api/projects/:id/material-requests`、`PUT /api/material-requests/:id/confirm`、`PUT /api/material-requests/:id/cancel`。
+  - 工程/管理员可在项目工单详情发起出库申请；仓库/管理员确认后会扣减 `products.stock`，并把工单 `material_out_status` 改为 `done`。
+  - 如果工单当前处于 `briefing_done`（待出库），仓库确认出库后会自动推进到 `material_out`（待进场）。
+  - 前端新增 `MaterialRequestPanel` 组件；项目详情显示“材料出库联动”，产品库存页显示“待处理出库申请”。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/material-requests.js`
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/routes/products.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 使用临时空库 `HOME=/private/tmp/jianshang-material-test-home PORT=3061 npm start` 实测：
+    - 未登录访问出库申请返回 401。
+    - 超级管理员登录成功。
+    - 创建产品库存 10、创建项目工单，并将测试工单置为 `briefing_done`。
+    - 发起出库申请 3kg 成功。
+    - 仓库确认出库成功，产品库存变为 7，项目状态变为 `material_out`，`material_out_status = done`。
+  - 临时测试后端已停止，3061 端口未占用。
+  - 本地后端 3001 已重启，`/health` 正常；`/api/material-requests` 未登录返回 401。知识库 18790 已有服务占用，后端尝试重复拉起知识库失败，不影响本轮出库联动。
+- 注意事项：
+  - 本次没有上传服务器。
+  - V1 只做出库申请和扣库存，不做复杂成本、回库单、库存流水、财务自动记账。
+  - 等用户拿到真实工单和材料结构后，再扩展材料清单模板、回库/损耗、成本归集。
+
+### 2026-06-03 Claude AI 导入助手 + 项目工单流程 上线
+
+- 任务：Codex 完成 AI 工单导入助手 V1 + 项目工单流程校准，Claude 部署上线。
+- 已完成：
+  - 前端构建 → rsync → npm install → PM2 重启。
+  - 部署前备份：`/root/jianshang-system-backup-20260603-114000.tgz`。
+  - 验证：`/health` 正常，`pm2 list` online。
+  - 本地固化：`git commit + git push`。
+- 注意事项：无。
+
 ### 2026-06-03 Codex 简尚 AI 工单导入助手 V1
 
 - 任务：按用户计划新增“AI 工单导入助手”，让员工粘贴微信/门店交接内容或上传 CSV/XLS/XLSX，由 AI/解析器拆成项目工单草稿，人工确认后批量创建项目工单。
