@@ -1,7 +1,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, WarningFilled } from '@element-plus/icons-vue'
+import { UploadFilled, WarningFilled, Plus } from '@element-plus/icons-vue'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false }
@@ -9,6 +10,7 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'created'])
 
+const router = useRouter()
 const visible = computed({
   get: () => props.modelValue,
   set: value => emit('update:modelValue', value)
@@ -19,31 +21,87 @@ const pickedFile = ref(null)
 const fileInput = ref(null)
 const parsing = ref(false)
 const confirming = ref(false)
-const batchId = ref(0)
-const items = ref([])
-const selectedIds = ref([])
+const parsedData = ref(null)
+const duplicateMatches = ref([])
+const warnings = ref([])
+const form = ref(emptyBriefingForm())
 
-const canConfirm = computed(() => selectedIds.value.length > 0 && !confirming.value)
-const selectedItems = computed(() => items.value.filter(item => selectedIds.value.includes(item.id) && item.status !== 'created'))
+const hasParsed = computed(() => !!parsedData.value)
+const canConfirm = computed(() => {
+  const basic = form.value.basic
+  return !!basic.customer && !confirming.value
+})
+const missingFields = computed(() => {
+  const missing = []
+  const basic = form.value.basic
+  if (!basic.source) missing.push('来源门店/渠道')
+  if (!basic.order_taker) missing.push('门店接单人')
+  if (!basic.customer) missing.push('客户姓名')
+  if (!basic.phone) missing.push('业主电话')
+  if (!basic.address_detail) missing.push('详细地址')
+  if (!form.value.items.length) missing.push('施工项目明细')
+  return missing
+})
+const itemCount = computed(() => form.value.items.length)
 
 watch(visible, value => {
-  if (value && !items.value.length) resetInputOnly()
+  if (value) resetAll()
 })
 
 function token() {
   return localStorage.getItem('token')
 }
 
-function resetAll() {
-  resetInputOnly()
-  batchId.value = 0
-  items.value = []
-  selectedIds.value = []
+function emptyBriefingForm() {
+  return {
+    basic: {
+      source: '',
+      order_taker: '',
+      order_date: '',
+      customer: '',
+      phone: '',
+      address_province: '',
+      address_city: '',
+      address_detail: '',
+      external_order_no: '',
+      handover_note: ''
+    },
+    construction: {
+      expected_start_date: '',
+      expected_duration: '',
+      entry_method: '',
+      total_area: 0,
+      remeasure: '',
+      plate_needed: '',
+      team_leader: '',
+      briefing_date: '',
+      total_amount: 0
+    },
+    site: {
+      base_condition: '',
+      high_work: '',
+      scaffold: '',
+      second_transfer: '',
+      entry_condition: '',
+      site_status: ''
+    },
+    items: [],
+    signatures: {
+      briefer: '',
+      confirmer: '',
+      confirmed_at: '',
+      source_file: ''
+    }
+  }
 }
 
-function resetInputOnly() {
+function resetAll() {
   rawText.value = ''
   pickedFile.value = null
+  parsedData.value = null
+  duplicateMatches.value = []
+  warnings.value = []
+  form.value = emptyBriefingForm()
   if (fileInput.value) fileInput.value.value = ''
 }
 
@@ -55,7 +113,7 @@ function onFileChange(event) {
   const file = event.target.files?.[0]
   if (!file) return
   if (!/\.(csv|xls|xlsx)$/i.test(file.name)) {
-    ElMessage.warning('V1 只支持 CSV / XLS / XLSX')
+    ElMessage.warning('施工交底单暂只支持 CSV / XLS / XLSX')
     event.target.value = ''
     return
   }
@@ -65,11 +123,12 @@ function onFileChange(event) {
     return
   }
   pickedFile.value = file
+  rawText.value = ''
 }
 
-async function parseImport() {
-  if (!rawText.value.trim() && !pickedFile.value) {
-    ElMessage.warning('请粘贴交接内容或选择表格')
+async function parseBriefing() {
+  if (!pickedFile.value && !rawText.value.trim()) {
+    ElMessage.warning('请上传施工交底单或粘贴交底内容')
     return
   }
   parsing.value = true
@@ -77,59 +136,53 @@ async function parseImport() {
     const body = pickedFile.value
       ? {
           file_name: pickedFile.value.name,
-          mime_type: pickedFile.value.type,
           file_data: await readAsDataUrl(pickedFile.value)
         }
       : { text: rawText.value }
-    const res = await fetch('/api/project-imports/parse', {
+    const res = await fetch('/api/briefing-imports/parse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
       body: JSON.stringify(body)
     })
     const json = await readJson(res)
-    if (!res.ok || !json.success) throw new Error(json.message || 'AI 解析失败')
-    batchId.value = json.data.id
-    items.value = (json.data.items || []).map(normalizeItem)
-    selectedIds.value = items.value.filter(item => item.status !== 'created').map(item => item.id)
-    ElMessage.success(`已识别 ${items.value.length} 条工单草稿`)
+    if (!res.ok || !json.success) throw new Error(json.message || '施工交底单解析失败')
+    parsedData.value = json.data
+    form.value = normalizeBriefingForm(json.data.form_data)
+    duplicateMatches.value = json.data.duplicate_matches || []
+    warnings.value = json.data.warnings || []
+    ElMessage.success('施工交底单已解析，请核对后创建工单')
   } catch (err) {
-    ElMessage.error(err.message || 'AI 解析失败')
+    ElMessage.error(err.message || '施工交底单解析失败')
   } finally {
     parsing.value = false
   }
 }
 
-async function confirmSelected() {
-  const rows = selectedItems.value
-  if (!batchId.value || !rows.length) return
+async function confirmCreate() {
+  if (!canConfirm.value) return
   confirming.value = true
   try {
-    const res = await fetch(`/api/project-imports/${batchId.value}/confirm`, {
+    const res = await fetch('/api/briefing-imports/confirm-create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
       body: JSON.stringify({
-        items: rows.map(item => ({ id: item.id, draft: item.draft }))
+        parsed_data: parsedData.value || {},
+        confirmed_data: form.value,
+        warnings: warnings.value,
+        file: pickedFile.value ? {
+          name: pickedFile.value.name,
+          mime_type: pickedFile.value.type,
+          size: pickedFile.value.size,
+          data: await readAsDataUrl(pickedFile.value)
+        } : null
       })
     })
     const json = await readJson(res)
     if (!res.ok || !json.success) throw new Error(json.message || '创建失败')
-    const resultMap = new Map((json.data.results || []).map(result => [result.id, result]))
-    items.value = items.value.map(item => {
-      const result = resultMap.get(item.id)
-      if (!result) return item
-      if (!result.success) return { ...item, status: 'error', error_message: result.message || '创建失败' }
-      return {
-        ...item,
-        status: 'created',
-        project_id: result.project_id,
-        missing_fields: result.missing_fields || item.missing_fields,
-        duplicate_matches: result.duplicate_matches || item.duplicate_matches
-      }
-    })
-    selectedIds.value = selectedIds.value.filter(id => !resultMap.get(id)?.success)
-    const okCount = (json.data.results || []).filter(item => item.success).length
-    ElMessage.success(`已创建 ${okCount} 条项目工单`)
+    ElMessage.success('已由施工交底单创建项目工单')
     emit('created')
+    visible.value = false
+    if (json.data?.project_id) router.push(`/main/projects/${json.data.project_id}`)
   } catch (err) {
     ElMessage.error(err.message || '创建失败')
   } finally {
@@ -137,39 +190,47 @@ async function confirmSelected() {
   }
 }
 
-function normalizeItem(item) {
+function addItem() {
+  form.value.items.push({
+    space_name: '',
+    texture_name: '',
+    process: '',
+    color_no: '',
+    planned_area: 0,
+    actual_area: 0,
+    unit_price: 0,
+    subtotal: 0,
+    remark: ''
+  })
+}
+
+function removeItem(index) {
+  form.value.items.splice(index, 1)
+}
+
+function normalizeBriefingForm(input = {}) {
+  const base = emptyBriefingForm()
   return {
-    ...item,
-    draft: { ...(item.confirmed_draft || item.ai_draft || {}) },
-    missing_fields: item.missing_fields || [],
-    duplicate_matches: item.duplicate_matches || []
+    basic: { ...base.basic, ...(input.basic || {}) },
+    construction: { ...base.construction, ...(input.construction || {}) },
+    site: { ...base.site, ...(input.site || {}) },
+    items: Array.isArray(input.items) ? input.items.map(item => ({ ...addableItem(), ...item })) : [],
+    signatures: { ...base.signatures, ...(input.signatures || {}) }
   }
 }
 
-function toggleSelected(id, checked) {
-  if (checked && !selectedIds.value.includes(id)) selectedIds.value.push(id)
-  if (!checked) selectedIds.value = selectedIds.value.filter(item => item !== id)
-}
-
-function removeItem(id) {
-  items.value = items.value.filter(item => item.id !== id)
-  selectedIds.value = selectedIds.value.filter(item => item !== id)
-}
-
-function statusLabel(item) {
-  if (item.status === 'created') return '已创建'
-  if (item.status === 'error') return '失败'
-  if (item.duplicate_matches?.length) return '可能重复'
-  if (item.missing_fields?.length) return '缺核心'
-  return '可创建'
-}
-
-function statusType(item) {
-  if (item.status === 'created') return 'success'
-  if (item.status === 'error') return 'danger'
-  if (item.duplicate_matches?.length) return 'warning'
-  if (item.missing_fields?.length) return 'danger'
-  return 'success'
+function addableItem() {
+  return {
+    space_name: '',
+    texture_name: '',
+    process: '',
+    color_no: '',
+    planned_area: 0,
+    actual_area: 0,
+    unit_price: 0,
+    subtotal: 0,
+    remark: ''
+  }
 }
 
 function readAsDataUrl(file) {
@@ -192,215 +253,293 @@ async function readJson(res) {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="AI 导入项目工单" width="1180px" class="project-import-dialog" @closed="resetAll">
-    <div class="import-layout">
-      <section class="import-source">
-        <div class="section-title">原始交接内容</div>
-        <el-input
-          v-model="rawText"
-          type="textarea"
-          :rows="12"
-          resize="none"
-          placeholder="粘贴微信/电话/门店交接内容，AI 会自动拆成工单草稿"
-          :disabled="!!pickedFile"
-        />
+  <el-dialog v-model="visible" title="导入施工交底单" width="1180px" class="briefing-import-dialog" @closed="resetAll">
+    <div class="briefing-layout">
+      <section class="source-panel">
+        <div class="section-title">交底单来源</div>
         <div class="upload-box" @click="openPicker">
           <input ref="fileInput" class="hidden-input" type="file" accept=".csv,.xls,.xlsx" @change="onFileChange" />
           <el-icon :size="28"><UploadFilled /></el-icon>
           <div>
-            <strong>{{ pickedFile?.name || '选择 CSV / XLS / XLSX' }}</strong>
-            <span>上传表格后会优先解析表格，暂不支持图片 OCR</span>
+            <strong>{{ pickedFile?.name || '选择施工交底单表格' }}</strong>
+            <span>支持总监工作树里的 .xls / .xlsx / .csv，原始文件会保存为工单附件。</span>
           </div>
         </div>
+        <el-input
+          v-model="rawText"
+          class="text-source"
+          type="textarea"
+          :rows="8"
+          resize="none"
+          placeholder="没有表格时，可临时粘贴交底文字。正式使用建议上传施工交底单。"
+          :disabled="!!pickedFile"
+        />
         <div class="source-actions">
-          <el-button @click="resetInputOnly" :disabled="parsing">清空输入</el-button>
-          <el-button type="primary" :loading="parsing" @click="parseImport">AI 解析</el-button>
+          <el-button @click="resetAll" :disabled="parsing || confirming">清空</el-button>
+          <el-button type="primary" :loading="parsing" @click="parseBriefing">解析交底单</el-button>
+        </div>
+
+        <div class="summary-box">
+          <div><span>客户</span><strong>{{ form.basic.customer || '未识别' }}</strong></div>
+          <div><span>地址</span><strong>{{ form.basic.address_detail || '未识别' }}</strong></div>
+          <div><span>施工明细</span><strong>{{ itemCount }} 条</strong></div>
+          <div><span>缺失项</span><strong>{{ missingFields.length }} 项</strong></div>
+        </div>
+
+        <div v-if="duplicateMatches.length" class="warning-list">
+          <div>
+            <el-icon><WarningFilled /></el-icon>
+            <span>可能重复：{{ duplicateMatches.map(item => `${item.name || item.customer}#${item.id}`).join('、') }}</span>
+          </div>
+        </div>
+        <div v-if="warnings.length || missingFields.length" class="warning-list">
+          <div v-for="warning in [...warnings, ...missingFields.map(item => `缺核心资料：${item}`)]" :key="warning">
+            <el-icon><WarningFilled /></el-icon>
+            <span>{{ warning }}</span>
+          </div>
         </div>
       </section>
 
-      <section class="import-result">
+      <section class="form-panel">
         <div class="result-header">
           <div>
-            <div class="section-title">工单草稿</div>
-            <p>{{ items.length ? `已识别 ${items.length} 条，勾选后批量创建` : '解析后在这里确认字段' }}</p>
+            <div class="section-title">系统版施工交底单</div>
+            <p>{{ hasParsed ? '核对字段后创建项目工单；不会自动推进项目状态。' : '解析后会在这里生成可编辑交底单。' }}</p>
           </div>
-          <el-button type="primary" :disabled="!canConfirm" :loading="confirming" @click="confirmSelected">批量创建</el-button>
+          <el-button type="primary" :disabled="!canConfirm" :loading="confirming" @click="confirmCreate">确认创建工单</el-button>
         </div>
 
-        <div v-if="items.length" class="draft-list">
-          <article v-for="item in items" :key="item.id" class="draft-card" :class="{ created: item.status === 'created' }">
-            <header class="draft-head">
-              <el-checkbox
-                :model-value="selectedIds.includes(item.id)"
-                :disabled="item.status === 'created'"
-                @change="checked => toggleSelected(item.id, checked)"
-              />
-              <el-tag :type="statusType(item)" size="small">{{ statusLabel(item) }}</el-tag>
-              <strong>#{{ item.item_index }}</strong>
-              <el-button text type="danger" :disabled="item.status === 'created'" @click="removeItem(item.id)">移除</el-button>
-            </header>
+        <el-form label-position="top" class="briefing-form">
+          <div class="form-section">基础信息</div>
+          <el-row :gutter="12">
+            <el-col :span="6"><el-form-item label="来源门店/渠道"><el-input v-model="form.basic.source" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="门店接单人"><el-input v-model="form.basic.order_taker" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="接单日期"><el-input v-model="form.basic.order_date" placeholder="2026-01-01" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="门店单号/合同号"><el-input v-model="form.basic.external_order_no" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="客户姓名"><el-input v-model="form.basic.customer" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="客户电话"><el-input v-model="form.basic.phone" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="详细地址"><el-input v-model="form.basic.address_detail" /></el-form-item></el-col>
+            <el-col :span="24"><el-form-item label="交接备注"><el-input v-model="form.basic.handover_note" type="textarea" :rows="2" /></el-form-item></el-col>
+          </el-row>
 
-            <div v-if="item.duplicate_matches.length" class="warning-line">
-              <el-icon><WarningFilled /></el-icon>
-              可能重复：{{ item.duplicate_matches.map(match => `${match.name || match.customer}(${match.phone || match.external_order_no || match.id})`).join('、') }}
-            </div>
-            <div v-if="item.missing_fields.length" class="missing-line">
-              缺核心资料：{{ item.missing_fields.join('、') }}
-            </div>
-            <div v-if="item.error_message" class="missing-line">{{ item.error_message }}</div>
+          <div class="form-section">施工信息</div>
+          <el-row :gutter="12">
+            <el-col :span="6"><el-form-item label="预计开工"><el-input v-model="form.construction.expected_start_date" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="预计总工期"><el-input v-model="form.construction.expected_duration" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="施工总面积"><el-input v-model="form.construction.total_area" type="number" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="交底日期"><el-input v-model="form.construction.briefing_date" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="进入方式"><el-input v-model="form.construction.entry_method" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="是否复尺"><el-input v-model="form.construction.remeasure" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="车牌报备"><el-input v-model="form.construction.plate_needed" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="班组长"><el-input v-model="form.construction.team_leader" /></el-form-item></el-col>
+          </el-row>
 
-            <div class="draft-grid">
-              <el-input v-model="item.draft.name" placeholder="工单名称" />
-              <el-input v-model="item.draft.customer" placeholder="业主/客户" />
-              <el-input v-model="item.draft.phone" placeholder="电话" />
-              <el-input v-model="item.draft.source" placeholder="来源门店/渠道" />
-              <el-input v-model="item.draft.order_taker" placeholder="门店接单人" />
-              <el-input v-model="item.draft.order_date" placeholder="接单日期" />
-              <el-input v-model="item.draft.external_order_no" placeholder="门店单号/合同号" />
-              <el-input v-model="item.draft.address_province" placeholder="省" />
-              <el-input v-model="item.draft.address_city" placeholder="市" />
-              <el-input v-model="item.draft.address_detail" class="wide" placeholder="详细地址" />
-              <el-input v-model="item.draft.total_amount" placeholder="金额" type="number" />
-              <div class="switch-row">
-                <el-switch v-model="item.draft.needs_construction" active-text="施工" />
-                <el-switch v-model="item.draft.needs_stock" active-text="备货" />
-              </div>
-              <el-input v-model="item.draft.handover_note" class="wide" type="textarea" :rows="2" placeholder="交接备注" />
-              <el-input v-model="item.draft.stock_note" class="wide" placeholder="备货备注" />
+          <div class="form-section">现场情况</div>
+          <el-row :gutter="12">
+            <el-col :span="8"><el-form-item label="基层情况"><el-input v-model="form.site.base_condition" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="高空作业"><el-input v-model="form.site.high_work" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="脚手架"><el-input v-model="form.site.scaffold" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="二次搬运"><el-input v-model="form.site.second_transfer" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="进场条件"><el-input v-model="form.site.entry_condition" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="室内状况"><el-input v-model="form.site.site_status" /></el-form-item></el-col>
+          </el-row>
+
+          <div class="form-section with-action">
+            <span>施工项目明细</span>
+            <el-button size="small" :icon="Plus" @click="addItem">新增明细</el-button>
+          </div>
+          <div class="items-table">
+            <div class="item-row item-head">
+              <span>空间</span><span>纹理/产品</span><span>工艺</span><span>颜色</span><span>预收</span><span>复尺</span><span>备注</span><span></span>
             </div>
-          </article>
-        </div>
-        <el-empty v-else description="暂无草稿" :image-size="90" />
+            <div v-for="(item, index) in form.items" :key="index" class="item-row">
+              <el-input v-model="item.space_name" />
+              <el-input v-model="item.texture_name" />
+              <el-input v-model="item.process" />
+              <el-input v-model="item.color_no" />
+              <el-input v-model="item.planned_area" type="number" />
+              <el-input v-model="item.actual_area" type="number" />
+              <el-input v-model="item.remark" />
+              <el-button text type="danger" @click="removeItem(index)">删</el-button>
+            </div>
+            <el-empty v-if="!form.items.length" description="暂无施工明细，可手动新增" :image-size="70" />
+          </div>
+
+          <div class="form-section">签字/确认</div>
+          <el-row :gutter="12">
+            <el-col :span="8"><el-form-item label="交底人"><el-input v-model="form.signatures.briefer" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="确认人"><el-input v-model="form.signatures.confirmer" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="确认时间"><el-input v-model="form.signatures.confirmed_at" /></el-form-item></el-col>
+          </el-row>
+        </el-form>
       </section>
     </div>
   </el-dialog>
 </template>
 
 <style scoped>
-.import-layout {
+.briefing-layout {
   display: grid;
   grid-template-columns: 330px minmax(0, 1fr);
   gap: 18px;
-  min-height: 620px;
+  min-height: 640px;
 }
-.import-source,
-.import-result {
+
+.source-panel,
+.form-panel {
   min-width: 0;
 }
+
 .section-title {
   font-size: 16px;
   font-weight: 700;
   margin-bottom: 10px;
 }
+
 .upload-box {
-  margin-top: 12px;
   min-height: 86px;
   border: 1px dashed var(--border-color);
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px;
+  padding: 12px;
   cursor: pointer;
   color: var(--text-secondary);
   background: var(--bg-page);
 }
+
 .upload-box strong,
 .upload-box span {
   display: block;
 }
+
 .upload-box strong {
   color: var(--text-primary);
   margin-bottom: 4px;
 }
+
 .hidden-input {
   display: none;
 }
+
+.text-source {
+  margin-top: 12px;
+}
+
 .source-actions,
-.result-header {
+.result-header,
+.form-section.with-action {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
+
 .source-actions {
+  margin-top: 12px;
+}
+
+.summary-box {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
   margin-top: 14px;
 }
+
+.summary-box div {
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-page);
+}
+
+.summary-box span {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.summary-box strong {
+  color: var(--text-primary);
+}
+
+.warning-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  color: #b45309;
+  font-size: 13px;
+}
+
+.warning-list div {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #f59e0b 12%, var(--bg-card));
+}
+
 .result-header {
   margin-bottom: 12px;
 }
+
 .result-header p {
   margin: 0;
   color: var(--text-secondary);
   font-size: 13px;
 }
-.draft-list {
-  display: grid;
-  gap: 12px;
-  max-height: 570px;
-  overflow-y: auto;
+
+.briefing-form {
+  max-height: 585px;
+  overflow: auto;
   padding-right: 4px;
 }
-.draft-card {
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
-  padding: 12px;
-}
-.draft-card.created {
-  opacity: 0.72;
-}
-.draft-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.draft-head .el-button {
-  margin-left: auto;
-}
-.warning-line,
-.missing-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  margin-bottom: 8px;
-}
-.warning-line {
-  background: #fff7ed;
-  color: #b45309;
-}
-.missing-line {
-  background: #fef2f2;
-  color: #b91c1c;
-}
-.draft-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.draft-grid .wide {
-  grid-column: span 2;
-}
-.switch-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 32px;
+
+.form-section {
+  margin: 12px 0 10px;
+  color: var(--text-primary);
+  font-weight: 700;
 }
 
-@media (max-width: 900px) {
-  .import-layout {
+.items-table {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.item-row {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr 1fr 1fr 82px 82px 1.2fr 44px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+.item-row:first-child {
+  border-top: 0;
+}
+
+.item-head {
+  background: var(--bg-page);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 980px) {
+  .briefing-layout {
     grid-template-columns: 1fr;
   }
-  .draft-grid {
-    grid-template-columns: 1fr;
+
+  .briefing-form {
+    max-height: none;
   }
-  .draft-grid .wide {
-    grid-column: span 1;
+
+  .item-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

@@ -136,8 +136,23 @@ try {
       created_at DATETIME DEFAULT (datetime('now', 'localtime')),
       updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
     );
+    CREATE TABLE IF NOT EXISTS project_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      document_type TEXT NOT NULL DEFAULT 'briefing',
+      source_attachment_id INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'draft',
+      parsed_data TEXT DEFAULT '{}',
+      confirmed_data TEXT DEFAULT '{}',
+      warnings TEXT DEFAULT '[]',
+      created_by INTEGER DEFAULT 0,
+      updated_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
     CREATE INDEX IF NOT EXISTS idx_project_import_batches_created_by ON project_import_batches(created_by, created_at);
     CREATE INDEX IF NOT EXISTS idx_project_import_items_batch ON project_import_items(batch_id, status);
+    CREATE INDEX IF NOT EXISTS idx_project_documents_project_type ON project_documents(project_id, document_type, updated_at);
   `)
 } catch {}
 // 升级上来的老用户标记已完成（仅一次）

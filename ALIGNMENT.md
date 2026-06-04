@@ -75,6 +75,52 @@
 
 ## 对接记录
 
+### 2026-06-04 Codex 施工交底单 P1 修复 + 材料出库表预览骨架
+
+- 任务：用户希望多个流程一起推进；本轮先收敛施工交底单导入预览的初审 P1，再小步打开材料出库表字段映射预览，不做自动扣库存。
+- 修改文件：
+  - `backend/src/utils/projectDocumentImport.js` — 施工交底单 `briefing_date` 标记为推断字段；新增材料出库表解析，按材料/辅材/工具分段读取材料名、单位、出库数、回库数、单价、金额、备注。
+  - `backend/src/routes/project-imports.js` — 新增 `POST /api/projects/:id/document-imports/material-out/parse`；施工交底单写入改为工程/管理员类角色才可写；推断交底日期必须带 `confirmed_inferred_fields` 才允许写入；写 `address_detail` 时同步重算 `address`；项目日志补充文件名和风险提示。
+  - `frontend-new/src/components/projects/ProjectDocumentImportPanel.vue` — 导入面板改成多表预览，可切换施工交底单/材料出库表；施工交底单可勾选写入，材料出库表只预览不扣库存；推断字段默认不勾选。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` — 向导入面板传入写入权限，避免无权限员工看到可写入按钮。
+- 已完成：
+  - 修复 P1：`briefing_date` 不再默认勾选，后端未显式确认时返回 `400`，不会写库。
+  - 修复 P1：导入写入 `address_detail` 时同步更新 `address` 汇总字段，避免列表和详情地址不一致。
+  - 补 P2：前端有写入权限态；后端写入限制为 `super_admin/admin/engineering` 并继续校验项目可见范围。
+  - 补 P2 一部分：写入日志记录文件名、风险提示和实际变更字段；尚未保存原始文件为附件。
+  - 新增材料出库表预览：真实样本 `栖棠映山4栋1802材料出库表.xlsx` 可识别 30 条明细，类别为材料/辅材/工具。
+- 验证：
+  - `node --check backend/src/routes/project-imports.js`
+  - `node --check backend/src/utils/projectDocumentImport.js`
+  - 真实样本解析脚本：施工交底单返回推断字段 `briefing_date.inferred=true`；材料出库表返回 30 条明细。
+  - 本地接口验证：未确认推断交底日期写入返回 `400`，项目 2 数据未变化。
+  - 本地接口验证：材料出库表解析接口返回 `200`、30 条明细、只读预览。
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite 大 chunk 警告）
+  - Chrome 打开 `http://127.0.0.1:5173/main/projects/2` 顶部加载正常；本轮尝试滚动到中部面板时 Chrome 滚动容器未响应快捷键，未完成深度截图复核。
+- 给 Claude 初审：
+  - 重点看 `briefing_date` 推断确认链是否足够硬，是否还能通过 API 绕过。
+  - 重点看 `address_detail -> address` 同步是否和 `projects.js` 的地址逻辑一致。
+  - 重点看材料出库表解析金额是否应叫“明细金额合计”，不要误导成最终出库成本。
+- 给 Hermes 审计：
+  - 查新 `material-out/parse` 是否有鉴权、项目 data_scope、文件大小/异常表格风险。
+  - 查施工交底单 apply 是否存在员工越权写关键客户/地址字段。
+  - 查导入面板无权限态是否只影响前端显示，后端是否仍硬拒绝。
+- 注意事项：
+  - 本轮未上传服务器。
+  - 材料出库表只做预览，不创建出库申请、不扣库存、不推进项目状态。
+  - 原始导入文件仍未自动保存为项目附件；后续要和文件中心打通，才能满足“上传新版本看到时间和上传人”的路线图验收。
+
+### 2026-06-04 Claude 施工交底单导入预览 上线
+
+- 任务：Codex 完成总监表格字段映射 V2 第二阶段（施工交底单导入预览），Claude 部署上线。
+- 已完成：
+  - 前端构建 -> rsync -> PM2 重启。
+  - 部署前备份完成。
+  - 验证：/health 正常，pm2 list online。
+  - 本地固化：git commit + git push。
+- 注意事项：无。
+
+
 ### 2026-06-04 Codex 总监表格字段映射 V2 第二阶段起步：施工交底单导入预览
 
 - 任务：按路线图 4.2 继续推进“真实表格字段映射 + 人工确认导入”，先选总监工作树里最关键的 `施工交底单` 做第一张真实表，不直接做全自动核算。

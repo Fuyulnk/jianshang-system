@@ -1,36 +1,124 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, WarningFilled } from '@element-plus/icons-vue'
+import { UploadFilled, WarningFilled, Plus } from '@element-plus/icons-vue'
 
 const props = defineProps({
-  project: { type: Object, required: true }
+  project: { type: Object, required: true },
+  canApply: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['applied'])
 
+const collapsed = ref(false)
+const loading = ref(false)
+const parsing = ref(false)
+const saving = ref(false)
 const fileInput = ref(null)
 const pickedFile = ref(null)
-const parsing = ref(false)
-const applying = ref(false)
-const result = ref(null)
-const fieldValues = ref({})
-const selectedFields = ref([])
+const document = ref(null)
+const parsedData = ref(null)
+const warnings = ref([])
+const form = ref(emptyBriefingForm())
 
-const hasResult = computed(() => !!result.value)
-const fieldRows = computed(() => result.value?.fields || [])
-const selectedPayload = computed(() => {
-  const payload = {}
-  for (const key of selectedFields.value) {
-    const value = String(fieldValues.value[key] ?? '').trim()
-    if (value) payload[key] = value
-  }
-  return payload
+const hasDocument = computed(() => !!document.value)
+const missingFields = computed(() => {
+  const missing = []
+  const basic = form.value.basic
+  if (!basic.source) missing.push('来源门店/渠道')
+  if (!basic.order_taker) missing.push('门店接单人')
+  if (!basic.customer) missing.push('客户姓名')
+  if (!basic.phone) missing.push('业主电话')
+  if (!basic.address_detail) missing.push('详细地址')
+  if (!form.value.items.length) missing.push('施工项目明细')
+  return missing
 })
-const canApply = computed(() => Object.keys(selectedPayload.value).length > 0 && !applying.value)
+const summary = computed(() => ({
+  customer: form.value.basic.customer || props.project.customer || '未填写',
+  address: form.value.basic.address_detail || props.project.address_detail || props.project.address || '未填写',
+  area: form.value.construction.total_area || '未填写',
+  teamLeader: form.value.construction.team_leader || props.project.team_leader || '未安排',
+  itemCount: form.value.items.length
+}))
+const canSave = computed(() => props.canApply && !saving.value)
+
+watch(() => props.project?.id, () => {
+  loadBriefing()
+}, { immediate: true })
 
 function token() {
   return localStorage.getItem('token')
+}
+
+function emptyBriefingForm() {
+  return {
+    basic: {
+      source: props.project?.source || '',
+      order_taker: props.project?.order_taker || '',
+      order_date: props.project?.order_date || '',
+      customer: props.project?.customer || '',
+      phone: props.project?.phone || '',
+      address_province: props.project?.address_province || '',
+      address_city: props.project?.address_city || '',
+      address_detail: props.project?.address_detail || props.project?.address || '',
+      external_order_no: props.project?.external_order_no || '',
+      handover_note: props.project?.handover_note || ''
+    },
+    construction: {
+      expected_start_date: props.project?.start_date || '',
+      expected_duration: '',
+      entry_method: '',
+      total_area: 0,
+      remeasure: '',
+      plate_needed: '',
+      team_leader: props.project?.team_leader || '',
+      briefing_date: props.project?.briefing_date || '',
+      total_amount: Number(props.project?.total_amount || 0)
+    },
+    site: {
+      base_condition: props.project?.condition_note || '',
+      high_work: '',
+      scaffold: '',
+      second_transfer: '',
+      entry_condition: '',
+      site_status: ''
+    },
+    items: [],
+    signatures: {
+      briefer: '',
+      confirmer: '',
+      confirmed_at: '',
+      source_file: ''
+    }
+  }
+}
+
+async function loadBriefing() {
+  if (!props.project?.id) return
+  loading.value = true
+  try {
+    const res = await fetch(`/api/projects/${props.project.id}/briefing`, {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await readJson(res)
+    if (!res.ok || !json.success) throw new Error(json.message || '读取施工交底单失败')
+    document.value = json.data
+    if (json.data?.confirmed_data) {
+      form.value = normalizeBriefingForm(json.data.confirmed_data)
+      warnings.value = json.data.warnings || []
+      parsedData.value = json.data.parsed_data || null
+      collapsed.value = true
+    } else {
+      form.value = emptyBriefingForm()
+      warnings.value = []
+      parsedData.value = null
+      collapsed.value = false
+    }
+  } catch (err) {
+    ElMessage.error(err.message || '读取施工交底单失败')
+  } finally {
+    loading.value = false
+  }
 }
 
 function openPicker() {
@@ -41,7 +129,7 @@ function onFileChange(event) {
   const file = event.target.files?.[0]
   if (!file) return
   if (!/\.(csv|xls|xlsx)$/i.test(file.name)) {
-    ElMessage.warning('施工交底单导入暂只支持 CSV / XLS / XLSX')
+    ElMessage.warning('施工交底单暂只支持 CSV / XLS / XLSX')
     event.target.value = ''
     return
   }
@@ -51,17 +139,14 @@ function onFileChange(event) {
     return
   }
   pickedFile.value = file
-  result.value = null
+  parseFile()
 }
 
 async function parseFile() {
-  if (!pickedFile.value) {
-    ElMessage.warning('请先选择施工交底单')
-    return
-  }
+  if (!pickedFile.value) return
   parsing.value = true
   try {
-    const res = await fetch(`/api/projects/${props.project.id}/document-imports/briefing/parse`, {
+    const res = await fetch('/api/briefing-imports/parse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
       body: JSON.stringify({
@@ -71,12 +156,11 @@ async function parseFile() {
     })
     const json = await readJson(res)
     if (!res.ok || !json.success) throw new Error(json.message || '施工交底单解析失败')
-    result.value = json.data
-    fieldValues.value = Object.fromEntries((json.data.fields || []).map(field => [field.key, field.value || '']))
-    selectedFields.value = (json.data.fields || [])
-      .filter(field => field.value && !String(json.data.current?.[field.key] || '').trim())
-      .map(field => field.key)
-    ElMessage.success('施工交底单已解析，请人工确认字段')
+    parsedData.value = json.data
+    form.value = normalizeBriefingForm(json.data.form_data)
+    warnings.value = json.data.warnings || []
+    collapsed.value = false
+    ElMessage.success('交底单已解析，可核对后保存')
   } catch (err) {
     ElMessage.error(err.message || '施工交底单解析失败')
   } finally {
@@ -84,33 +168,74 @@ async function parseFile() {
   }
 }
 
-async function applySelected() {
-  if (!canApply.value) return
-  applying.value = true
+async function saveBriefing() {
+  if (!props.canApply) {
+    ElMessage.warning('当前账号只能查看，不能保存施工交底单')
+    return
+  }
+  saving.value = true
   try {
-    const res = await fetch(`/api/projects/${props.project.id}/document-imports/briefing/apply`, {
+    const res = await fetch(`/api/projects/${props.project.id}/briefing/confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
-      body: JSON.stringify({ fields: selectedPayload.value })
+      body: JSON.stringify({
+        parsed_data: parsedData.value || document.value?.parsed_data || {},
+        confirmed_data: form.value,
+        warnings: warnings.value,
+        source_attachment_id: document.value?.source_attachment_id || 0,
+        file: pickedFile.value ? {
+          name: pickedFile.value.name,
+          mime_type: pickedFile.value.type,
+          size: pickedFile.value.size,
+          data: await readAsDataUrl(pickedFile.value)
+        } : null
+      })
     })
     const json = await readJson(res)
-    if (!res.ok || !json.success) throw new Error(json.message || '写入失败')
-    ElMessage.success('已写入施工交底单字段')
+    if (!res.ok || !json.success) throw new Error(json.message || '保存失败')
+    ElMessage.success('施工交底单已保存')
+    pickedFile.value = null
+    if (fileInput.value) fileInput.value.value = ''
+    await loadBriefing()
     emit('applied')
   } catch (err) {
-    ElMessage.error(err.message || '写入失败')
+    ElMessage.error(err.message || '保存失败')
   } finally {
-    applying.value = false
+    saving.value = false
   }
 }
 
-function toggleField(key, checked) {
-  if (checked && !selectedFields.value.includes(key)) selectedFields.value.push(key)
-  if (!checked) selectedFields.value = selectedFields.value.filter(item => item !== key)
+function addItem() {
+  form.value.items.push(addableItem())
 }
 
-function currentValue(key) {
-  return result.value?.current?.[key] || '未填写'
+function removeItem(index) {
+  form.value.items.splice(index, 1)
+}
+
+function normalizeBriefingForm(input = {}) {
+  const base = emptyBriefingForm()
+  return {
+    basic: { ...base.basic, ...(input.basic || {}) },
+    construction: { ...base.construction, ...(input.construction || {}) },
+    site: { ...base.site, ...(input.site || {}) },
+    items: Array.isArray(input.items) ? input.items.map(item => ({ ...addableItem(), ...item })) : [],
+    signatures: { ...base.signatures, ...(input.signatures || {}) }
+  }
+}
+
+function addableItem() {
+  return {
+    space_name: '',
+    texture_name: '',
+    process: '',
+    color_no: '',
+    planned_area: 0,
+    actual_area: 0,
+    unit_price: 0,
+    subtotal: 0,
+    remark: ''
+  }
 }
 
 function readAsDataUrl(file) {
@@ -133,100 +258,146 @@ async function readJson(res) {
 </script>
 
 <template>
-  <el-card class="document-import" shadow="never">
+  <el-card class="briefing-panel" shadow="never" v-loading="loading">
     <template #header>
       <div class="panel-head">
-        <div>
-          <div class="kicker">总监表格字段映射 V2</div>
-          <h3>施工交底单导入预览</h3>
-          <p>先解析字段和施工明细，勾选确认后才写入当前项目工单。</p>
+        <button class="collapse-btn" type="button" @click="collapsed = !collapsed">
+          <span>{{ collapsed ? '展开' : '收起' }}</span>
+        </button>
+        <div class="head-main">
+          <div class="kicker">项目核心单据</div>
+          <h3>施工交底单</h3>
+          <p>系统版可编辑交底单。原始 Excel 会作为工单附件保留，保存后不会自动推进状态。</p>
         </div>
-        <el-tag type="info">第一张真实表</el-tag>
+        <div class="head-actions">
+          <el-tag v-if="hasDocument" type="success">已保存</el-tag>
+          <el-tag v-else type="warning">未上传</el-tag>
+          <el-button size="small" @click="openPicker" :loading="parsing">导入/更新</el-button>
+          <input ref="fileInput" class="hidden-input" type="file" accept=".csv,.xls,.xlsx" @change="onFileChange" />
+        </div>
       </div>
     </template>
 
-    <div class="import-actions">
-      <div class="upload-box" @click="openPicker">
-        <input ref="fileInput" class="hidden-input" type="file" accept=".csv,.xls,.xlsx" @change="onFileChange" />
-        <el-icon :size="26"><UploadFilled /></el-icon>
-        <div>
-          <strong>{{ pickedFile?.name || '选择施工交底单' }}</strong>
-          <span>支持总监工作树里的 .xls / .xlsx / .csv，暂不直接改原文件。</span>
-        </div>
-      </div>
-      <el-button type="primary" :loading="parsing" @click="parseFile">解析预览</el-button>
+    <div class="briefing-summary">
+      <div><span>客户</span><strong>{{ summary.customer }}</strong></div>
+      <div><span>地址</span><strong>{{ summary.address }}</strong></div>
+      <div><span>施工面积</span><strong>{{ summary.area }}</strong></div>
+      <div><span>班组长</span><strong>{{ summary.teamLeader }}</strong></div>
+      <div><span>施工明细</span><strong>{{ summary.itemCount }} 条</strong></div>
+      <div><span>缺失项</span><strong>{{ missingFields.length }} 项</strong></div>
     </div>
 
-    <template v-if="hasResult">
-      <div v-if="result.warnings?.length" class="warning-list">
-        <div v-for="warning in result.warnings" :key="warning">
-          <el-icon><WarningFilled /></el-icon>
-          <span>{{ warning }}</span>
+    <div v-if="warnings.length || missingFields.length" class="warning-list">
+      <div v-for="warning in [...warnings, ...missingFields.map(item => `缺核心资料：${item}`)]" :key="warning">
+        <el-icon><WarningFilled /></el-icon>
+        <span>{{ warning }}</span>
+      </div>
+    </div>
+
+    <template v-if="!collapsed">
+      <div v-if="!hasDocument && !pickedFile" class="empty-hint">
+        <el-icon><UploadFilled /></el-icon>
+        <span>还没有施工交底单。可以导入总监表格，也可以直接在下面补系统版字段。</span>
+      </div>
+
+      <el-form label-position="top" class="briefing-form">
+        <div class="form-section">基础信息</div>
+        <el-row :gutter="12">
+          <el-col :span="6"><el-form-item label="来源门店/渠道"><el-input v-model="form.basic.source" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="门店接单人"><el-input v-model="form.basic.order_taker" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="接单日期"><el-input v-model="form.basic.order_date" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="门店单号/合同号"><el-input v-model="form.basic.external_order_no" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="客户姓名"><el-input v-model="form.basic.customer" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="客户电话"><el-input v-model="form.basic.phone" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="详细地址"><el-input v-model="form.basic.address_detail" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="24"><el-form-item label="交接备注"><el-input v-model="form.basic.handover_note" type="textarea" :rows="2" :disabled="!canApply" /></el-form-item></el-col>
+        </el-row>
+
+        <div class="form-section">施工信息</div>
+        <el-row :gutter="12">
+          <el-col :span="6"><el-form-item label="预计开工"><el-input v-model="form.construction.expected_start_date" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="预计总工期"><el-input v-model="form.construction.expected_duration" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="施工总面积"><el-input v-model="form.construction.total_area" type="number" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="交底日期"><el-input v-model="form.construction.briefing_date" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="进入方式"><el-input v-model="form.construction.entry_method" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="是否复尺"><el-input v-model="form.construction.remeasure" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="车牌报备"><el-input v-model="form.construction.plate_needed" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="班组长"><el-input v-model="form.construction.team_leader" :disabled="!canApply" /></el-form-item></el-col>
+        </el-row>
+
+        <div class="form-section">现场情况</div>
+        <el-row :gutter="12">
+          <el-col :span="8"><el-form-item label="基层情况"><el-input v-model="form.site.base_condition" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="高空作业"><el-input v-model="form.site.high_work" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="脚手架"><el-input v-model="form.site.scaffold" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="二次搬运"><el-input v-model="form.site.second_transfer" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="进场条件"><el-input v-model="form.site.entry_condition" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="室内状况"><el-input v-model="form.site.site_status" :disabled="!canApply" /></el-form-item></el-col>
+        </el-row>
+
+        <div class="form-section with-action">
+          <span>施工项目明细</span>
+          <el-button size="small" :icon="Plus" :disabled="!canApply" @click="addItem">新增明细</el-button>
         </div>
-      </div>
-
-      <div class="field-table">
-        <div class="field-row table-head">
-          <span>写入</span>
-          <span>字段</span>
-          <span>当前值</span>
-          <span>识别值</span>
-          <span>来源</span>
+        <div class="items-table">
+          <div class="item-row item-head">
+            <span>空间</span><span>纹理/产品</span><span>工艺</span><span>颜色</span><span>预收</span><span>复尺</span><span>备注</span><span></span>
+          </div>
+          <div v-for="(item, index) in form.items" :key="index" class="item-row">
+            <el-input v-model="item.space_name" :disabled="!canApply" />
+            <el-input v-model="item.texture_name" :disabled="!canApply" />
+            <el-input v-model="item.process" :disabled="!canApply" />
+            <el-input v-model="item.color_no" :disabled="!canApply" />
+            <el-input v-model="item.planned_area" type="number" :disabled="!canApply" />
+            <el-input v-model="item.actual_area" type="number" :disabled="!canApply" />
+            <el-input v-model="item.remark" :disabled="!canApply" />
+            <el-button text type="danger" :disabled="!canApply" @click="removeItem(index)">删</el-button>
+          </div>
+          <el-empty v-if="!form.items.length" description="暂无施工明细，可手动新增" :image-size="70" />
         </div>
-        <div v-for="field in fieldRows" :key="field.key" class="field-row">
-          <el-checkbox
-            :model-value="selectedFields.includes(field.key)"
-            :disabled="!fieldValues[field.key]"
-            @change="checked => toggleField(field.key, checked)"
-          />
-          <strong>{{ field.label }}</strong>
-          <span class="current-value">{{ currentValue(field.key) }}</span>
-          <el-input v-model="fieldValues[field.key]" size="small" clearable />
-          <span class="source-cell">
-            {{ field.source }}
-            <em v-if="field.caution">{{ field.caution }}</em>
-          </span>
-        </div>
-      </div>
 
-      <div v-if="result.summary" class="briefing-summary">
-        <div><span>施工总面积</span><strong>{{ result.summary.total_area || '未识别' }}</strong></div>
-        <div><span>是否复尺</span><strong>{{ result.summary.remeasure || '未识别' }}</strong></div>
-        <div><span>进入方式</span><strong>{{ result.summary.entry_method || '未识别' }}</strong></div>
-        <div><span>车牌报备</span><strong>{{ result.summary.plate_needed || '未识别' }}</strong></div>
-      </div>
+        <div class="form-section">签字/确认</div>
+        <el-row :gutter="12">
+          <el-col :span="8"><el-form-item label="交底人"><el-input v-model="form.signatures.briefer" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="确认人"><el-input v-model="form.signatures.confirmer" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="确认时间"><el-input v-model="form.signatures.confirmed_at" :disabled="!canApply" /></el-form-item></el-col>
+        </el-row>
+      </el-form>
 
-      <div v-if="result.items?.length" class="items-section">
-        <div class="section-title">施工项目明细</div>
-        <el-table :data="result.items" size="small" border max-height="260">
-          <el-table-column prop="space_name" label="空间" min-width="150" />
-          <el-table-column prop="texture_name" label="纹理/产品" min-width="120" />
-          <el-table-column prop="process" label="工艺" min-width="90" />
-          <el-table-column prop="color_no" label="颜色" min-width="130" />
-          <el-table-column prop="planned_area" label="预收面积" width="90" />
-          <el-table-column prop="actual_area" label="实际面积" width="90" />
-          <el-table-column prop="remark" label="备注" min-width="120" />
-        </el-table>
-      </div>
-
-      <div class="apply-bar">
-        <span>已选择 {{ Object.keys(selectedPayload).length }} 个有效字段。明细本轮只预览，不自动写入成本或仓库。</span>
-        <el-button type="primary" :disabled="!canApply" :loading="applying" @click="applySelected">确认写入工单</el-button>
+      <div class="save-bar">
+        <span>材料出库表、成本核算表等其他单据后续在对应流程节点处理；这里先固定施工交底单。</span>
+        <el-button type="primary" :disabled="!canSave" :loading="saving" @click="saveBriefing">
+          {{ canApply ? '保存交底单' : '无保存权限' }}
+        </el-button>
       </div>
     </template>
   </el-card>
 </template>
 
 <style scoped>
-.document-import {
+.briefing-panel {
   margin-bottom: 16px;
 }
 
 .panel-head {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
+}
+
+.collapse-btn {
+  width: 54px;
+  height: 32px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-page);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.head-main {
+  flex: 1;
+  min-width: 0;
 }
 
 .kicker {
@@ -236,116 +407,31 @@ async function readJson(res) {
   margin-bottom: 4px;
 }
 
-.panel-head h3 {
+.head-main h3 {
   margin: 0 0 5px;
   color: var(--text-primary);
 }
 
-.panel-head p {
+.head-main p {
   margin: 0;
   color: var(--text-secondary);
   font-size: 13px;
 }
 
-.import-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-}
-
-.upload-box {
-  min-height: 72px;
-  border: 1px dashed var(--border-color);
-  border-radius: var(--radius-sm);
+.head-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
-  cursor: pointer;
-  color: var(--text-secondary);
-  background: var(--bg-page);
-}
-
-.upload-box strong,
-.upload-box span {
-  display: block;
-}
-
-.upload-box strong {
-  color: var(--text-primary);
-  margin-bottom: 4px;
+  gap: 8px;
 }
 
 .hidden-input {
   display: none;
 }
 
-.warning-list {
-  display: grid;
-  gap: 6px;
-  margin-top: 12px;
-  color: #b45309;
-  font-size: 13px;
-}
-
-.warning-list div {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, #f59e0b 12%, var(--bg-card));
-}
-
-.field-table {
-  margin-top: 14px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.field-row {
-  display: grid;
-  grid-template-columns: 52px 110px minmax(120px, 1fr) minmax(160px, 1.3fr) minmax(150px, 1fr);
-  gap: 10px;
-  align-items: center;
-  padding: 9px 11px;
-  border-top: 1px solid var(--border-light);
-  font-size: 13px;
-}
-
-.field-row:first-child {
-  border-top: 0;
-}
-
-.table-head {
-  background: var(--bg-page);
-  color: var(--text-tertiary);
-  font-weight: 700;
-}
-
-.current-value {
-  color: var(--text-secondary);
-}
-
-.source-cell {
-  color: var(--text-tertiary);
-  line-height: 1.45;
-}
-
-.source-cell em {
-  display: block;
-  color: #b45309;
-  font-style: normal;
-  font-size: 12px;
-}
-
 .briefing-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
-  margin-top: 14px;
 }
 
 .briefing-summary div {
@@ -363,23 +449,77 @@ async function readJson(res) {
 
 .briefing-summary strong {
   color: var(--text-primary);
+  word-break: break-word;
 }
 
-.items-section {
+.warning-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: #b45309;
+  font-size: 13px;
+}
+
+.warning-list div,
+.empty-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #f59e0b 12%, var(--bg-card));
+}
+
+.empty-hint {
+  margin-top: 12px;
+  color: #b45309;
+}
+
+.briefing-form {
   margin-top: 14px;
 }
 
-.section-title {
+.form-section {
+  margin: 12px 0 10px;
   color: var(--text-primary);
   font-weight: 700;
-  margin-bottom: 8px;
 }
 
-.apply-bar {
+.form-section.with-action,
+.save-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.items-table {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.item-row {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr 1fr 1fr 82px 82px 1.2fr 44px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+.item-row:first-child {
+  border-top: 0;
+}
+
+.item-head {
+  background: var(--bg-page);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.save-bar {
   margin-top: 14px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
@@ -388,24 +528,26 @@ async function readJson(res) {
   font-size: 13px;
 }
 
-@media (max-width: 980px) {
-  .import-actions,
+@media (max-width: 1100px) {
   .briefing-summary {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .field-row {
-    grid-template-columns: 42px 90px minmax(0, 1fr);
+  .item-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
-  .field-row > :nth-child(4),
-  .field-row > :nth-child(5) {
-    grid-column: 2 / -1;
-  }
-
-  .apply-bar {
+@media (max-width: 760px) {
+  .panel-head,
+  .head-actions,
+  .save-bar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .briefing-summary {
+    grid-template-columns: 1fr;
   }
 }
 </style>

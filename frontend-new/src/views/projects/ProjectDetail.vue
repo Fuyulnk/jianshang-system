@@ -99,7 +99,7 @@
       </div>
 
       <ProjectDocumentSummary :project="project" />
-      <ProjectDocumentImportPanel :project="project" @applied="fetchDetail" />
+      <ProjectDocumentImportPanel :project="project" :can-apply="canManageProject" @applied="fetchDetail" />
 
       <!-- 当前阶段工作单 -->
       <el-card class="work-card" shadow="never">

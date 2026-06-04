@@ -17,7 +17,7 @@
           <p class="page-desc">门店/渠道签单后，由简尚承接施工交付；重点看资料是否齐、下一步卡在哪里。</p>
         </div>
         <div class="header-actions">
-          <el-button v-if="canCreateProjects" @click="showImport = true">AI 导入工单</el-button>
+          <el-button v-if="canCreateProjects" @click="showImport = true">导入交底单</el-button>
           <el-button v-if="canCreateProjects" type="primary" @click="openCreateForm">新建工单</el-button>
         </div>
       </div>
