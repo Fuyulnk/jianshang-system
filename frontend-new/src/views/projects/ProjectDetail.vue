@@ -99,6 +99,7 @@
       </div>
 
       <ProjectDocumentSummary :project="project" />
+      <ProjectDocumentImportPanel :project="project" @applied="fetchDetail" />
 
       <!-- 当前阶段工作单 -->
       <el-card class="work-card" shadow="never">
@@ -556,6 +557,7 @@ import { ElMessage } from 'element-plus'
 import { Document, Tools, House, Select, Edit, Service } from '@element-plus/icons-vue'
 import AttachmentPanel from '../../components/AttachmentPanel.vue'
 import MaterialRequestPanel from '../../components/material/MaterialRequestPanel.vue'
+import ProjectDocumentImportPanel from '../../components/projects/ProjectDocumentImportPanel.vue'
 import ProjectDocumentSummary from '../../components/projects/ProjectDocumentSummary.vue'
 import {
   addressCascaderProps,

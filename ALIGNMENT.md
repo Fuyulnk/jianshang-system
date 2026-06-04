@@ -75,6 +75,33 @@
 
 ## 对接记录
 
+### 2026-06-04 Codex 总监表格字段映射 V2 第二阶段起步：施工交底单导入预览
+
+- 任务：按路线图 4.2 继续推进“真实表格字段映射 + 人工确认导入”，先选总监工作树里最关键的 `施工交底单` 做第一张真实表，不直接做全自动核算。
+- 修改文件：
+  - `backend/src/utils/projectDocumentImport.js` — 新增施工交底单解析工具，按固定模板和关键词读取基础信息、班组长、施工面积、复尺/进入方式、施工项目明细。
+  - `backend/src/routes/project-imports.js` — 新增 `POST /api/projects/:id/document-imports/briefing/parse` 和 `POST /api/projects/:id/document-imports/briefing/apply`；解析只预览，写入必须人工确认并按项目权限校验。
+  - `frontend-new/src/components/projects/ProjectDocumentImportPanel.vue` — 新增项目详情内的“施工交底单导入预览”面板，支持上传 xls/xlsx/csv、字段预览、勾选写入、施工明细预览。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` — 在“项目单据链 V2”后挂载导入预览面板，写入后刷新当前工单。
+- 已完成：
+  - 可从真实样本 `施工交底单 - YSH20251116 - 朱总栖棠映山.xls` 识别 8 个项目字段：来源门店/渠道、门店接单人、接单日期、业主/客户、业主电话、详细地址、班组长、交底日期。
+  - 可识别施工项目明细：空间、纹理/产品、工艺、颜色、预收面积、实际面积、备注。
+  - 发现并提示两个真实风险：客户电话为空时不自动用销售电话代替；文件名日期 `2025-11-16` 与表内日期 `2026-11-16` 不一致时要求人工确认。
+  - 写入接口只允许白名单字段，并同时校验项目模块权限和 `data_scope` 项目可见范围；写入后记录 `project_logs`。
+- 验证：
+  - `node --check backend/src/routes/project-imports.js`
+  - `node --check backend/src/utils/projectDocumentImport.js`
+  - 本地真实样本解析脚本：返回 8 个字段、1 条施工明细、2 条风险提示。
+  - 未登录请求解析接口返回 `401`。
+  - 鉴权后请求 `POST /api/projects/2/document-imports/briefing/parse` 返回 `200`，且没有写入项目数据。
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite 大 chunk 警告）
+  - Chrome 本地视觉检查：`http://127.0.0.1:5173/main/projects/2` 中新面板位于单据链后、当前工作单前，未发现明显遮挡或跳位。
+- 注意事项：
+  - 本轮未上传服务器。
+  - 本轮没有测试“确认写入”按钮的真实写库动作，避免污染项目 2；后续可用临时项目做端到端写入测试。
+  - 施工交底单里的“接单时间”和文件名日期可能不一致，后续需要让总监确认到底以哪个为准。
+  - 明细本轮只做预览，不自动写入成本、仓库、工费或财务；下一步建议继续做材料出库表或完工成本核算表的字段映射。
+
 ### 2026-06-04 Codex 总监表格字段映射 V2 第一刀
 
 - 任务：在项目工单状态机 V2 已上线的基础上，先把总监真实工作树里的核心表格拆成项目详情页可读的“单据链检查清单”，让员工能看到每个阶段缺哪张表、缺哪些关键字段、下一步该补什么。

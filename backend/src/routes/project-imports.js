@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
 import { authMiddleware } from '../middleware/auth.js'
-import { canAccessModule } from '../utils/permissions.js'
+import { canAccessModule, canAccessProjectRecord } from '../utils/permissions.js'
+import { parseBriefingDocument } from '../utils/projectDocumentImport.js'
 import {
   diffDraft,
   missingCoreFields,
@@ -13,6 +14,61 @@ import {
 const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
 
 export default function projectImportRoutes(server, db) {
+  server.post('/api/projects/:id/document-imports/briefing/parse', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
+    if (!project || !canAccessModule(db, request.user, 'projects', 'can_view') || !canAccessProjectRecord(db, request.user, project)) {
+      reply.code(404).send({ success: false, message: '项目不存在或无权限' })
+      return
+    }
+
+    const { file_name = '', file_data = '' } = request.body || {}
+    if (!file_name || !file_data) return { success: false, message: '请选择施工交底单表格' }
+
+    try {
+      const parsed = parseBriefingDocument(file_name, file_data)
+      const current = {}
+      for (const field of parsed.fields || []) current[field.key] = project[field.key] ?? ''
+      return { success: true, data: { ...parsed, current } }
+    } catch (err) {
+      reply.code(400).send({ success: false, message: err.message || '施工交底单解析失败' })
+    }
+  })
+
+  server.post('/api/projects/:id/document-imports/briefing/apply', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
+    if (!project) return reply.code(404).send({ success: false, message: '项目不存在' })
+    if (!canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
+      reply.code(403).send({ success: false, message: '无权限写入施工交底单字段' })
+      return
+    }
+
+    const allowedFields = ['source', 'order_taker', 'order_date', 'customer', 'phone', 'address_detail', 'team_leader', 'briefing_date']
+    const incoming = request.body?.fields || {}
+    const updates = []
+    const vals = []
+    const changed = []
+
+    for (const field of allowedFields) {
+      if (incoming[field] === undefined) continue
+      const value = safeText(incoming[field], field === 'address_detail' ? 300 : 120)
+      updates.push(`${field} = ?`)
+      vals.push(value)
+      if (String(project[field] ?? '') !== value) changed.push(field)
+    }
+
+    if (!updates.length) return { success: false, message: '没有选择要写入的字段' }
+    updates.push("updated_at = datetime('now', 'localtime')")
+    vals.push(project.id)
+
+    db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...vals)
+    addProjectLog(db, project.id, '导入施工交底单字段', request.user.username,
+      `人工确认写入 ${changed.length || updates.length - 1} 个字段：${changed.join('、') || Object.keys(incoming).join('、')}`)
+
+    return { success: true, data: { changed_fields: changed } }
+  })
+
   server.post('/api/project-imports/parse', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
     if (!canAccessModule(db, request.user, 'projects', 'can_create')) {
