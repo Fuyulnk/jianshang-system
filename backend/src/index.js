@@ -484,7 +484,7 @@ function ensureProjectTables(db) {
       order_date TEXT DEFAULT '',
       external_order_no TEXT DEFAULT '',
       handover_note TEXT DEFAULT '',
-      status TEXT DEFAULT 'info_confirmed',
+      status TEXT DEFAULT 'handover_received',
       manager_user_id INTEGER DEFAULT 0,
       assignee_user_id INTEGER DEFAULT 0,
       crew_member_user_ids TEXT DEFAULT '[]',

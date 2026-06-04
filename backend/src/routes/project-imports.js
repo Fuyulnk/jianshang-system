@@ -137,8 +137,8 @@ export default function projectImportRoutes(server, db) {
       INSERT INTO projects (
         name, customer, phone, address, address_province, address_city, address_detail,
         source, order_taker, order_date, external_order_no, handover_note,
-        total_amount, deposit_amount, manager_user_id, assignee_user_id, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)
+        total_amount, deposit_amount, manager_user_id, assignee_user_id, status, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'handover_received', ?)
     `)
     const updateItem = db.prepare(`
       UPDATE project_import_items

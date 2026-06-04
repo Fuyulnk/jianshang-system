@@ -8,21 +8,32 @@ const KB_SERVER = 'http://127.0.0.1:18790'
 const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
 
 const PROJECT_STATUS_LABELS = {
-  info_confirmed: { phase: 1, label: '待工勘', phaseLabel: '接收工单' },
-  survey_done: { phase: 1, label: '待确认开工条件', phaseLabel: '接收工单' },
-  condition_met: { phase: 2, label: '待排班组', phaseLabel: '施工准备' },
-  team_assigned: { phase: 2, label: '待开工交底', phaseLabel: '施工准备' },
-  briefing_done: { phase: 2, label: '待出库', phaseLabel: '施工准备' },
-  material_out: { phase: 3, label: '待进场', phaseLabel: '施工执行' },
-  in_progress: { phase: 3, label: '施工中', phaseLabel: '施工执行' },
-  inspection_done: { phase: 3, label: '待验收', phaseLabel: '施工执行' },
-  completed: { phase: 4, label: '待材料回库', phaseLabel: '交付结算' },
-  material_returned: { phase: 4, label: '待结算', phaseLabel: '交付结算' },
-  settled: { phase: 5, label: '待完结确认', phaseLabel: '完结归档' },
-  closed: { phase: 5, label: '已完结', phaseLabel: '完结归档' },
+  handover_received: { phase: 1, label: '门店交接待核对', phaseLabel: '交接/勘察' },
+  survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '交接/勘察' },
+  survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '交接/勘察' },
+  recheck_done: { phase: 2, label: '复尺完成待交底', phaseLabel: '复尺/交底/出库' },
+  briefing_done: { phase: 2, label: '交底完成待出库', phaseLabel: '复尺/交底/出库' },
+  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/交底/出库' },
+  material_out: { phase: 3, label: '已出库待进场', phaseLabel: '进场/施工/验收' },
+  in_progress: { phase: 3, label: '施工中', phaseLabel: '进场/施工/验收' },
+  inspection_done: { phase: 3, label: '验收完成待回库', phaseLabel: '进场/施工/验收' },
+  material_returned: { phase: 4, label: '回库完成待工费结算', phaseLabel: '回库/工费/成本' },
+  labor_settled: { phase: 4, label: '工费结算完成待成本核算', phaseLabel: '回库/工费/成本' },
+  cost_checked: { phase: 4, label: '成本核算完成待财务结算', phaseLabel: '回库/工费/成本' },
+  finance_settled: { phase: 5, label: '财务结算完成待归档', phaseLabel: '财务/归档' },
+  archived: { phase: 5, label: '已归档', phaseLabel: '财务/归档' },
   repair_requested: { phase: 6, label: '售后待安排', phaseLabel: '售后处理' },
   repair_assigned: { phase: 6, label: '售后处理中', phaseLabel: '售后处理' },
   repair_done: { phase: 6, label: '售后已完成', phaseLabel: '售后处理' },
+}
+
+const PROJECT_STATUS_ALIASES = {
+  info_confirmed: 'handover_received',
+  condition_met: 'recheck_done',
+  team_assigned: 'recheck_done',
+  completed: 'inspection_done',
+  settled: 'finance_settled',
+  closed: 'archived'
 }
 
 function getConfig(db) {
@@ -42,6 +53,37 @@ function getSystemSettings(db) {
   } catch {
     return {}
   }
+}
+
+function canonicalProjectStatus(status) {
+  return PROJECT_STATUS_ALIASES[status] || status
+}
+
+function projectStatusMeta(status) {
+  const canonical = canonicalProjectStatus(status)
+  return PROJECT_STATUS_LABELS[canonical] || { phase: 0, label: status || '未知状态', phaseLabel: '' }
+}
+
+function projectStatusesForPhase(phase) {
+  const phaseNumber = Number(phase)
+  const statuses = new Set(
+    Object.entries(PROJECT_STATUS_LABELS)
+      .filter(([, meta]) => meta.phase === phaseNumber)
+      .map(([status]) => status)
+  )
+  for (const [legacy, target] of Object.entries(PROJECT_STATUS_ALIASES)) {
+    if (PROJECT_STATUS_LABELS[target]?.phase === phaseNumber) statuses.add(legacy)
+  }
+  return [...statuses]
+}
+
+function projectStatusesForFilter(status) {
+  const canonical = canonicalProjectStatus(status)
+  const statuses = new Set([canonical])
+  for (const [legacy, target] of Object.entries(PROJECT_STATUS_ALIASES)) {
+    if (target === canonical) statuses.add(legacy)
+  }
+  return [...statuses]
 }
 
 // ====== 工具定义 ======
@@ -101,8 +143,8 @@ const TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          phase: { type: 'number', description: '阶段编号 1=项目前期 2=准备 3=施工 4=验收 5=售后' },
-          status: { type: 'string', description: '工单状态，如 in_progress、completed、settled' }
+          phase: { type: 'number', description: '阶段编号 1=交接勘察 2=复尺出库 3=施工验收 4=回库核算 5=财务归档 6=售后处理' },
+          status: { type: 'string', description: '工单状态，如 handover_received、briefing_done、material_out、in_progress、archived' }
         },
         required: []
       }
@@ -252,24 +294,27 @@ function executeTool(name, args, db, user) {
         params.push(user.userId, user.userId, user.userId)
       }
       if (args.phase) {
-        const statuses = Object.entries(PROJECT_STATUS_LABELS)
-          .filter(([, meta]) => meta.phase === Number(args.phase))
-          .map(([status]) => status)
+        const statuses = projectStatusesForPhase(args.phase)
         if (statuses.length) {
           sql += ` AND p.status IN (${statuses.map(() => '?').join(',')})`
           params.push(...statuses)
         }
       }
-      if (args.status && PROJECT_STATUS_LABELS[args.status]) {
-        sql += ' AND p.status = ?'
-        params.push(args.status)
+      if (args.status) {
+        const statuses = projectStatusesForFilter(args.status).filter(status => PROJECT_STATUS_LABELS[canonicalProjectStatus(status)])
+        if (statuses.length) {
+          sql += ` AND p.status IN (${statuses.map(() => '?').join(',')})`
+          params.push(...statuses)
+        }
       }
       sql += ' ORDER BY p.created_at DESC LIMIT 100'
       const data = db.prepare(sql).all(...params).map(p => ({
         ...p,
-        status_label: PROJECT_STATUS_LABELS[p.status]?.label || p.status,
-        phase: PROJECT_STATUS_LABELS[p.status]?.phase || 0,
-        phase_label: PROJECT_STATUS_LABELS[p.status]?.phaseLabel || ''
+        raw_status: p.status,
+        status: canonicalProjectStatus(p.status),
+        status_label: projectStatusMeta(p.status).label,
+        phase: projectStatusMeta(p.status).phase,
+        phase_label: projectStatusMeta(p.status).phaseLabel
       }))
       return JSON.stringify({ success: true, count: data.length, data })
     }
@@ -472,11 +517,16 @@ function getSystemPrompt(username) {
 
 ## 简尚真实业务
 简尚不是销售 CRM，门店/渠道负责签单和交接，简尚负责施工承接。项目工单流程是：
-1. 接收工单：补齐来源门店/渠道、门店接单人、业主电话、详细地址，并完成工勘。
-2. 施工准备：确认开工条件、安排施工负责人/班组、完成开工交底、仓库确认材料出库。
-3. 施工执行：确认进场、记录施工过程、完工检查。
-4. 交付结算：完工验收、材料回库、财务结算。
-5. 完结归档：确认完结；后续如有问题进入售后处理。
+1. 门店交接待核对：补齐来源门店/渠道、门店接单人、业主电话、详细地址。
+2. 待现场勘察：工程部填写勘察日期和现场记录，或关联标准勘察表。
+3. 勘察完成待复尺：记录复尺面积、基层、水电、保护和进场条件。
+4. 复尺完成待交底：安排班组长、施工负责人、施工成员和交底日期。
+5. 交底完成待出库：只能通过材料出库申请进入仓库确认，不能直接跳过。
+6. 已出库待进场 / 施工中 / 验收完成待回库：记录开工日期、施工过程、完工验收和回库状态。
+7. 回库完成待工费结算 -> 工费结算完成待成本核算 -> 成本核算完成待财务结算 -> 财务结算完成待归档 -> 已归档。
+8. 售后是独立事件：repair_requested / repair_assigned / repair_done，不倒退主工程流程。
+
+你描述项目状态时必须使用以上口径，不要再说“项目前期、准备阶段、施工执行”这种旧阶段名称。
 
 ## 你的能力
 1. 回答关于公司财务、制度、流程、产品、合同等方面的问题

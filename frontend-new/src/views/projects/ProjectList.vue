@@ -264,11 +264,11 @@ const canCreateProjects = computed(() => ['super_admin', 'admin'].includes(userR
 const canDeleteProjects = computed(() => ['super_admin', 'admin'].includes(userRole.value))
 
 const phaseOptions = [
-  { value: '1', label: '接收工单' },
-  { value: '2', label: '施工准备' },
-  { value: '3', label: '施工执行' },
-  { value: '4', label: '交付结算' },
-  { value: '5', label: '完结归档' },
+  { value: '1', label: '交接勘察' },
+  { value: '2', label: '复尺出库' },
+  { value: '3', label: '施工验收' },
+  { value: '4', label: '回库核算' },
+  { value: '5', label: '财务归档' },
   { value: '6', label: '售后处理' },
 ]
 
@@ -284,23 +284,23 @@ const boardStats = computed(() => [
   },
   {
     key: 'survey',
-    label: '待工勘',
-    count: list.value.filter(row => ['info_confirmed', 'survey_done'].includes(row.status)).length,
-    desc: '已接收但前期未完成',
+    label: '待勘察/复尺',
+    count: list.value.filter(row => ['handover_received', 'survey_pending', 'survey_done'].includes(row.status)).length,
+    desc: '交接核对到现场复核',
     tone: 'info'
   },
   {
     key: 'prepare',
-    label: '待排班/备货',
-    count: list.value.filter(row => ['condition_met', 'team_assigned', 'briefing_done'].includes(row.status)).length,
-    desc: '施工前准备中的工单',
+    label: '待交底/出库',
+    count: list.value.filter(row => ['recheck_done', 'briefing_done', 'material_requested'].includes(row.status)).length,
+    desc: '交底完成后才能申请出库',
     tone: 'primary'
   },
   {
     key: 'active',
-    label: '施工进行',
+    label: '施工/回库',
     count: list.value.filter(row => ['material_out', 'in_progress', 'inspection_done'].includes(row.status)).length,
-    desc: '已出库、进场或检查',
+    desc: '进场施工、验收、回库前',
     tone: 'success'
   }
 ])
@@ -375,11 +375,11 @@ function computeStats(data) {
   }
   stats.value = [
     { key: 'all', label: '全部工单', count: counts.all, active: !phaseFilter.value },
-    { key: '1', label: '接收工单', count: counts['1'], active: phaseFilter.value === '1' },
-    { key: '2', label: '施工准备', count: counts['2'], active: phaseFilter.value === '2' },
-    { key: '3', label: '施工执行', count: counts['3'], active: phaseFilter.value === '3' },
-    { key: '4', label: '交付结算', count: counts['4'], active: phaseFilter.value === '4' },
-    { key: '5', label: '完结归档', count: counts['5'], active: phaseFilter.value === '5' },
+    { key: '1', label: '交接勘察', count: counts['1'], active: phaseFilter.value === '1' },
+    { key: '2', label: '复尺出库', count: counts['2'], active: phaseFilter.value === '2' },
+    { key: '3', label: '施工验收', count: counts['3'], active: phaseFilter.value === '3' },
+    { key: '4', label: '回库核算', count: counts['4'], active: phaseFilter.value === '4' },
+    { key: '5', label: '财务归档', count: counts['5'], active: phaseFilter.value === '5' },
     { key: '6', label: '售后处理', count: counts['6'], active: phaseFilter.value === '6' },
   ]
 }

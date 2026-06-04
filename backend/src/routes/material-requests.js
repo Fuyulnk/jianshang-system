@@ -7,6 +7,15 @@ const STATUS_LABELS = {
   cancelled: '已取消'
 }
 
+const PROJECT_STATUS_ALIASES = {
+  info_confirmed: 'handover_received',
+  condition_met: 'recheck_done',
+  team_assigned: 'recheck_done',
+  completed: 'inspection_done',
+  settled: 'finance_settled',
+  closed: 'archived'
+}
+
 export default function materialRequestRoutes(server, db) {
   server.get('/api/material-requests', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
@@ -53,6 +62,9 @@ export default function materialRequestRoutes(server, db) {
       reply.code(403).send({ success: false, message: '无权限为该工单申请出库' })
       return
     }
+    if (canonicalProjectStatus(project.status) !== 'briefing_done') {
+      return { success: false, message: '只有交底完成待出库的项目工单才能发起出库申请' }
+    }
 
     const items = normalizeItems(request.body?.items)
     if (!items.length) return { success: false, message: '请至少添加一项出库材料' }
@@ -77,7 +89,14 @@ export default function materialRequestRoutes(server, db) {
       for (const item of checkedItems) {
         stmt.run(result.lastInsertRowid, item.product.id, item.product.name, item.product.category || '', item.product.unit || '', item.quantity, item.note)
       }
-      db.prepare("UPDATE projects SET material_out_status = 'requested', material_out_note = ?, updated_at = datetime('now', 'localtime') WHERE id = ?")
+      db.prepare(`
+        UPDATE projects
+        SET status = 'material_requested',
+            material_out_status = 'requested',
+            material_out_note = ?,
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+      `)
         .run(note || '已发起仓库出库申请', project.id)
       addProjectLog(db, project.id, '出库申请', request.user.username, `发起出库申请 #${result.lastInsertRowid}，共 ${checkedItems.length} 项材料`)
       return result.lastInsertRowid
@@ -127,7 +146,8 @@ export default function materialRequestRoutes(server, db) {
         WHERE id = ?
       `).run(request.user.userId, note, requestId)
 
-      const nextStatus = project.status === 'briefing_done' ? 'material_out' : project.status
+      const currentProjectStatus = canonicalProjectStatus(project.status)
+      const nextStatus = ['briefing_done', 'material_requested'].includes(currentProjectStatus) ? 'material_out' : currentProjectStatus
       db.prepare(`
         UPDATE projects
         SET status = ?, material_out_status = 'done', material_out_note = ?,
@@ -135,7 +155,7 @@ export default function materialRequestRoutes(server, db) {
         WHERE id = ?
       `).run(nextStatus, note || `仓库已确认出库申请 #${requestId}`, project.id)
       addProjectLog(db, project.id, '材料出库', request.user.username,
-        `仓库确认出库申请 #${requestId}，共 ${items.length} 项材料${nextStatus !== project.status ? '；工单进入待进场' : ''}`)
+        `仓库确认出库申请 #${requestId}，共 ${items.length} 项材料${nextStatus !== currentProjectStatus ? '；工单进入已出库待进场' : ''}`)
     })
     try {
       tx()
@@ -164,13 +184,15 @@ export default function materialRequestRoutes(server, db) {
         WHERE project_id = ? AND status = 'requested'
       `).get(project.id)?.count || 0
       if (!remaining) {
+        const nextStatus = canonicalProjectStatus(project.status) === 'material_requested' ? 'briefing_done' : canonicalProjectStatus(project.status)
         db.prepare(`
           UPDATE projects
-          SET material_out_status = 'pending',
+          SET status = ?,
+              material_out_status = 'pending',
               material_out_note = ?,
               updated_at = datetime('now', 'localtime')
           WHERE id = ? AND material_out_status = 'requested'
-        `).run(note || `出库申请 #${materialRequest.id} 已取消，暂无待确认出库申请`, project.id)
+        `).run(nextStatus, note || `出库申请 #${materialRequest.id} 已取消，暂无待确认出库申请`, project.id)
       }
       addProjectLog(db, project.id, '取消出库申请', request.user.username, `取消出库申请 #${materialRequest.id}`)
       return remaining
@@ -204,11 +226,17 @@ function getItemsForRequests(db, ids) {
 function formatRequest(row, items) {
   return {
     ...row,
+    project_raw_status: row.project_status,
+    project_status: canonicalProjectStatus(row.project_status),
     status_label: STATUS_LABELS[row.status] || row.status,
     requester_name: row.requester_real_name || row.requester_username || '',
     confirmer_name: row.confirmer_real_name || row.confirmer_username || '',
     items
   }
+}
+
+function canonicalProjectStatus(status) {
+  return PROJECT_STATUS_ALIASES[status] || status
 }
 
 function normalizeItems(items) {

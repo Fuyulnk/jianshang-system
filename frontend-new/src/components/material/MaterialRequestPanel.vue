@@ -5,7 +5,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const props = defineProps({
   projectId: { type: [Number, String], default: 0 },
   mode: { type: String, default: 'project' },
-  title: { type: String, default: '材料出库申请' }
+  title: { type: String, default: '材料出库申请' },
+  canRequest: { type: Boolean, default: true },
+  disabledReason: { type: String, default: '' }
 })
 
 const emit = defineEmits(['updated'])
@@ -23,7 +25,8 @@ const userRole = computed(() => {
     return JSON.parse(atob(t.split('.')[1])).role || ''
   } catch { return '' }
 })
-const canCreate = computed(() => props.projectId && ['super_admin', 'admin', 'engineering'].includes(userRole.value))
+const canCreate = computed(() => props.projectId && props.canRequest && ['super_admin', 'admin', 'engineering'].includes(userRole.value))
+const canSeeDisabledReason = computed(() => props.projectId && props.mode === 'project' && !props.canRequest && props.disabledReason)
 const canConfirm = computed(() => ['super_admin', 'admin', 'warehouse'].includes(userRole.value))
 const visibleRequests = computed(() => requests.value)
 
@@ -172,6 +175,15 @@ onMounted(() => {
       </div>
     </template>
 
+    <el-alert
+      v-if="canSeeDisabledReason"
+      class="request-guard"
+      type="info"
+      :closable="false"
+      :title="disabledReason"
+      show-icon
+    />
+
     <div v-if="canCreate && mode === 'project'" class="request-form">
       <div class="request-note">
         <el-input v-model="note" placeholder="出库说明，如施工面积、工艺、特殊材料要求" />
@@ -236,6 +248,9 @@ onMounted(() => {
   display: grid;
   gap: 10px;
   margin-bottom: 14px;
+}
+.request-guard {
+  margin-bottom: 12px;
 }
 .request-note .el-input {
   flex: 1;

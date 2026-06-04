@@ -1,6 +1,6 @@
-# 简尚系统开发交接
+# 简尚系统开发对接
 
-这个文件用于 Codex 和 Claude 交替开发时保持上下文一致。每次接手前先读本文件和 `CLAUDE.md`，结束后补充本次交接记录。
+这个文件用于 Codex、Claude、Hermes 交替协作时保持上下文一致。每次接手前先读本文件和 `CLAUDE.md`，结束后补充本次对接记录。
 
 ## 协作约定
 
@@ -22,6 +22,15 @@
 - 前端路由：`frontend-new/src/router/index.js`
 - 布局入口：`frontend-new/src/layouts/MainLayout.vue`
 - 项目规范：`CLAUDE.md`
+
+## 关键文件索引
+
+- `handoff/简尚系统路线图V1.md`：内部开发路线图。Codex、Claude、Hermes 后续接手前必须先读，用来判断任务是否属于主线、短中长期目标、暂停功能、风险和验收标准。
+- `handoff/简尚系统路线图V1-老板版.txt`：给老板/管理层看的汇报版路线图，语气更偏工期、难点和阶段成果说明；不要把它当开发规范直接照做。
+- `handoff/门店交接到施工承接流程V1.md`：业务主线 SOP，描述门店/渠道交接到简尚施工承接、仓库、财务、归档的流程基准。
+- `handoff/animation-tasks.md`：历史遗留的动画任务记录，目前不是主线，除非用户明确要求再处理。
+- `CLAUDE.md`：项目协作规则和 Claude 侧约定。
+- `ALIGNMENT.md`：当前交接流水和阶段记录。每轮较大开发结束后要追加记录。
 
 ## 前端包体积提醒
 
@@ -64,7 +73,22 @@
 
 注意：这些改动可能是用户或其他 Agent 的已有成果。除非用户明确要求，不要清理或回滚。
 
-## 交接记录
+## 对接记录
+
+### 2026-06-03 Claude 出库联动 + 勘察表 + P1 修复 上线
+
+- 任务：Codex 完成 V1 阶段测试修复、Hermes P1 修复、勘察表关联工单、项目阶段文案对齐，Claude 部署上线。
+- 已完成：
+  - 前端构建 → rsync → PM2 重启。
+  - 部署前备份：`/root/jianshang-system-backup-20260603-204000.tgz`。
+  - 验证：`/health` 正常，`pm2 list` online。
+  - 本地固化：`git commit + git push`。
+- 包含的改动：
+  - 出库库存原子扣减 `AND stock >= ?` + 事务回滚。
+  - 勘察表生成器可关联项目工单。
+  - 阶段文案对齐总监表格线。
+  - `project_related` 角色能看到自己项目的出库申请。
+- 注意事项：无。
 
 ### 2026-06-03 Codex V1 阶段测试 + Hermes P1 修复 + 勘察表关联工单
 
@@ -499,7 +523,7 @@
   - `backend/src/routes/finance.js` — 新增 `/api/finance/analysis`，输出本月净现金流、环比、支出排行、高额支出、疑似重复流水、负余额账户和系统提醒。
   - `frontend-new/src/views/transactions/TransactionList.vue` — 增加“导出当前筛选”。
   - `frontend-new/src/views/finance/FinanceOverview.vue` — 增加“下载流水”和实时财务分析卡片。
-  - `HANDOFF.md` — 记录文件中心、财务月报、飞书 Base 字段参考和后续 `借款核销 / 报销审批 / 资金总览` 方向。
+  - `ALIGNMENT.md` — 记录文件中心、财务月报、飞书 Base 字段参考和后续 `借款核销 / 报销审批 / 资金总览` 方向。
 - 验证：
   - `node --check backend/src/routes/transactions.js`
   - `node --check backend/src/routes/finance.js`
@@ -615,7 +639,7 @@
 - 已完成：
   - `backend/node_modules/` 已从 Git 索引移除，但本地目录仍保留；后续依赖只通过 `backend/package-lock.json` 还原。
   - `.gitignore` 补充忽略 `.claude/`、旧前端 `frontend/`、临时输出 `outputs/`、误放的 `backend/src/public/` 上传头像目录。
-  - 正式纳入当前业务代码、`frontend-new/`、`backend/src/`、`CLAUDE.md`、`HANDOFF.md` 和 `handoff/` 交接文档。
+  - 正式纳入当前业务代码、`frontend-new/`、`backend/src/`、`CLAUDE.md`、`ALIGNMENT.md` 和 `handoff/` 交接文档。
 - 验证：
   - `node --check backend/src/index.js`
   - `node --check backend/src/routes/ai.js`
@@ -975,6 +999,32 @@
   - 本次未启动后端做真实接口登录联调。
   - `handoff/animation-tasks.md` 里还有交易流水折叠动画任务未处理。
 
+### 2026-06-04 Codex
+
+- 任务：项目工单状态机 V2 第一阶段，把“粗略施工阶段”改成总监流程步骤骨架。
+- 修改文件：
+  - `backend/src/routes/projects.js` — 新增总监流程状态机：门店交接待核对、待现场勘察、勘察完成待复尺、复尺完成待交底、交底完成待出库、已申请出库、已出库待进场、施工中、验收完成待回库、回库完成待工费结算、工费结算完成待成本核算、成本核算完成待财务结算、财务结算完成待归档、已归档；保留售后为独立事件；旧状态通过 alias 兼容显示和继续推进。
+  - `backend/src/routes/material-requests.js` — 出库申请限制为“交底完成待出库”；申请后项目进入“已申请出库”；取消后无剩余申请则回退“交底完成待出库”；仓库确认后进入“已出库待进场”。
+  - `backend/src/index.js` — 新建项目默认状态改为 `handover_received`。
+  - `backend/src/routes/project-imports.js` — AI 导入确认创建的项目默认进入 `handover_received`。
+  - `backend/src/routes/ai.js` — 简尚 AI 的项目状态标签、阶段筛选和 system prompt 同步新流程，明确不再使用“项目前期/准备阶段/施工执行”等旧口径。
+  - `frontend-new/src/views/projects/ProjectList.vue` — 列表阶段筛选、统计卡和看板改成“交接勘察/复尺出库/施工验收/回库核算/财务归档/售后处理”。
+  - `frontend-new/src/views/projects/ProjectDetail.vue` — 当前工作单按新状态展示当前步骤要填的内容；缺核心字段禁用推进并提示缺什么；阶段详情补齐财务归档卡片；出库面板只在正确阶段可用。
+  - `frontend-new/src/components/material/MaterialRequestPanel.vue` — 新增阶段禁用提示，项目页不能在错误阶段发起出库申请。
+- 验证：
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/routes/material-requests.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/project-imports.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 已用 Google Chrome 登录本地 `http://127.0.0.1:5173/` 验证项目列表和详情页：旧项目状态已按新口径显示为“交接/勘察-门店交接待核对”；详情页阶段条为“交接勘察/复尺出库/施工验收/回库核算/财务归档/售后处理”；当前工作单能提示缺“门店接单人”并禁用推进；出库面板在未交底阶段显示禁用原因。
+- 注意事项：
+  - 本次未上传服务器。
+  - 旧项目不会批量改库，列表/详情会按新口径显示；项目推进后会自然写入新状态。
+  - 本地验证时重启过后端 `backend npm run dev`，因为旧 3001 进程还在跑旧代码；后续看页面前也要注意前后端都加载到最新代码。
+  - 出库确认仍会真实扣库存，后续做端到端测试时优先用测试物料或临时项目，避免污染真实库存。
+  - 下一阶段建议进入“总监表格字段映射 V2”：把勘察 PPT、施工交底单、材料出库表、班组工费结算单、完工成本核算表、财务结算附件逐步映射到项目工单字段和附件检查清单。
+
 ### 2026-05-23 Codex
 
 - 任务：实现 AI 桌宠聊天窗口可缩放。
@@ -1026,7 +1076,7 @@
   - `frontend-new/src/views/accounts/AccountList.vue` — 添加骨架屏
   - `frontend-new/vite.config.js` — 添加 /avatars 代理规则
   - `CLAUDE.md` — 更新当前状态
-  - `HANDOFF.md` — 本次交接记录
+  - `ALIGNMENT.md` — 本次对接记录
 - 修复过的问题：
   1. ai.js 登录验证用了硬编码密钥 → 改为 config.verifyToken
   2. 头像保存路径指向 src/public/ → 修正为 public/
@@ -1044,8 +1094,8 @@
 
 ### 2026-05-18 Codex
 
-- 任务：读取项目结构，建立协作交接文件。
-- 修改文件：`HANDOFF.md`
+- 任务：读取项目结构，建立协作对接文件。
+- 修改文件：`ALIGNMENT.md`
 - 验证：已读取 `CLAUDE.md`、主要 package 配置、后端入口、权限/用户/角色路由、前端路由和主布局。
 - 注意事项：
   - `CLAUDE.md` 写数据库位置是 `backend/data/jianshang.db`，但当前代码实际使用 `~/fuyulnk/jianshang.db`。

@@ -1,40 +1,49 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule, canAccessProjectRecord, getDataScope } from '../utils/permissions.js'
 
-// 项目状态流转规则（各阶段子状态）
+// 项目状态流转规则：V2 对齐总监“门店交接 -> 施工承接 -> 结算归档”流程。
 const STATUS_LABELS = {
-  info_confirmed:  { phase: 1, label: '待工勘', phaseLabel: '门店交接/工勘' },
-  survey_done:     { phase: 1, label: '待确认开工条件', phaseLabel: '门店交接/工勘' },
-  condition_met:   { phase: 2, label: '待排班组', phaseLabel: '复尺交底/排班' },
-  team_assigned:   { phase: 2, label: '待开工交底', phaseLabel: '复尺交底/排班' },
-  briefing_done:   { phase: 2, label: '待出库', phaseLabel: '复尺交底/排班' },
-  material_out:    { phase: 3, label: '待进场', phaseLabel: '出库进场/施工' },
-  in_progress:     { phase: 3, label: '施工中', phaseLabel: '出库进场/施工' },
-  inspection_done: { phase: 3, label: '待验收', phaseLabel: '出库进场/施工' },
-  completed:       { phase: 4, label: '待材料回库', phaseLabel: '验收回库/结算' },
-  material_returned: { phase: 4, label: '待结算', phaseLabel: '验收回库/结算' },
-  settled:         { phase: 5, label: '待完结确认', phaseLabel: '完工归档' },
-  closed:          { phase: 5, label: '已完结', phaseLabel: '完工归档' },
+  handover_received: { phase: 1, label: '门店交接待核对', phaseLabel: '交接/勘察' },
+  survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '交接/勘察' },
+  survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '交接/勘察' },
+  recheck_done: { phase: 2, label: '复尺完成待交底', phaseLabel: '复尺/交底/出库' },
+  briefing_done: { phase: 2, label: '交底完成待出库', phaseLabel: '复尺/交底/出库' },
+  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/交底/出库' },
+  material_out: { phase: 3, label: '已出库待进场', phaseLabel: '进场/施工/验收' },
+  in_progress: { phase: 3, label: '施工中', phaseLabel: '进场/施工/验收' },
+  inspection_done: { phase: 3, label: '验收完成待回库', phaseLabel: '进场/施工/验收' },
+  material_returned: { phase: 4, label: '回库完成待工费结算', phaseLabel: '回库/工费/成本' },
+  labor_settled: { phase: 4, label: '工费结算完成待成本核算', phaseLabel: '回库/工费/成本' },
+  cost_checked: { phase: 4, label: '成本核算完成待财务结算', phaseLabel: '回库/工费/成本' },
+  finance_settled: { phase: 5, label: '财务结算完成待归档', phaseLabel: '财务/归档' },
+  archived: { phase: 5, label: '已归档', phaseLabel: '财务/归档' },
   repair_requested: { phase: 6, label: '售后待安排', phaseLabel: '售后处理' },
   repair_assigned:  { phase: 6, label: '售后处理中', phaseLabel: '售后处理' },
   repair_done:      { phase: 6, label: '售后已完成', phaseLabel: '售后处理' },
 }
 
-const STATUS_ORDER = Object.keys(STATUS_LABELS)
+const LEGACY_STATUS_ALIASES = {
+  info_confirmed: 'handover_received',
+  condition_met: 'recheck_done',
+  team_assigned: 'recheck_done',
+  completed: 'inspection_done',
+  settled: 'finance_settled',
+  closed: 'archived'
+}
 
 const PROJECT_TRANSITIONS = {
-  info_confirmed: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], required: ['handover', 'survey'] },
-  survey_done: { next: 'condition_met', roles: ['super_admin', 'admin', 'finance'] },
-  condition_met: { next: 'team_assigned', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee'] },
-  team_assigned: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['briefing_date'] },
-  briefing_done: { next: 'material_out', roles: ['super_admin', 'admin', 'warehouse'] },
+  handover_received: { next: 'survey_pending', roles: ['super_admin', 'admin', 'engineering'], required: ['handover'] },
+  survey_pending: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], required: ['survey'] },
+  survey_done: { next: 'recheck_done', roles: ['super_admin', 'admin', 'engineering'], required: ['condition_note'] },
+  recheck_done: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee', 'briefing_date'] },
   material_out: { next: 'in_progress', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['start_date'] },
   in_progress: { next: 'inspection_done', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['construction_note'] },
-  inspection_done: { next: 'completed', roles: ['super_admin', 'admin', 'engineering'], required: ['end_date'] },
-  completed: { next: 'material_returned', roles: ['super_admin', 'admin', 'warehouse'] },
-  material_returned: { next: 'closed', roles: ['super_admin', 'admin', 'finance'], required: ['settlement_amount'] },
-  settled: { next: 'closed', roles: ['super_admin', 'admin', 'finance'] },
-  closed: { next: 'repair_requested', roles: ['super_admin', 'admin', 'engineering'] },
+  inspection_done: { next: 'material_returned', roles: ['super_admin', 'admin', 'warehouse', 'engineering'], required: ['end_date', 'material_return'] },
+  material_returned: { next: 'labor_settled', roles: ['super_admin', 'admin', 'finance', 'engineering'] },
+  labor_settled: { next: 'cost_checked', roles: ['super_admin', 'admin', 'finance'] },
+  cost_checked: { next: 'finance_settled', roles: ['super_admin', 'admin', 'finance'], required: ['settlement_amount'] },
+  finance_settled: { next: 'archived', roles: ['super_admin', 'admin', 'finance'] },
+  archived: { next: 'repair_requested', roles: ['super_admin', 'admin', 'engineering'] },
   repair_requested: { next: 'repair_assigned', roles: ['super_admin', 'admin', 'engineering'] },
   repair_assigned: { next: 'repair_done', roles: ['super_admin', 'admin', 'engineering'], required: ['construction_note'] },
 }
@@ -60,7 +69,10 @@ export default function projectRoutes(server, db) {
     const activeProjects = db.prepare(`
       SELECT id, name, assignee_user_id, crew_member_user_ids, status, start_date, expected_end_date
       FROM projects
-      WHERE status IN ('team_assigned', 'briefing_done', 'material_out', 'in_progress', 'inspection_done')
+      WHERE status IN (
+        'recheck_done', 'team_assigned', 'briefing_done', 'material_requested',
+        'material_out', 'in_progress', 'inspection_done'
+      )
       ORDER BY updated_at DESC
     `).all()
     const enrichedUsers = users.map(user => {
@@ -126,14 +138,13 @@ export default function projectRoutes(server, db) {
     }
 
     if (status) {
-      sql += ' AND p.status = ?'
-      params.push(status)
+      const statuses = statusesForStatusFilter(status)
+      sql += ` AND p.status IN (${statuses.map(() => '?').join(',')})`
+      params.push(...statuses)
     }
 
     if (phase) {
-      const phaseStatuses = Object.entries(STATUS_LABELS)
-        .filter(([, v]) => v.phase === parseInt(phase))
-        .map(([k]) => k)
+      const phaseStatuses = statusesForPhase(phase)
       if (phaseStatuses.length) {
         sql += ` AND p.status IN (${phaseStatuses.map(() => '?').join(',')})`
         params.push(...phaseStatuses)
@@ -144,12 +155,7 @@ export default function projectRoutes(server, db) {
     const list = db.prepare(sql).all(...params)
 
     // 附加状态标签
-    const enriched = list.map(p => ({
-      ...p,
-      status_label: STATUS_LABELS[p.status]?.label || p.status,
-      phase_label: STATUS_LABELS[p.status]?.phaseLabel || '',
-      phase: STATUS_LABELS[p.status]?.phase || 0,
-    }))
+    const enriched = list.map(decorateProjectStatus)
 
     return { success: true, data: enriched }
   })
@@ -175,9 +181,9 @@ export default function projectRoutes(server, db) {
         name, customer, phone, address, address_province, address_city, address_detail,
         source, order_taker, order_date, external_order_no, handover_note,
         total_amount, deposit_amount,
-        manager_user_id, assignee_user_id, created_by
+        manager_user_id, assignee_user_id, status, created_by
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       name,
       customer,
@@ -195,6 +201,7 @@ export default function projectRoutes(server, db) {
       toNumber(deposit_amount),
       toInt(manager_user_id),
       toInt(assignee_user_id),
+      'handover_received',
       userId
     )
 
@@ -221,9 +228,7 @@ export default function projectRoutes(server, db) {
       return
     }
 
-    project.status_label = STATUS_LABELS[project.status]?.label || project.status
-    project.phase_label = STATUS_LABELS[project.status]?.phaseLabel || ''
-    project.phase = STATUS_LABELS[project.status]?.phase || 0
+    Object.assign(project, decorateProjectStatus(project))
     project.logs = db.prepare('SELECT * FROM project_logs WHERE project_id = ? ORDER BY created_at DESC LIMIT 50').all(project.id)
 
     return { success: true, data: project }
@@ -296,17 +301,17 @@ export default function projectRoutes(server, db) {
       return
     }
 
-    const { status } = request.body
-    if (!STATUS_LABELS[status]) return { success: false, message: '无效状态' }
-    const guard = canAdvanceProject(request.user, project, status)
+    const targetStatus = canonicalProjectStatus(request.body.status)
+    if (!STATUS_LABELS[targetStatus]) return { success: false, message: '无效状态' }
+    const guard = canAdvanceProject(request.user, project, targetStatus)
     if (!guard.ok) {
       reply.code(403).send({ success: false, message: guard.message })
       return
     }
 
-    db.prepare("UPDATE projects SET status = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(status, project.id)
+    db.prepare("UPDATE projects SET status = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(targetStatus, project.id)
     addLog(db, project.id, '状态变更', request.user.username,
-      `状态更新: ${STATUS_LABELS[project.status]?.label || project.status} → ${STATUS_LABELS[status]?.label || status}`)
+      `状态更新: ${statusMeta(project.status).label} → ${statusMeta(targetStatus).label}`)
 
     return { success: true }
   })
@@ -349,6 +354,51 @@ function addLog(db, projectId, action, operator, content) {
   }
 }
 
+function canonicalProjectStatus(status) {
+  return LEGACY_STATUS_ALIASES[status] || status
+}
+
+function statusMeta(status) {
+  const canonical = canonicalProjectStatus(status)
+  return STATUS_LABELS[canonical] || { phase: 0, label: status || '未知状态', phaseLabel: '' }
+}
+
+function decorateProjectStatus(project) {
+  const rawStatus = project.status
+  const canonicalStatus = canonicalProjectStatus(rawStatus)
+  const meta = statusMeta(rawStatus)
+  return {
+    ...project,
+    raw_status: rawStatus,
+    status: canonicalStatus,
+    status_label: meta.label,
+    phase_label: meta.phaseLabel,
+    phase: meta.phase
+  }
+}
+
+function statusesForStatusFilter(status) {
+  const canonical = canonicalProjectStatus(status)
+  const statuses = new Set([canonical])
+  for (const [legacy, target] of Object.entries(LEGACY_STATUS_ALIASES)) {
+    if (target === canonical) statuses.add(legacy)
+  }
+  return [...statuses]
+}
+
+function statusesForPhase(phase) {
+  const phaseNumber = parseInt(phase)
+  const statuses = new Set(
+    Object.entries(STATUS_LABELS)
+      .filter(([, value]) => value.phase === phaseNumber)
+      .map(([key]) => key)
+  )
+  for (const [legacy, target] of Object.entries(LEGACY_STATUS_ALIASES)) {
+    if (STATUS_LABELS[target]?.phase === phaseNumber) statuses.add(legacy)
+  }
+  return [...statuses]
+}
+
 function canSeeAllProjects(db, user) {
   return getDataScope(db, user, 'projects') === 'all'
 }
@@ -368,7 +418,8 @@ function canUpdateProject(db, user, project) {
 }
 
 function canAdvanceProject(user, project, targetStatus) {
-  const transition = PROJECT_TRANSITIONS[project.status]
+  const currentStatus = canonicalProjectStatus(project.status)
+  const transition = PROJECT_TRANSITIONS[currentStatus]
   if (!transition || transition.next !== targetStatus) {
     return { ok: false, message: '只能按项目工单流程顺序推进状态' }
   }
@@ -393,9 +444,11 @@ function missingRequired(project, required) {
     if (key === 'survey' && !project.survey_report && !project.survey_date) missing.push('工勘记录或工勘日期')
     if (key === 'assignee' && !project.assignee_user_id && !project.team_leader && !hasCrewMembers(project)) missing.push('施工负责人、班组长或施工成员')
     if (key === 'briefing_date' && !project.briefing_date) missing.push('交底日期')
+    if (key === 'condition_note' && !project.condition_note) missing.push('复尺/开工条件复核记录')
     if (key === 'start_date' && !project.start_date) missing.push('开工日期')
     if (key === 'construction_note' && !project.construction_note) missing.push('施工/维修备注')
     if (key === 'end_date' && !project.end_date) missing.push('完工日期')
+    if (key === 'material_return' && project.material_return_status !== 'done') missing.push('材料回库状态')
     if (key === 'settlement_amount' && !Number(project.settlement_amount)) missing.push('结算金额')
   }
   return missing

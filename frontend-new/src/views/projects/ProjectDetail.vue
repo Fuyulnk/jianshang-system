@@ -74,7 +74,7 @@
           <template #header>
             <div class="summary-header">
               <span>施工承接状态</span>
-              <el-tag :type="project.status === 'closed' ? 'success' : 'primary'" size="small">{{ project.status_label }}</el-tag>
+              <el-tag :type="project.status === 'archived' ? 'success' : 'primary'" size="small">{{ project.status_label }}</el-tag>
             </div>
           </template>
           <div class="execution-list">
@@ -109,12 +109,19 @@
               <h3>{{ currentTask.title }}</h3>
               <p>{{ currentTask.desc }}</p>
             </div>
-            <el-tag :type="project.status === 'closed' ? 'success' : 'primary'">{{ project.status_label }}</el-tag>
+            <el-tag :type="project.status === 'archived' ? 'success' : 'primary'">{{ project.status_label }}</el-tag>
           </div>
         </template>
 
         <el-form :model="editForm" label-position="top" class="work-form">
-          <template v-if="project.status === 'info_confirmed'">
+          <template v-if="project.status === 'handover_received'">
+            <div class="stage-hint">
+              <strong>先核对门店交接资料。</strong>
+              <span>来源、接单人、电话和详细地址补齐后，才能安排现场勘察。</span>
+            </div>
+          </template>
+
+          <template v-else-if="project.status === 'survey_pending'">
             <el-row :gutter="16">
               <el-col :span="8"><el-form-item label="工勘日期"><el-input v-model="editForm.survey_date" placeholder="2026-01-01" /></el-form-item></el-col>
               <el-col :span="16"><el-form-item label="工勘记录"><el-input v-model="editForm.survey_report" placeholder="现场面积、基层情况、特殊工艺等" /></el-form-item></el-col>
@@ -122,10 +129,10 @@
           </template>
 
           <template v-else-if="project.status === 'survey_done'">
-            <el-form-item label="开工条件备注"><el-input v-model="editForm.condition_note" type="textarea" :rows="2" placeholder="现场是否具备进场条件、水电/保护/基层等情况" /></el-form-item>
+            <el-form-item label="复尺/开工条件复核"><el-input v-model="editForm.condition_note" type="textarea" :rows="2" placeholder="复尺面积、现场是否具备进场条件、水电/保护/基层等情况" /></el-form-item>
           </template>
 
-          <template v-else-if="project.status === 'condition_met'">
+          <template v-else-if="project.status === 'recheck_done'">
             <el-row :gutter="16">
               <el-col :span="8">
                 <el-form-item label="班组长"><el-input v-model="editForm.team_leader" placeholder="班组长姓名" /></el-form-item>
@@ -151,27 +158,21 @@
                 </el-option>
               </el-select>
             </el-form-item>
-          </template>
-
-          <template v-else-if="project.status === 'team_assigned'">
             <el-form-item label="开工交底日期"><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
           </template>
 
           <template v-else-if="project.status === 'briefing_done'">
-            <el-row :gutter="16">
-              <el-col :span="8">
-                <el-form-item label="材料出库状态">
-                  <el-select v-model="editForm.material_out_status" style="width:100%">
-                    <el-option label="待出库" value="pending" />
-                    <el-option label="已申请" value="requested" />
-                    <el-option label="已出库" value="done" />
-                  </el-select>
-                </el-form-item>
-              </el-col>
-              <el-col :span="16">
-                <el-form-item label="出库备注"><el-input v-model="editForm.material_out_note" placeholder="后续将联动仓库出库单，当前先记录说明" /></el-form-item>
-              </el-col>
-            </el-row>
+            <div class="stage-hint">
+              <strong>交底已完成，可以发起材料出库。</strong>
+              <span>请在下方“材料出库联动”里创建出库申请；仓库确认后，工单自动进入已出库待进场。</span>
+            </div>
+          </template>
+
+          <template v-else-if="project.status === 'material_requested'">
+            <div class="stage-hint">
+              <strong>已申请出库，等待仓库确认。</strong>
+              <span>仓库确认会扣减库存并把工单推进到已出库待进场；如取消申请，会回退到交底完成待出库。</span>
+            </div>
           </template>
 
           <template v-else-if="project.status === 'material_out'">
@@ -201,9 +202,6 @@
               <el-col :span="12"><el-form-item label="完工日期"><el-input v-model="editForm.end_date" placeholder="2026-01-01" /></el-form-item></el-col>
               <el-col :span="12"><el-form-item label="验收日期"><el-input v-model="editForm.acceptance_date" placeholder="2026-01-01" /></el-form-item></el-col>
             </el-row>
-          </template>
-
-          <template v-else-if="project.status === 'completed'">
             <el-row :gutter="16">
               <el-col :span="8">
                 <el-form-item label="材料回库状态">
@@ -221,6 +219,20 @@
           </template>
 
           <template v-else-if="project.status === 'material_returned'">
+            <div class="stage-hint">
+              <strong>回库完成，等待工费结算。</strong>
+              <span>本阶段先作为流程卡点存在，后续会接入施工班组工费结算单。</span>
+            </div>
+          </template>
+
+          <template v-else-if="project.status === 'labor_settled'">
+            <div class="stage-hint">
+              <strong>工费结算已完成，等待成本核算。</strong>
+              <span>本阶段先保留附件和状态，下一阶段再结构化成本核算字段。</span>
+            </div>
+          </template>
+
+          <template v-else-if="project.status === 'cost_checked'">
             <el-form-item label="结算金额">
               <div class="money-editor">
                 <el-input v-model="editForm.settlement_amount" type="number" placeholder="请输入最终结算金额">
@@ -231,12 +243,12 @@
             </el-form-item>
           </template>
 
-          <template v-else-if="project.status === 'closed' || project.status === 'settled'">
+          <template v-else-if="project.status === 'finance_settled' || project.status === 'archived'">
             <div class="closed-state">
               <el-icon><Select /></el-icon>
               <div>
-                <strong>工单已完结</strong>
-                <span>如后续客户报修，可单独发起售后，不影响主工程完结。</span>
+                <strong>{{ project.status === 'archived' ? '工单已归档' : '财务已结算，待归档' }}</strong>
+                <span>如后续客户报修，可单独发起售后，不影响主工程归档。</span>
               </div>
             </div>
           </template>
@@ -246,16 +258,16 @@
           </template>
         </el-form>
 
-        <div v-if="project.status === 'info_confirmed' && requiredMissingFields.length" class="task-blocker">
+        <div v-if="currentMissingFields.length" class="task-blocker">
           <strong>当前不能推进：</strong>
-          <span>请先补齐 {{ requiredMissingFields.join('、') }}。</span>
+          <span>请先补齐 {{ currentMissingFields.join('、') }}。</span>
         </div>
 
         <div class="work-actions">
-          <el-button v-if="currentTask.next && canRunCurrentTask" type="primary" size="large" :loading="saving" @click="saveAndAdvance(currentTask.next)">
+          <el-button v-if="currentTask.next && canRunCurrentTask" type="primary" size="large" :loading="saving" :disabled="currentMissingFields.length > 0" @click="saveAndAdvance(currentTask.next)">
             {{ currentTask.action }}
           </el-button>
-          <el-button v-if="(project.status === 'closed' || project.status === 'settled') && canStartRepair" type="warning" plain @click="advanceStatus('repair_requested')">
+          <el-button v-if="project.status === 'archived' && canStartRepair" type="warning" plain @click="advanceStatus('repair_requested')">
             发起售后单
           </el-button>
           <el-button plain @click="showEdit = true" v-if="canEditProject">编辑完整资料</el-button>
@@ -266,6 +278,8 @@
         :project-id="project.id"
         mode="project"
         title="材料出库联动"
+        :can-request="project.status === 'briefing_done'"
+        :disabled-reason="materialRequestDisabledReason"
         @updated="fetchDetail"
       />
 
@@ -278,11 +292,11 @@
 
       <!-- 阶段详情 -->
       <div class="phase-panels">
-        <!-- 阶段1: 门店交接/工勘 -->
+        <!-- 阶段1: 门店交接/勘察 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Document /></el-icon> 门店交接 / 工勘</span>
+              <span><el-icon><Document /></el-icon> 门店交接 / 勘察</span>
               <el-tag size="small" :type="project.phase >= 1 ? 'success' : 'info'">{{ project.phase >= 1 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -298,11 +312,11 @@
           </el-descriptions>
         </el-card>
 
-        <!-- 阶段2: 复尺交底/排班 -->
+        <!-- 阶段2: 复尺交底/出库 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Tools /></el-icon> 复尺交底 / 排班</span>
+              <span><el-icon><Tools /></el-icon> 复尺交底 / 出库</span>
               <el-tag size="small" :type="project.phase >= 2 ? 'success' : 'info'">{{ project.phase >= 2 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -319,11 +333,11 @@
           </el-descriptions>
         </el-card>
 
-        <!-- 阶段3: 出库进场/施工 -->
+        <!-- 阶段3: 进场施工/验收 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><House /></el-icon> 出库进场 / 施工</span>
+              <span><el-icon><House /></el-icon> 进场施工 / 验收</span>
               <el-tag size="small" :type="project.phase >= 3 ? 'success' : 'info'">{{ project.phase >= 3 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -336,11 +350,11 @@
           </el-descriptions>
         </el-card>
 
-        <!-- 阶段4: 验收回库/结算 -->
+        <!-- 阶段4: 回库工费/成本 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Select /></el-icon> 验收回库 / 结算</span>
+              <span><el-icon><Select /></el-icon> 回库工费 / 成本</span>
               <el-tag size="small" :type="project.phase >= 4 ? 'success' : 'info'">{{ project.phase >= 4 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -349,8 +363,24 @@
             <el-descriptions-item label="验收日期">{{ project.acceptance_date || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="合同金额">{{ project.total_amount?.toFixed(2) }} 元</el-descriptions-item>
             <el-descriptions-item label="定金">{{ project.deposit_amount?.toFixed(2) }} 元</el-descriptions-item>
-            <el-descriptions-item label="结算金额">{{ project.settlement_amount?.toFixed(2) }} 元</el-descriptions-item>
             <el-descriptions-item label="材料回库">{{ materialStatusLabel(project.material_return_status) }}</el-descriptions-item>
+            <el-descriptions-item label="回库备注">{{ project.material_return_note || '未填写' }}</el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
+        <!-- 阶段5: 财务归档 -->
+        <el-card class="phase-card">
+          <template #header>
+            <div class="card-header">
+              <span><el-icon><Edit /></el-icon> 财务结算 / 归档</span>
+              <el-tag size="small" :type="project.phase >= 5 ? 'success' : 'info'">{{ project.phase >= 5 ? '已完成' : '待进行' }}</el-tag>
+            </div>
+          </template>
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="工费结算">{{ project.phase >= 4 ? '按流程待附件核对' : '未开始' }}</el-descriptions-item>
+            <el-descriptions-item label="成本核算">{{ ['cost_checked', 'finance_settled', 'archived'].includes(project.status) ? '已完成' : '未完成' }}</el-descriptions-item>
+            <el-descriptions-item label="结算金额">{{ project.settlement_amount?.toFixed(2) }} 元</el-descriptions-item>
+            <el-descriptions-item label="归档状态">{{ project.status === 'archived' ? '已归档' : '未归档' }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
 
@@ -545,11 +575,12 @@ const editForm = ref({})
 const assignees = ref([])
 
 const phases = [
-  { phase: 1, label: '门店交接/工勘' },
-  { phase: 2, label: '复尺交底/排班' },
-  { phase: 3, label: '出库进场/施工' },
-  { phase: 4, label: '验收回库/结算' },
-  { phase: 5, label: '完工归档' },
+  { phase: 1, label: '交接勘察' },
+  { phase: 2, label: '复尺出库' },
+  { phase: 3, label: '施工验收' },
+  { phase: 4, label: '回库核算' },
+  { phase: 5, label: '财务归档' },
+  { phase: 6, label: '售后处理' },
 ]
 
 // 当前用户角色
@@ -606,40 +637,51 @@ const TASK_FALLBACK = {
 }
 
 const TASKS = {
-  info_confirmed: {
-    title: '核对门店资料并完成工勘',
-    desc: '先补齐来源、接单人、业主电话和地址，再填写工勘记录，或从工程部工作台关联勘察表。',
-    action: '资料齐全，标记工勘完成',
+  handover_received: {
+    title: '门店交接资料核对',
+    desc: '确认来源、接单人、电话和详细地址，资料齐后安排现场勘察。',
+    action: '资料核对完成，安排勘察',
+    next: 'survey_pending',
+    roles: ['super_admin', 'admin', 'engineering'],
+    required: ['handover']
+  },
+  survey_pending: {
+    title: '现场勘察',
+    desc: '填写勘察日期和现场记录，或从工程部工作台关联勘察表。',
+    action: '勘察完成，等待复尺',
     next: 'survey_done',
-    roles: ['super_admin', 'admin', 'engineering']
+    roles: ['super_admin', 'admin', 'engineering'],
+    required: ['survey']
   },
   survey_done: {
-    title: '确认开工条件/复尺',
-    desc: '记录现场保护、水电、基层、复尺结果和进场条件，确认后进入排班交底。',
-    action: '确认条件，进入排班',
-    next: 'condition_met',
-    roles: ['super_admin', 'admin', 'finance']
+    title: '复尺和开工条件复核',
+    desc: '记录复尺面积、基层、水电、保护和进场条件，确认后进入交底排班。',
+    action: '复尺完成，进入交底',
+    next: 'recheck_done',
+    roles: ['super_admin', 'admin', 'engineering'],
+    required: ['condition_note']
   },
-  condition_met: {
-    title: '安排施工组与班组长',
-    desc: '安排班组长、施工负责人和施工成员，系统会提示人员是否已被其他工单占用。',
-    action: '保存班组，进入交底',
-    next: 'team_assigned',
-    roles: ['super_admin', 'admin', 'engineering']
-  },
-  team_assigned: {
-    title: '完成开工交底',
-    desc: '填写交底日期，确认班组已知道施工范围、材料、工艺、保护和现场注意事项。',
-    action: '交底完成，转仓库出库',
+  recheck_done: {
+    title: '安排施工组并完成交底',
+    desc: '安排班组长、施工负责人、施工成员和交底日期，交底完成后才能出库。',
+    action: '交底完成，等待出库',
     next: 'briefing_done',
-    roles: ['super_admin', 'admin', 'engineering']
+    roles: ['super_admin', 'admin', 'engineering'],
+    required: ['assignee', 'briefing_date']
   },
   briefing_done: {
-    title: '仓库确认材料出库',
-    desc: '按项目工单发起出库，仓库确认后联动库存并进入待进场。',
-    action: '确认出库，等待进场',
-    next: 'material_out',
-    roles: ['super_admin', 'admin', 'warehouse']
+    title: '发起材料出库',
+    desc: '请在材料出库联动中创建申请。仓库确认后系统自动进入已出库待进场。',
+    action: '',
+    next: '',
+    roles: []
+  },
+  material_requested: {
+    title: '等待仓库确认出库',
+    desc: '仓库确认会扣减库存并推进到已出库待进场；取消申请会回退到交底完成待出库。',
+    action: '',
+    next: '',
+    roles: []
   },
   material_out: {
     title: '确认进场开工',
@@ -647,7 +689,8 @@ const TASKS = {
     action: '确认进场，开始施工',
     next: 'in_progress',
     roles: ['super_admin', 'admin', 'engineering', 'employee'],
-    assignedOnly: true
+    assignedOnly: true,
+    required: ['start_date']
   },
   in_progress: {
     title: '记录施工过程',
@@ -655,38 +698,48 @@ const TASKS = {
     action: '施工记录完成，进入验收',
     next: 'inspection_done',
     roles: ['super_admin', 'admin', 'engineering', 'employee'],
-    assignedOnly: true
+    assignedOnly: true,
+    required: ['construction_note']
   },
   inspection_done: {
-    title: '完工验收',
-    desc: '填写完工和验收日期，确认现场已具备交付条件。',
-    action: '验收完成，转材料回库',
-    next: 'completed',
-    roles: ['super_admin', 'admin', 'engineering']
-  },
-  completed: {
-    title: '确认材料回库',
-    desc: '记录余料、损耗和回库状态，后续会联动仓库回库单和项目成本。',
-    action: '确认回库，转财务结算',
+    title: '验收完成，处理材料回库',
+    desc: '填写完工/验收日期并确认余料回库，后续会联动仓库回库单和项目成本。',
+    action: '回库完成，转工费结算',
     next: 'material_returned',
-    roles: ['super_admin', 'admin', 'warehouse']
+    roles: ['super_admin', 'admin', 'warehouse', 'engineering'],
+    required: ['end_date', 'material_return']
   },
   material_returned: {
+    title: '工费结算',
+    desc: '本阶段先作为流程节点存在，后续接施工班组工费结算单。',
+    action: '工费结算完成',
+    next: 'labor_settled',
+    roles: ['super_admin', 'admin', 'finance', 'engineering']
+  },
+  labor_settled: {
+    title: '成本核算',
+    desc: '本阶段先作为流程节点存在，下一阶段再接入成本核算表结构化字段。',
+    action: '成本核算完成',
+    next: 'cost_checked',
+    roles: ['super_admin', 'admin', 'finance']
+  },
+  cost_checked: {
     title: '财务结算',
-    desc: '填写最终结算金额后，可以直接完结项目；没有售后也能正常闭环。',
-    action: '结算完成，完结工单',
-    next: 'closed',
+    desc: '填写最终结算金额，确认后进入待归档。',
+    action: '财务结算完成',
+    next: 'finance_settled',
+    roles: ['super_admin', 'admin', 'finance'],
+    required: ['settlement_amount']
+  },
+  finance_settled: {
+    title: '归档确认',
+    desc: '财务结算完成后，确认资料和附件齐全即可归档。',
+    action: '确认归档',
+    next: 'archived',
     roles: ['super_admin', 'admin', 'finance']
   },
-  settled: {
-    title: '确认工单完结',
-    desc: '旧工单的已结算状态可以补确认后完结。',
-    action: '确认工单完结',
-    next: 'closed',
-    roles: ['super_admin', 'admin', 'finance']
-  },
-  closed: {
-    title: '工单已完结',
+  archived: {
+    title: '工单已归档',
     desc: '主工程流程已经结束。后续客户报修时再单独发起售后。',
     action: '',
     next: '',
@@ -724,6 +777,16 @@ const canRunCurrentTask = computed(() => {
   if (currentTask.value.assignedOnly && ['employee', 'engineering'].includes(userRole)) return isAssignedEmployee.value
   return true
 })
+const currentMissingFields = computed(() => missingForTask(currentTask.value.required || []))
+const materialRequestDisabledReason = computed(() => {
+  if (!project.value) return ''
+  if (project.value.status === 'briefing_done') return ''
+  if (project.value.status === 'material_requested') return '已发起出库申请，等待仓库确认或取消后才能重新申请。'
+  if (['material_out', 'in_progress', 'inspection_done', 'material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived'].includes(project.value.status)) {
+    return '该工单已经过了出库申请阶段。'
+  }
+  return '需要先完成复尺、施工组安排和开工交底，才能发起材料出库。'
+})
 const canStartRepair = computed(() => ['super_admin', 'admin', 'engineering'].includes(userRole))
 
 function token() { return localStorage.getItem('token') }
@@ -733,6 +796,25 @@ function userOptionLabel(user) {
   const name = user.real_name || user.username
   const role = user.role_label || user.role
   return `${name}${role ? `（${role}）` : ''}`
+}
+
+function missingForTask(required) {
+  if (!project.value) return []
+  const merged = { ...project.value, ...editForm.value }
+  const missing = []
+  for (const key of required) {
+    if (key === 'handover') missing.push(...requiredMissingFields.value)
+    if (key === 'survey' && !merged.survey_report && !merged.survey_date) missing.push('工勘记录或工勘日期')
+    if (key === 'condition_note' && !String(merged.condition_note || '').trim()) missing.push('复尺/开工条件复核记录')
+    if (key === 'assignee' && !merged.assignee_user_id && !merged.team_leader && !parseCrewMemberIds(merged.crew_member_user_ids).length) missing.push('施工负责人、班组长或施工成员')
+    if (key === 'briefing_date' && !merged.briefing_date) missing.push('交底日期')
+    if (key === 'start_date' && !merged.start_date) missing.push('开工日期')
+    if (key === 'construction_note' && !String(merged.construction_note || '').trim()) missing.push('施工/维修备注')
+    if (key === 'end_date' && !merged.end_date) missing.push('完工日期')
+    if (key === 'material_return' && merged.material_return_status !== 'done') missing.push('材料回库状态')
+    if (key === 'settlement_amount' && !Number(merged.settlement_amount)) missing.push('结算金额')
+  }
+  return [...new Set(missing)]
 }
 
 async function fetchDetail() {
@@ -764,7 +846,7 @@ async function fetchAssignees() {
     })
     const json = await res.json()
     if (json.success) assignees.value = json.data
-  } catch {}
+  } catch (e) { console.warn('加载可分配人员失败', e) }
 }
 
 async function advanceStatus(statusKey, throwOnError = false) {
@@ -1017,6 +1099,21 @@ onMounted(() => {
 }
 .work-form {
   max-width: 960px;
+}
+.stage-hint {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 86%, var(--bg-page));
+}
+.stage-hint strong {
+  color: var(--text-primary);
+}
+.stage-hint span {
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 .work-actions {
   display: flex;
