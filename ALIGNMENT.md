@@ -109,6 +109,20 @@
 
 ## 对接记录
 
+### 2026-06-05 Claude 部署 项目供货单V1 + 工单分支重构 + 权限修复
+
+- 任务：项目供货单 V1、工单分支首页（施工/供货）、permissions.js data_scope 修复、products.js 404 校验，由 Claude 部署上线。
+- 修改文件：24 文件，+4008/-377，5 新文件。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `npm run build`（frontend-new/，成功；Vite chunk 警告）
+  - rsync 前端 dist + 后端 src → PM2 restart
+  - `/health` 返回正常
+  - 注意：PM2 重启后端口因环境变量残留在 3001，已 `PORT=3000 pm2 restart --update-env` 修复
+- 注意事项：
+  - 供货单 V1 只做流程和日志，不自动扣库存。
+  - 已推 GitHub：`52c15ec` → `main`
+
 ### 2026-06-05 Codex 修复 Hermes 终审 P1
 
 - 任务：修复 Hermes 对“项目工单表格体验、供货单 V1 和完工闭环”终审发现的 3 个 P1，并补对接文件结构规则。
