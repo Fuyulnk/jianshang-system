@@ -57,9 +57,58 @@ db.exec(`CREATE TABLE IF NOT EXISTS products (
   name TEXT NOT NULL,
   category TEXT,
   unit TEXT DEFAULT 'kg',
+  spec TEXT DEFAULT '',
+  unit_price REAL DEFAULT 0,
+  price_unit TEXT DEFAULT '',
   stock REAL DEFAULT 0,
   min_stock REAL DEFAULT 0,
   updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+)`)
+
+db.exec(`CREATE TABLE IF NOT EXISTS supply_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_no TEXT UNIQUE NOT NULL,
+  customer TEXT NOT NULL,
+  phone TEXT DEFAULT '',
+  source TEXT DEFAULT '',
+  address TEXT DEFAULT '',
+  amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'ordered',
+  note TEXT DEFAULT '',
+  created_by INTEGER DEFAULT 0,
+  finance_confirmed_by INTEGER DEFAULT 0,
+  warehouse_confirmed_by INTEGER DEFAULT 0,
+  shipped_by INTEGER DEFAULT 0,
+  completed_by INTEGER DEFAULT 0,
+  finance_confirmed_at TEXT DEFAULT '',
+  warehouse_confirmed_at TEXT DEFAULT '',
+  shipped_at TEXT DEFAULT '',
+  completed_at TEXT DEFAULT '',
+  created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+  updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+)`)
+
+db.exec(`CREATE TABLE IF NOT EXISTS supply_order_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL,
+  product_id INTEGER DEFAULT 0,
+  product_name TEXT NOT NULL,
+  category TEXT DEFAULT '',
+  unit TEXT DEFAULT '',
+  quantity REAL DEFAULT 0,
+  unit_price REAL DEFAULT 0,
+  amount REAL DEFAULT 0,
+  note TEXT DEFAULT '',
+  created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+)`)
+
+db.exec(`CREATE TABLE IF NOT EXISTS supply_order_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  operator TEXT DEFAULT '',
+  content TEXT DEFAULT '',
+  created_at DATETIME DEFAULT (datetime('now', 'localtime'))
 )`)
 
 db.exec(`CREATE TABLE IF NOT EXISTS employees (

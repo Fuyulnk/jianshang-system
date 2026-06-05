@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from 'fs'
 import crypto from 'crypto'
 import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule, canAccessProjectRecord, getDataScope } from '../utils/permissions.js'
-import { buildProjectDraft, missingBriefingFields, parseBriefingDocument, parseMaterialOutDocument } from '../utils/projectDocumentImport.js'
+import { buildProjectDraft, emptyDeliveryDocument, missingBriefingFields, parseBriefingDocument, parseDeliveryDocument, parseMaterialOutDocument } from '../utils/projectDocumentImport.js'
 import {
   diffDraft,
   missingCoreFields,
@@ -21,7 +21,8 @@ const __dirname = dirname(__filename)
 const UPLOAD_DIR = join(__dirname, '../../data/uploads')
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_MONEY_VALUE = 100000000
-const ALLOWED_BRIEFING_ATTACHMENT_EXTS = new Set(['.csv', '.xls', '.xlsx', '.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx'])
+const ALLOWED_BRIEFING_ATTACHMENT_EXTS = new Set(['.csv', '.xls', '.xlsx', '.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.ppt', '.pptx'])
+const DELIVERY_DOCUMENT_TYPES = new Set(['survey_initial', 'survey_recheck', 'briefing', 'material_io', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'])
 
 export default function projectImportRoutes(server, db) {
   server.post('/api/briefing-imports/parse', async (request, reply) => {
@@ -76,68 +77,79 @@ export default function projectImportRoutes(server, db) {
       return
     }
 
-    const parsedData = request.body?.parsed_data || {}
-    const confirmedData = normalizeBriefingForm(request.body?.confirmed_data || parsedData.form_data || {})
-    const draft = buildProjectDraft(confirmedData)
-    const warnings = Array.isArray(request.body?.warnings) ? request.body.warnings : parsedData.warnings || []
-    const missing = missingBriefingFields(draft, confirmedData)
-    const duplicates = findDuplicates(db, draft, request.user)
-    if (!draft.name || !draft.customer) return { success: false, message: '项目名称和客户姓名必填' }
+    try {
+      const parsedData = request.body?.parsed_data || {}
+      const confirmedData = normalizeBriefingForm(request.body?.confirmed_data || parsedData.form_data || {})
+      const draft = buildProjectDraft(confirmedData)
+      const warnings = Array.isArray(request.body?.warnings) ? request.body.warnings : parsedData.warnings || []
+      const missing = missingBriefingFields(draft, confirmedData)
+      const duplicates = findDuplicates(db, draft, request.user)
+      if (!draft.name || !draft.customer) return { success: false, message: '项目名称和客户姓名必填' }
 
-    let projectId = 0
-    let documentId = 0
-    let attachmentId = 0
-    const createProject = db.prepare(`
-      INSERT INTO projects (
-        name, customer, phone, address, address_province, address_city, address_detail,
-        source, order_taker, order_date, external_order_no, handover_note,
-        team_leader, briefing_date, total_amount, deposit_amount, manager_user_id,
-        assignee_user_id, status, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'handover_received', ?)
-    `)
-    const tx = db.transaction(() => {
-      const created = createProject.run(
-        draft.name,
-        draft.customer,
-        draft.phone,
-        buildAddress(draft),
-        draft.address_province,
-        draft.address_city,
-        draft.address_detail,
-        draft.source,
-        draft.order_taker,
-        draft.order_date,
-        draft.external_order_no,
-        draft.handover_note,
-        draft.team_leader,
-        draft.briefing_date,
-        Number(draft.total_amount || 0),
-        request.user.userId
-      )
-      projectId = created.lastInsertRowid
-      attachmentId = saveProjectAttachment(db, request.user, projectId, request.body?.file || null)
-      documentId = upsertProjectDocument(db, {
-        projectId,
-        documentType: 'briefing',
-        sourceAttachmentId: attachmentId,
-        parsedData,
-        confirmedData,
-        warnings: [...warnings, ...missing.map(item => `缺核心资料：${item}`), ...duplicates.map(item => `可能重复：${item.name || item.customer}#${item.id}`)],
-        userId: request.user.userId
+      let projectId = 0
+      let documentId = 0
+      let attachmentId = 0
+      const createProject = db.prepare(`
+        INSERT INTO projects (
+          name, customer, phone, address, address_province, address_city, address_detail,
+          source, order_taker, order_date, external_order_no, handover_note,
+          team_leader, briefing_date, total_amount, deposit_amount, manager_user_id,
+          assignee_user_id, status, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'handover_received', ?)
+      `)
+      const tx = db.transaction(() => {
+        const created = createProject.run(
+          draft.name,
+          draft.customer,
+          draft.phone,
+          buildAddress(draft),
+          draft.address_province,
+          draft.address_city,
+          draft.address_detail,
+          draft.source,
+          draft.order_taker,
+          draft.order_date,
+          draft.external_order_no,
+          draft.handover_note,
+          draft.team_leader,
+          draft.briefing_date,
+          Number(draft.total_amount || 0),
+          request.user.userId
+        )
+        projectId = created.lastInsertRowid
+        attachmentId = saveProjectAttachment(db, request.user, projectId, request.body?.file || null)
+        documentId = upsertProjectDocument(db, {
+          projectId,
+          documentType: 'briefing',
+          sourceAttachmentId: attachmentId,
+          parsedData,
+          confirmedData,
+          warnings: [...warnings, ...duplicates.map(item => `可能重复：${item.name || item.customer}#${item.id}`)],
+          userId: request.user.userId
+        })
+        addProjectLog(db, projectId, '导入施工交底单创建工单', request.user.username,
+          `由施工交底单创建；单据 #${documentId}；缺失提示 ${missing.length} 项；重复提示 ${duplicates.length} 项；不自动推进状态。`)
       })
-      addProjectLog(db, projectId, '导入施工交底单创建工单', request.user.username,
-        `由施工交底单创建；单据 #${documentId}；缺失提示 ${missing.length} 项；重复提示 ${duplicates.length} 项；不自动推进状态。`)
-    })
-    tx()
+      tx()
 
-    logAiAudit(db, request.user, {
-      actionType: 'tool_write',
-      toolName: 'create_project_workorder',
-      requestSummary: `施工交底单创建项目：${draft.name}`,
-      resultSummary: `项目 #${projectId}，单据 #${documentId}`,
-      model: getAiConfig(db).model
-    })
-    return { success: true, data: { project_id: projectId, document_id: documentId, source_attachment_id: attachmentId, missing_fields: missing, duplicate_matches: duplicates } }
+      logAiAudit(db, request.user, {
+        actionType: 'tool_write',
+        toolName: 'create_project_workorder',
+        requestSummary: `施工交底单创建项目：${draft.name}`,
+        resultSummary: `项目 #${projectId}，单据 #${documentId}`,
+        model: getAiConfig(db).model
+      })
+      return { success: true, data: { project_id: projectId, document_id: documentId, source_attachment_id: attachmentId, missing_fields: missing, duplicate_matches: duplicates } }
+    } catch (err) {
+      const message = buildCreateFailureMessage(err)
+      logAiAudit(db, request.user, {
+        actionType: 'tool_write',
+        toolName: 'create_project_workorder',
+        status: 'failed',
+        errorMessage: message
+      })
+      reply.code(isUserFixableCreateError(err) ? 400 : 500).send({ success: false, message })
+    }
   })
 
   server.get('/api/projects/:id/briefing', async (request, reply) => {
@@ -184,7 +196,7 @@ export default function projectImportRoutes(server, db) {
         sourceAttachmentId: attachmentId,
         parsedData,
         confirmedData,
-        warnings: [...warnings, ...missing.map(item => `缺核心资料：${item}`)],
+        warnings,
         userId: request.user.userId
       })
       syncProjectFromBriefing(db, project, draft)
@@ -194,6 +206,99 @@ export default function projectImportRoutes(server, db) {
     tx()
 
     return { success: true, data: { document_id: documentId, source_attachment_id: attachmentId, changed_fields: changed, missing_fields: missing } }
+  })
+
+  server.get('/api/projects/:id/delivery-chain', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
+    if (!project || !canAccessModule(db, request.user, 'projects', 'can_view') || !canAccessProjectRecord(db, request.user, project)) {
+      reply.code(404).send({ success: false, message: '项目不存在或无权限' })
+      return
+    }
+    return { success: true, data: buildDeliveryChain(db, project) }
+  })
+
+  server.post('/api/projects/:id/delivery-chain/:type/parse', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
+    const documentType = normalizeDeliveryDocumentType(request.params.type)
+    if (!project || !documentType || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
+      reply.code(404).send({ success: false, message: '项目不存在、单据类型无效或无权限' })
+      return
+    }
+    const { file_name = '', file_data = '' } = request.body || {}
+    if (!file_name || !file_data) return { success: false, message: '请选择要导入的项目单据' }
+    try {
+      const parsed = parseDeliveryDocument(documentType, file_name, file_data)
+      return { success: true, data: decorateDeliveryParsedData(project, documentType, parsed) }
+    } catch (err) {
+      reply.code(400).send({ success: false, message: err.message || '单据解析失败' })
+    }
+  })
+
+  server.post('/api/projects/:id/delivery-chain/:type/save', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
+    const documentType = normalizeDeliveryDocumentType(request.params.type)
+    if (!project || !documentType || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
+      reply.code(404).send({ success: false, message: '项目不存在、单据类型无效或无权限' })
+      return
+    }
+    try {
+      const parsedData = request.body?.parsed_data || {}
+      const confirmedData = request.body?.confirmed_data || emptyDeliveryDocument(documentType, project)
+      const warnings = Array.isArray(request.body?.warnings) ? request.body.warnings : parsedData.warnings || []
+      let attachmentId = toInt(request.body?.source_attachment_id)
+      const tx = db.transaction(() => {
+        if (!attachmentId) attachmentId = saveProjectAttachment(db, request.user, project.id, request.body?.file || null)
+        const documentId = upsertProjectDocument(db, {
+          projectId: project.id,
+          documentType,
+          sourceAttachmentId: attachmentId,
+          parsedData,
+          confirmedData,
+          warnings,
+          userId: request.user.userId
+        })
+        syncProjectFromDeliveryDocument(db, project, documentType, confirmedData)
+        addProjectLog(db, project.id, `保存${deliveryDocumentLabel(documentType)}`, request.user.username,
+          `系统版${deliveryDocumentLabel(documentType)} #${documentId} 已保存；字段联动已刷新。`)
+        return documentId
+      })
+      return { success: true, data: { document_id: tx(), source_attachment_id: attachmentId, chain: buildDeliveryChain(db, db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id)) } }
+    } catch (err) {
+      reply.code(400).send({ success: false, message: err.message || '保存项目单据失败' })
+    }
+  })
+
+  server.post('/api/projects/:id/delivery-chain/survey/generate-ppt', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
+    if (!project || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
+      reply.code(404).send({ success: false, message: '项目不存在或无权限' })
+      return
+    }
+    try {
+      const documentType = request.body?.document_type === 'survey_recheck' ? 'survey_recheck' : 'survey_initial'
+      const confirmedData = normalizeSurveyDraft(project, request.body || {}, documentType)
+      const buffer = buildSurveyPptx(project, confirmedData)
+      const attachmentId = saveGeneratedProjectAttachment(db, request.user, project.id, `${project.name || project.customer || '项目'}-${deliveryDocumentLabel(documentType)}.pptx`, 'application/vnd.openxmlformats-officedocument.presentationml.presentation', buffer)
+      const documentId = upsertProjectDocument(db, {
+        projectId: project.id,
+        documentType,
+        sourceAttachmentId: attachmentId,
+        parsedData: { source: 'image_upload_generate_ppt' },
+        confirmedData,
+        warnings: [],
+        userId: request.user.userId
+      })
+      syncProjectFromDeliveryDocument(db, project, documentType, confirmedData)
+      addProjectLog(db, project.id, `生成${deliveryDocumentLabel(documentType)}`, request.user.username,
+        `上传 ${confirmedData.survey.image_count || 0} 张图片生成 PPT 附件 #${attachmentId}，单据 #${documentId}。`)
+      return { success: true, data: { document_id: documentId, source_attachment_id: attachmentId, chain: buildDeliveryChain(db, db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id)) } }
+    } catch (err) {
+      reply.code(400).send({ success: false, message: err.message || '生成勘察 PPT 失败' })
+    }
   })
 
   server.post('/api/projects/:id/document-imports/material-out/parse', async (request, reply) => {
@@ -502,6 +607,279 @@ function canApplyProjectDocumentImport(user) {
   return ['super_admin', 'admin', 'engineering'].includes(user?.role)
 }
 
+const DELIVERY_NODE_RULES = [
+  {
+    key: 'survey_initial',
+    stage: '工勘',
+    label: '首次工勘表',
+    desc: '上传现场图片生成标准工勘 PPT，记录基层、保护、整改和进场判断。',
+    rx: /现场勘察|首次|工勘|基层勘察|现场基层/i,
+    required: true,
+    actions: ['generate_ppt', 'view', 'import']
+  },
+  {
+    key: 'survey_recheck',
+    stage: '复勘',
+    label: '二次勘察表',
+    desc: '仅当前端/工程确认现场有问题时启用；不是每个项目必填。',
+    rx: /二次|复勘|复尺|复核|基层二次/i,
+    optional: true,
+    actions: ['generate_ppt', 'view', 'import']
+  },
+  {
+    key: 'briefing',
+    stage: '交底',
+    label: '施工交底单',
+    desc: '交付资料源头，沉淀客户、地址、施工面积、施工项和合同报价。',
+    rx: /施工交底|工勘交底|成本交底|交底单/i,
+    required: true,
+    actions: ['view', 'import']
+  },
+  {
+    key: 'material_io',
+    stage: '仓库',
+    label: '材料出库/回库表',
+    desc: '记录材料、辅材、工具、运输和回库，金额自动进入成本草稿。',
+    rx: /出库|回库|材料单|材料出库|涂料进场/i,
+    required: true,
+    actions: ['view', 'import', 'sync']
+  },
+  {
+    key: 'completion_inspection',
+    stage: '验收',
+    label: '完工验收质检表',
+    desc: '记录完工图片、整改项和是否触发售后/维修。',
+    rx: /完工验收|质检|完工质检/i,
+    required: true,
+    actions: ['view', 'import']
+  },
+  {
+    key: 'labor_settlement',
+    stage: '工费',
+    label: '施工班组工费结算单',
+    desc: '从面积、工期和班组信息生成草稿，人工确认点工/包工金额。',
+    rx: /工费|人工|施工完工结算|班组|工资/i,
+    required: true,
+    actions: ['view', 'import', 'sync']
+  },
+  {
+    key: 'cost_check',
+    stage: '成本',
+    label: '完工成本核算表',
+    desc: '汇总人工、材料、辅材、工具、运输，自动计算利润和利润率。',
+    rx: /完工成本|成本核算|成本表/i,
+    required: true,
+    actions: ['view', 'import', 'sync']
+  },
+  {
+    key: 'finance_settlement',
+    stage: '财务',
+    label: '财务结算/归档',
+    desc: '区分合同报价和交付核算收入，归档收款、尾款和最终对账。',
+    rx: /财务|收款|付款|尾款|对账|归档/i,
+    required: true,
+    actions: ['view', 'sync']
+  }
+]
+
+function buildDeliveryChain(db, project) {
+  const docs = db.prepare(`
+    SELECT d.*, a.original_name as source_file_name
+    FROM project_documents d
+    LEFT JOIN attachments a ON a.id = d.source_attachment_id
+    WHERE d.project_id = ?
+    ORDER BY d.id DESC
+  `).all(project.id)
+  const latestDocs = {}
+  for (const row of docs) {
+    if (!latestDocs[row.document_type]) latestDocs[row.document_type] = formatProjectDocument(row)
+  }
+  const attachments = db.prepare(`
+    SELECT id, original_name, mime_type, size, created_at
+    FROM attachments
+    WHERE entity_type = 'project' AND entity_id = ? AND COALESCE(deleted_at, '') = ''
+    ORDER BY id DESC
+  `).all(project.id)
+  const finance = buildDeliveryFinanceSummary(project, latestDocs)
+  const conditionNote = String(project.condition_note || '')
+  const needRecheck = !!latestDocs.survey_recheck
+    || latestDocs.survey_initial?.confirmed_data?.survey?.need_recheck
+    || /需要二次|需二次|需要复勘|需复勘|复勘待确认|整改待复核|问题待复核/.test(conditionNote)
+  const nodes = DELIVERY_NODE_RULES.map(rule => buildDeliveryNode(rule, project, latestDocs[rule.key], attachments, finance, needRecheck))
+  const requiredNodes = nodes.filter(node => !node.optional || node.required_now)
+  return {
+    project_id: project.id,
+    title: '项目交付资料链',
+    subtitle: '从勘察、交底、出入库、工费、成本到财务归档',
+    metrics: {
+      confirmed_count: nodes.filter(node => node.status === '已确认').length,
+      uploaded_count: nodes.filter(node => node.attachment_count > 0).length,
+      missing_count: requiredNodes.filter(node => ['未开始', '已生成草稿', '有差异待确认'].includes(node.status)).length,
+      optional_count: nodes.filter(node => node.optional).length
+    },
+    finance,
+    nodes
+  }
+}
+
+function buildDeliveryNode(rule, project, doc, attachments, finance, needRecheck) {
+  const files = attachments.filter(file => rule.rx.test(file.original_name || ''))
+  const optional = !!rule.optional
+  const requiredNow = !optional || needRecheck || !!doc || files.length > 0
+  const confirmedData = doc?.confirmed_data || emptyDeliveryDocument(rule.key, project)
+  const differenceCount = countDocumentDifferences(rule.key, confirmedData, finance)
+  let status = '未开始'
+  if (optional && !requiredNow) status = '按需'
+  else if (differenceCount) status = '有差异待确认'
+  else if (doc?.status === 'confirmed') status = '已确认'
+  else if (doc) status = '已生成草稿'
+  else if (files.length) status = '已上传'
+  return {
+    ...rule,
+    optional,
+    required_now: requiredNow,
+    status,
+    status_type: status === '已确认' ? 'success' : status === '按需' ? 'info' : status === '有差异待确认' ? 'warning' : files.length ? 'warning' : 'danger',
+    attachment_count: files.length,
+    attachments: files.slice(0, 5),
+    document: doc || null,
+    table_data: confirmedData,
+    summary: summarizeDeliveryNode(rule.key, confirmedData, finance),
+    differences: differenceCount
+  }
+}
+
+function buildDeliveryFinanceSummary(project, docs) {
+  const briefing = docs.briefing?.confirmed_data || {}
+  const material = docs.material_io?.confirmed_data?.summary || {}
+  const labor = docs.labor_settlement?.confirmed_data?.summary || {}
+  const cost = docs.cost_check?.confirmed_data?.summary || {}
+  const contractAmount = Number(briefing.finance?.estimated_total_amount || briefing.construction?.total_amount || project.total_amount || 0)
+  const deliveryRevenue = Number(cost.revenue_amount || project.settlement_amount || 0)
+  const laborFee = Number(labor.labor_fee || cost.labor_fee || 0)
+  const materialFee = Number(material.material_fee || cost.material_fee || 0)
+  const auxiliaryFee = Number(material.auxiliary_fee || cost.auxiliary_fee || 0)
+  const toolFee = Number(material.tool_fee || cost.tool_fee || 0)
+  const transportFee = Number(material.transport_fee || cost.transport_fee || 0)
+  const totalCost = roundMoney(laborFee + materialFee + auxiliaryFee + toolFee + transportFee + Number(cost.other_fee || 0))
+  const importedTotalCost = Number(cost.total_cost || 0)
+  const revenueBase = deliveryRevenue || Number(cost.revenue_amount || 0)
+  const grossProfit = revenueBase ? roundMoney(revenueBase - (importedTotalCost || totalCost)) : 0
+  const profitRate = revenueBase ? Number((grossProfit / revenueBase).toFixed(4)) : 0
+  const differences = []
+  const notes = []
+  if (importedTotalCost && totalCost && Math.abs(importedTotalCost - totalCost) > 0.01) {
+    differences.push(`自动汇总成本 ${totalCost} 与成本表 ${importedTotalCost} 不一致`)
+  }
+  if (contractAmount && deliveryRevenue && Math.abs(contractAmount - deliveryRevenue) > 0.01) {
+    notes.push(`合同报价 ${contractAmount} 与交付核算收入 ${deliveryRevenue} 是不同口径，请在财务归档时分开查看`)
+  }
+  return {
+    contract_amount: roundMoney(contractAmount),
+    delivery_revenue: roundMoney(deliveryRevenue),
+    labor_fee: roundMoney(laborFee),
+    material_fee: roundMoney(materialFee),
+    auxiliary_fee: roundMoney(auxiliaryFee),
+    tool_fee: roundMoney(toolFee),
+    transport_fee: roundMoney(transportFee),
+    auto_total_cost: totalCost,
+    imported_total_cost: roundMoney(importedTotalCost),
+    gross_profit: roundMoney(grossProfit),
+    profit_rate: profitRate,
+    differences,
+    notes
+  }
+}
+
+function summarizeDeliveryNode(type, data, finance) {
+  if (type === 'briefing') {
+    return [
+      ['客户', data.basic?.customer],
+      ['施工面积', data.construction?.total_area ? `${data.construction.total_area} m²` : ''],
+      ['合同报价', moneyText(data.finance?.estimated_total_amount || data.construction?.total_amount)],
+      ['施工项', Array.isArray(data.items) ? `${data.items.length} 条` : '0 条']
+    ]
+  }
+  if (type === 'material_io') {
+    return [
+      ['材料费', moneyText(data.summary?.material_fee)],
+      ['辅材', moneyText(data.summary?.auxiliary_fee)],
+      ['工具', moneyText(data.summary?.tool_fee)],
+      ['运输', moneyText(data.summary?.transport_fee)]
+    ]
+  }
+  if (type === 'labor_settlement') return [['人工费', moneyText(data.summary?.labor_fee)], ['工期', data.summary?.duration], ['说明', data.summary?.work_note]]
+  if (type === 'cost_check') return [['核算收入', moneyText(data.summary?.revenue_amount)], ['成本合计', moneyText(data.summary?.total_cost)], ['利润率', percentText(data.summary?.profit_rate)]]
+  if (type === 'finance_settlement') return [['合同报价', moneyText(finance.contract_amount)], ['交付收入', moneyText(finance.delivery_revenue)], ['自动成本', moneyText(finance.auto_total_cost)], ['毛利润', moneyText(finance.gross_profit)]]
+  if (type.includes('survey') || type === 'completion_inspection') return [['日期', data.survey?.survey_date], ['结论', data.survey?.conclusion]]
+  return []
+}
+
+function countDocumentDifferences(type, data, finance) {
+  if (type === 'cost_check') return finance.differences.length
+  if (type === 'finance_settlement') return finance.differences.length
+  return 0
+}
+
+function decorateDeliveryParsedData(project, documentType, parsed) {
+  const confirmed = parsed.confirmed_data || parsed.form_data || emptyDeliveryDocument(documentType, project)
+  return {
+    ...parsed,
+    document_type: documentType,
+    document_label: deliveryDocumentLabel(documentType),
+    confirmed_data: mergeProjectIntoDeliveryData(project, documentType, confirmed)
+  }
+}
+
+function mergeProjectIntoDeliveryData(project, documentType, data) {
+  const base = emptyDeliveryDocument(documentType, project)
+  return {
+    ...base,
+    ...data,
+    project: { ...base.project, ...(data.project || {}) }
+  }
+}
+
+function normalizeDeliveryDocumentType(value) {
+  const text = String(value || '').trim()
+  return DELIVERY_DOCUMENT_TYPES.has(text) ? text : ''
+}
+
+function deliveryDocumentLabel(type) {
+  return DELIVERY_NODE_RULES.find(rule => rule.key === type)?.label || '项目单据'
+}
+
+function syncProjectFromDeliveryDocument(db, project, documentType, data) {
+  const updates = []
+  const values = []
+  if (documentType === 'survey_initial') {
+    pushProjectUpdate(updates, values, project, 'survey_date', data.survey?.survey_date)
+    pushProjectUpdate(updates, values, project, 'survey_report', data.survey?.conclusion)
+    pushProjectUpdate(updates, values, project, 'condition_note', data.survey?.entry_judgment ? `${data.survey.entry_judgment}：${data.survey.conclusion || ''}` : '')
+  }
+  if (documentType === 'survey_recheck') {
+    pushProjectUpdate(updates, values, project, 'condition_note', data.survey?.conclusion)
+  }
+  if (documentType === 'completion_inspection') {
+    pushProjectUpdate(updates, values, project, 'acceptance_date', data.survey?.survey_date)
+    pushProjectUpdate(updates, values, project, 'construction_note', data.survey?.conclusion)
+  }
+  if (documentType === 'cost_check') {
+    pushProjectUpdate(updates, values, project, 'settlement_amount', data.summary?.revenue_amount)
+  }
+  if (!updates.length) return
+  updates.push("updated_at = datetime('now', 'localtime')")
+  values.push(project.id)
+  db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+}
+
+function pushProjectUpdate(updates, values, project, field, value) {
+  if (value === undefined || value === null || value === '') return
+  if (String(project[field] ?? '') === String(value)) return
+  updates.push(`${field} = ?`)
+  values.push(value)
+}
+
 function parseBriefingText(text = '') {
   const draft = normalizeProjectDraft(parseProjectHandoverText(text)[0] || {})
   const formData = normalizeBriefingForm({
@@ -575,7 +953,15 @@ function normalizeBriefingForm(input = {}) {
       plate_needed: safeText(construction.plate_needed, 40),
       team_leader: safeText(construction.team_leader, 80),
       briefing_date: safeText(construction.briefing_date, 40),
-        total_amount: toMoney(construction.total_amount)
+      total_amount: toMoney(construction.total_amount)
+    },
+    finance: {
+      estimated_total_amount: toMoney(input.finance?.estimated_total_amount),
+      received_summary: safeText(input.finance?.received_summary, 300),
+      unpaid_summary: safeText(input.finance?.unpaid_summary, 300),
+      rebate_note: safeText(input.finance?.rebate_note, 300),
+      pricing_note: safeText(input.finance?.pricing_note, 300),
+      raw_lines: Array.isArray(input.finance?.raw_lines) ? input.finance.raw_lines.slice(0, 20).map(item => safeText(item, 300)) : []
     },
     site: {
       base_condition: safeText(site.base_condition, 300),
@@ -583,7 +969,9 @@ function normalizeBriefingForm(input = {}) {
       scaffold: safeText(site.scaffold, 80),
       second_transfer: safeText(site.second_transfer, 80),
       entry_condition: safeText(site.entry_condition, 200),
-      site_status: safeText(site.site_status, 300)
+      site_status: safeText(site.site_status, 300),
+      site_contact_name: safeText(site.site_contact_name, 80),
+      site_contact_phone: safeText(site.site_contact_phone, 40)
     },
     items: items.slice(0, 120).map(item => ({
       space_name: safeText(item.space_name, 80),
@@ -596,6 +984,24 @@ function normalizeBriefingForm(input = {}) {
       subtotal: toMoney(item.subtotal),
       remark: safeText(item.remark, 300)
     })),
+    quotation_items: (Array.isArray(input.quotation_items) ? input.quotation_items : []).slice(0, 120).map(item => ({
+      area_group: safeText(item.area_group, 80),
+      position: safeText(item.position, 80),
+      product_en: safeText(item.product_en, 120),
+      product_name: safeText(item.product_name, 120),
+      process: safeText(item.process, 120),
+      color_no: safeText(item.color_no, 80),
+      area: toNumber(item.area),
+      list_unit_price: toMoney(item.list_unit_price),
+      discount_unit_price: toMoney(item.discount_unit_price),
+      list_amount: toMoney(item.list_amount),
+      final_amount: toMoney(item.final_amount)
+    })),
+    images: {
+      embedded_count: Math.max(0, toNumber(input.images?.embedded_count)),
+      note: safeText(input.images?.note, 300),
+      attachment_note: safeText(input.images?.attachment_note, 300)
+    },
     signatures: {
       briefer: safeText(signatures.briefer, 80),
       confirmer: safeText(signatures.confirmer, 80),
@@ -664,6 +1070,283 @@ function saveProjectAttachment(db, user, projectId, file) {
     ) VALUES ('project', ?, ?, ?, ?, ?, ?, ?)
   `).run(projectId, originalName, storedName, file.mime_type || 'application/octet-stream', buffer.length, checksum, user?.userId || 0)
   return result.lastInsertRowid
+}
+
+function saveGeneratedProjectAttachment(db, user, projectId, originalName, mimeType, buffer) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error('生成文件内容为空')
+  if (buffer.length > MAX_FILE_SIZE) throw new Error('生成文件超过 10MB')
+  const safeName = safeFileName(originalName)
+  const ext = extname(safeName).toLowerCase()
+  mkdirSync(UPLOAD_DIR, { recursive: true })
+  const checksum = crypto.createHash('sha256').update(buffer).digest('hex')
+  const storedName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}${ext || ''}`
+  writeFileSync(join(UPLOAD_DIR, storedName), buffer)
+  const result = db.prepare(`
+    INSERT INTO attachments (
+      entity_type, entity_id, original_name, stored_name, mime_type, size, checksum, uploaded_by
+    ) VALUES ('project', ?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, safeName, storedName, mimeType || 'application/octet-stream', buffer.length, checksum, user?.userId || 0)
+  return result.lastInsertRowid
+}
+
+function normalizeSurveyDraft(project, input, documentType) {
+  const images = Array.isArray(input.images) ? input.images.slice(0, 24).map(normalizeSurveyImage).filter(item => item.data) : []
+  return {
+    ...emptyDeliveryDocument(documentType, project),
+    survey: {
+      survey_date: safeText(input.survey_date || new Date().toISOString().slice(0, 10), 40),
+      surveyor: safeText(input.surveyor || '', 80),
+      surveyor_phone: safeText(input.surveyor_phone || '', 40),
+      conclusion: safeText(input.conclusion || input.summary || '', 1200),
+      entry_judgment: safeText(input.entry_judgment || 'conditional', 40),
+      need_recheck: !!input.need_recheck,
+      repair_required: !!input.repair_required,
+      issues: Array.isArray(input.issues) ? input.issues.slice(0, 30).map(item => safeText(item, 300)).filter(Boolean) : [],
+      image_count: images.length,
+      images
+    }
+  }
+}
+
+function normalizeSurveyImage(item = {}) {
+  return {
+    name: safeText(item.name || '现场图片', 120),
+    mime_type: safeText(item.mime_type || item.type || 'image/png', 80),
+    note: safeText(item.note || '', 300),
+    data: typeof item.data === 'string' ? item.data : ''
+  }
+}
+
+function buildSurveyPptx(project, data) {
+  const survey = data.survey || {}
+  const images = Array.isArray(survey.images) ? survey.images : []
+  const projectTitle = project.name || project.address_detail || project.customer || '项目'
+  const slides = [
+    {
+      title: `${projectTitle}`,
+      lines: [
+        deliveryDocumentLabel(data.survey?.need_recheck ? 'survey_recheck' : 'survey_initial'),
+        `客户：${project.customer || ''}`,
+        `联系方式：${project.phone || ''}`,
+        `地址：${project.address || project.address_detail || ''}`,
+        `勘察人：${survey.surveyor || ''} ${survey.surveyor_phone || ''}`,
+        `日期：${survey.survey_date || ''}`
+      ],
+      images: []
+    },
+    {
+      title: '现场图片',
+      lines: images.length ? images.map((img, index) => `${index + 1}. ${img.note || img.name}`) : ['暂无图片说明'],
+      images
+    },
+    {
+      title: '项目勘察汇总',
+      lines: [
+        survey.conclusion || '请补充现场勘察结论。',
+        survey.need_recheck ? '需要二次勘察/复核。' : '暂不强制二次勘察。',
+        survey.repair_required ? '存在整改/维修事项。' : ''
+      ].filter(Boolean),
+      images: []
+    }
+  ]
+  return createMinimalPptx(slides)
+}
+
+function createMinimalPptx(slides) {
+  const files = new Map()
+  files.set('[Content_Types].xml', contentTypesXml(slides))
+  files.set('_rels/.rels', relsXml([{ id: 'rId1', type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument', target: 'ppt/presentation.xml' }]))
+  files.set('ppt/presentation.xml', presentationXml(slides.length))
+  files.set('ppt/_rels/presentation.xml.rels', presentationRelsXml(slides.length))
+  files.set('ppt/slideMasters/slideMaster1.xml', basicXml('p:sldMaster'))
+  files.set('ppt/slideLayouts/slideLayout1.xml', basicXml('p:sldLayout'))
+  files.set('ppt/theme/theme1.xml', themeXml())
+
+  const media = []
+  slides.forEach((slide, index) => {
+    const slideNumber = index + 1
+    const rels = [{ id: 'rId1', type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout', target: '../slideLayouts/slideLayout1.xml' }]
+    const slideImages = []
+    for (const image of slide.images || []) {
+      const buffer = decodeData(image.data)
+      if (!buffer.length) continue
+      const ext = image.mime_type?.includes('jpeg') || image.mime_type?.includes('jpg') ? 'jpg' : 'png'
+      const mediaName = `image${media.length + 1}.${ext}`
+      files.set(`ppt/media/${mediaName}`, buffer)
+      rels.push({ id: `rId${rels.length + 1}`, type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', target: `../media/${mediaName}` })
+      slideImages.push({ relId: `rId${rels.length}`, index: slideImages.length })
+      media.push(mediaName)
+      if (slideImages.length >= 4) break
+    }
+    files.set(`ppt/slides/slide${slideNumber}.xml`, slideXml(slide.title, slide.lines, slideImages))
+    files.set(`ppt/slides/_rels/slide${slideNumber}.xml.rels`, relsXml(rels))
+  })
+  return makeZip(files)
+}
+
+function contentTypesXml(slides) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Default Extension="png" ContentType="image/png"/>
+<Default Extension="jpg" ContentType="image/jpeg"/>
+<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
+<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+${slides.map((_, index) => `<Override PartName="/ppt/slides/slide${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('')}
+</Types>`
+}
+
+function presentationXml(count) {
+  const ids = Array.from({ length: count }, (_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>`).join('')
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId${count + 1}"/></p:sldMasterIdLst><p:sldIdLst>${ids}</p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="wide"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>`
+}
+
+function presentationRelsXml(count) {
+  const rels = Array.from({ length: count }, (_, i) => ({ id: `rId${i + 1}`, type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide', target: `slides/slide${i + 1}.xml` }))
+  rels.push({ id: `rId${count + 1}`, type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster', target: 'slideMasters/slideMaster1.xml' })
+  rels.push({ id: `rId${count + 2}`, type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme', target: 'theme/theme1.xml' })
+  return relsXml(rels)
+}
+
+function relsXml(rels) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.map(rel => `<Relationship Id="${rel.id}" Type="${rel.type}" Target="${rel.target}"/>`).join('')}</Relationships>`
+}
+
+function slideXml(title, lines = [], images = []) {
+  const text = [
+    textShape(title || '项目勘察表', 500000, 280000, 11200000, 600000, 3000, true),
+    ...lines.slice(0, 10).map((line, index) => textShape(line, 650000, 1050000 + index * 430000, 10500000, 320000, 1450, false)),
+    ...images.map((img, index) => imageShape(img.relId, 650000 + (index % 2) * 5400000, 3100000 + Math.floor(index / 2) * 1650000, 5000000, 1450000))
+  ].join('')
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${text}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`
+}
+
+function textShape(text, x, y, cx, cy, size, bold) {
+  const safe = escapeXml(text)
+  const id = Math.floor(Math.random() * 1000000) + 10
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Text"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="${size}"${bold ? ' b="1"' : ''}/><a:t>${safe}</a:t></a:r></a:p></p:txBody></p:sp>`
+}
+
+function imageShape(relId, x, y, cx, cy) {
+  const id = Math.floor(Math.random() * 1000000) + 100
+  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="Picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`
+}
+
+function basicXml(tag) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><${tag} xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>`
+}
+
+function themeXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="JianShang"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:srgbClr val="111827"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:accent1><a:srgbClr val="F97316"/></a:accent1></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Arial"/><a:ea typeface="Microsoft YaHei"/></a:majorFont><a:minorFont><a:latin typeface="Arial"/><a:ea typeface="Microsoft YaHei"/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"/></a:themeElements></a:theme>`
+}
+
+function makeZip(files) {
+  const localParts = []
+  const centralParts = []
+  let offset = 0
+  for (const [name, content] of files.entries()) {
+    const data = Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8')
+    const nameBuffer = Buffer.from(name)
+    const crc = crc32(data)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0, 6)
+    local.writeUInt16LE(0, 8)
+    local.writeUInt16LE(0, 10)
+    local.writeUInt16LE(0, 12)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(nameBuffer.length, 26)
+    local.writeUInt16LE(0, 28)
+    localParts.push(local, nameBuffer, data)
+
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(0, 8)
+    central.writeUInt16LE(0, 10)
+    central.writeUInt16LE(0, 12)
+    central.writeUInt16LE(0, 14)
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(data.length, 20)
+    central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(nameBuffer.length, 28)
+    central.writeUInt16LE(0, 30)
+    central.writeUInt16LE(0, 32)
+    central.writeUInt16LE(0, 34)
+    central.writeUInt16LE(0, 36)
+    central.writeUInt32LE(0, 38)
+    central.writeUInt32LE(offset, 42)
+    centralParts.push(central, nameBuffer)
+    offset += local.length + nameBuffer.length + data.length
+  }
+  const central = Buffer.concat(centralParts)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(0, 4)
+  end.writeUInt16LE(0, 6)
+  end.writeUInt16LE(files.size, 8)
+  end.writeUInt16LE(files.size, 10)
+  end.writeUInt32LE(central.length, 12)
+  end.writeUInt32LE(offset, 16)
+  end.writeUInt16LE(0, 20)
+  return Buffer.concat([...localParts, central, end])
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let c = index
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  return c >>> 0
+})
+
+function crc32(buffer) {
+  let crc = 0xffffffff
+  for (const byte of buffer) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8)
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function escapeXml(value) {
+  return String(value || '').replace(/[<>&'"]/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[char]))
+}
+
+function moneyText(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) && n > 0 ? `￥${n.toFixed(2)}` : '未填写'
+}
+
+function percentText(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) && n ? `${(n * 100).toFixed(2)}%` : '未填写'
+}
+
+function roundMoney(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) ? Number(n.toFixed(2)) : 0
+}
+
+function isUserFixableCreateError(err) {
+  const message = String(err?.message || '')
+  return message.includes('文件类型')
+    || message.includes('文件内容为空')
+    || message.includes('超过 10MB')
+    || message.includes('金额')
+}
+
+function buildCreateFailureMessage(err) {
+  const message = String(err?.message || '').trim()
+  if (!message) return '创建失败：服务器没有返回具体错误，请查看后端日志'
+  if (isUserFixableCreateError(err)) return `创建失败：${message}`
+  if (/SQLITE|database|no such table|no column|constraint/i.test(message)) {
+    return `创建失败：数据库写入异常，技术信息：${message}`
+  }
+  return `创建失败：${message}`
 }
 
 function syncProjectFromBriefing(db, project, draft) {
@@ -770,7 +1453,7 @@ function looksLikeSpreadsheet(fileName = '', mimeType = '') {
 function findDuplicates(db, draft, user) {
   const clauses = []
   const params = []
-  if (draft.phone) {
+  if (draft.phone && /1[3-9]\d{9}/.test(draft.phone)) {
     clauses.push('phone = ?')
     params.push(draft.phone)
   }

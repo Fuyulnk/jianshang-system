@@ -23,6 +23,7 @@ import chatRoutes from './routes/chat.js'
 import projectRoutes from './routes/projects.js'
 import projectImportRoutes from './routes/project-imports.js'
 import materialRequestRoutes from './routes/material-requests.js'
+import supplyOrderRoutes from './routes/supply-orders.js'
 import settingsRoutes from './routes/settings.js'
 import financeRoutes from './routes/finance.js'
 import employeeDashboardRoutes from './routes/employee-dashboard.js'
@@ -283,6 +284,7 @@ chatRoutes(server, db, realtime)
 projectRoutes(server, db)
 projectImportRoutes(server, db)
 materialRequestRoutes(server, db)
+supplyOrderRoutes(server, db)
 settingsRoutes(server, db)
 financeRoutes(server, db)
 employeeDashboardRoutes(server, db)
@@ -590,9 +592,58 @@ function ensureCoreTables(db) {
       name TEXT NOT NULL,
       category TEXT,
       unit TEXT DEFAULT 'kg',
+      spec TEXT DEFAULT '',
+      unit_price REAL DEFAULT 0,
+      price_unit TEXT DEFAULT '',
       stock REAL DEFAULT 0,
       min_stock REAL DEFAULT 0,
       updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS supply_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_no TEXT UNIQUE NOT NULL,
+      customer TEXT NOT NULL,
+      phone TEXT DEFAULT '',
+      source TEXT DEFAULT '',
+      address TEXT DEFAULT '',
+      amount REAL DEFAULT 0,
+      status TEXT DEFAULT 'ordered',
+      note TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      finance_confirmed_by INTEGER DEFAULT 0,
+      warehouse_confirmed_by INTEGER DEFAULT 0,
+      shipped_by INTEGER DEFAULT 0,
+      completed_by INTEGER DEFAULT 0,
+      finance_confirmed_at TEXT DEFAULT '',
+      warehouse_confirmed_at TEXT DEFAULT '',
+      shipped_at TEXT DEFAULT '',
+      completed_at TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS supply_order_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL,
+      product_id INTEGER DEFAULT 0,
+      product_name TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      unit TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      unit_price REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
+      note TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS supply_order_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      operator TEXT DEFAULT '',
+      content TEXT DEFAULT '',
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
     );
 
     CREATE TABLE IF NOT EXISTS material_requests (
@@ -759,6 +810,11 @@ function ensureCoreTables(db) {
   try { db.exec("ALTER TABLE role_permissions ADD COLUMN data_scope TEXT DEFAULT 'all'") } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id, deleted_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_uploaded_by ON attachments(uploaded_by, created_at)') } catch {}
+  try { db.exec("ALTER TABLE products ADD COLUMN spec TEXT DEFAULT ''") } catch {}
+  try { db.exec('ALTER TABLE products ADD COLUMN unit_price REAL DEFAULT 0') } catch {}
+  try { db.exec("ALTER TABLE products ADD COLUMN price_unit TEXT DEFAULT ''") } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_status ON supply_orders(status, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_created_by ON supply_orders(created_by, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_requests_project ON material_requests(project_id, status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_requests_status ON material_requests(status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_request_items_request ON material_request_items(request_id)') } catch {}

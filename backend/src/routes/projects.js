@@ -458,7 +458,7 @@ function missingHandoverFields(project) {
   const fields = [
     ['source', '来源门店/渠道'],
     ['order_taker', '门店接单人'],
-    ['phone', '业主电话'],
+    ['phone', '业主联系方式'],
     ['address_detail', '详细地址']
   ]
   return fields

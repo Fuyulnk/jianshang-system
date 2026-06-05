@@ -217,7 +217,7 @@ const TOOLS = [
           confirmed: { type: 'boolean', description: '用户是否已明确确认创建' },
           name: { type: 'string', description: '工单名称' },
           customer: { type: 'string', description: '业主/客户' },
-          phone: { type: 'string', description: '业主电话' },
+          phone: { type: 'string', description: '业主联系方式，可为手机号、微信联系、现场联系等' },
           source: { type: 'string', description: '来源门店/渠道' },
           order_taker: { type: 'string', description: '门店接单人' },
           order_date: { type: 'string', description: '接单日期 YYYY-MM-DD' },
@@ -517,7 +517,7 @@ function getSystemPrompt(username) {
 
 ## 简尚真实业务
 简尚不是销售 CRM，门店/渠道负责签单和交接，简尚负责施工承接。项目工单流程是：
-1. 门店交接待核对：补齐来源门店/渠道、门店接单人、业主电话、详细地址。
+1. 门店交接待核对：补齐来源门店/渠道、门店接单人、业主联系方式、详细地址。
 2. 待现场勘察：工程部填写勘察日期和现场记录，或关联标准勘察表。
 3. 勘察完成待复尺：记录复尺面积、基层、水电、保护和进场条件。
 4. 复尺完成待交底：安排班组长、施工负责人、施工成员和交底日期。

@@ -28,10 +28,14 @@ const missingFields = computed(() => {
   if (!basic.source) missing.push('来源门店/渠道')
   if (!basic.order_taker) missing.push('门店接单人')
   if (!basic.customer) missing.push('客户姓名')
-  if (!basic.phone) missing.push('业主电话')
+  if (!basic.phone) missing.push('业主联系方式')
   if (!basic.address_detail) missing.push('详细地址')
   if (!form.value.items.length) missing.push('施工项目明细')
   return missing
+})
+const displayWarnings = computed(() => {
+  const list = [...warnings.value, ...missingFields.value.map(item => `缺核心资料：${item}`)]
+  return [...new Set(list.filter(Boolean))]
 })
 const summary = computed(() => ({
   customer: form.value.basic.customer || props.project.customer || '未填写',
@@ -75,15 +79,31 @@ function emptyBriefingForm() {
       briefing_date: props.project?.briefing_date || '',
       total_amount: Number(props.project?.total_amount || 0)
     },
+    finance: {
+      estimated_total_amount: Number(props.project?.total_amount || 0),
+      received_summary: '',
+      unpaid_summary: '',
+      rebate_note: '',
+      pricing_note: '',
+      raw_lines: []
+    },
     site: {
       base_condition: props.project?.condition_note || '',
       high_work: '',
       scaffold: '',
       second_transfer: '',
       entry_condition: '',
-      site_status: ''
+      site_status: '',
+      site_contact_name: '',
+      site_contact_phone: ''
     },
     items: [],
+    quotation_items: [],
+    images: {
+      embedded_count: 0,
+      note: '',
+      attachment_note: ''
+    },
     signatures: {
       briefer: '',
       confirmer: '',
@@ -218,8 +238,11 @@ function normalizeBriefingForm(input = {}) {
   return {
     basic: { ...base.basic, ...(input.basic || {}) },
     construction: { ...base.construction, ...(input.construction || {}) },
+    finance: { ...base.finance, ...(input.finance || {}) },
     site: { ...base.site, ...(input.site || {}) },
     items: Array.isArray(input.items) ? input.items.map(item => ({ ...addableItem(), ...item })) : [],
+    quotation_items: Array.isArray(input.quotation_items) ? input.quotation_items.map(item => ({ ...addableQuoteItem(), ...item })) : [],
+    images: { ...base.images, ...(input.images || {}) },
     signatures: { ...base.signatures, ...(input.signatures || {}) }
   }
 }
@@ -235,6 +258,22 @@ function addableItem() {
     unit_price: 0,
     subtotal: 0,
     remark: ''
+  }
+}
+
+function addableQuoteItem() {
+  return {
+    area_group: '',
+    position: '',
+    product_en: '',
+    product_name: '',
+    process: '',
+    color_no: '',
+    area: 0,
+    list_unit_price: 0,
+    discount_unit_price: 0,
+    list_amount: 0,
+    final_amount: 0
   }
 }
 
@@ -287,8 +326,8 @@ async function readJson(res) {
       <div><span>缺失项</span><strong>{{ missingFields.length }} 项</strong></div>
     </div>
 
-    <div v-if="warnings.length || missingFields.length" class="warning-list">
-      <div v-for="warning in [...warnings, ...missingFields.map(item => `缺核心资料：${item}`)]" :key="warning">
+    <div v-if="displayWarnings.length" class="warning-list">
+      <div v-for="warning in displayWarnings" :key="warning">
         <el-icon><WarningFilled /></el-icon>
         <span>{{ warning }}</span>
       </div>
@@ -308,7 +347,7 @@ async function readJson(res) {
           <el-col :span="6"><el-form-item label="接单日期"><el-input v-model="form.basic.order_date" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="6"><el-form-item label="门店单号/合同号"><el-input v-model="form.basic.external_order_no" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="6"><el-form-item label="客户姓名"><el-input v-model="form.basic.customer" :disabled="!canApply" /></el-form-item></el-col>
-          <el-col :span="6"><el-form-item label="客户电话"><el-input v-model="form.basic.phone" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="客户联系方式"><el-input v-model="form.basic.phone" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="详细地址"><el-input v-model="form.basic.address_detail" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="24"><el-form-item label="交接备注"><el-input v-model="form.basic.handover_note" type="textarea" :rows="2" :disabled="!canApply" /></el-form-item></el-col>
         </el-row>
@@ -333,12 +372,15 @@ async function readJson(res) {
           <el-col :span="8"><el-form-item label="二次搬运"><el-input v-model="form.site.second_transfer" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="8"><el-form-item label="进场条件"><el-input v-model="form.site.entry_condition" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="8"><el-form-item label="室内状况"><el-input v-model="form.site.site_status" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="现场联系人"><el-input v-model="form.site.site_contact_name" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="现场联系电话"><el-input v-model="form.site.site_contact_phone" :disabled="!canApply" /></el-form-item></el-col>
         </el-row>
 
         <div class="form-section with-action">
-          <span>施工项目明细</span>
+          <span>施工项目详情</span>
           <el-button size="small" :icon="Plus" :disabled="!canApply" @click="addItem">新增明细</el-button>
         </div>
+        <div class="sub-section-title">交底施工范围</div>
         <div class="items-table">
           <div class="item-row item-head">
             <span>空间</span><span>纹理/产品</span><span>工艺</span><span>颜色</span><span>预收</span><span>复尺</span><span>备注</span><span></span>
@@ -354,6 +396,40 @@ async function readJson(res) {
             <el-button text type="danger" :disabled="!canApply" @click="removeItem(index)">删</el-button>
           </div>
           <el-empty v-if="!form.items.length" description="暂无施工明细，可手动新增" :image-size="70" />
+        </div>
+
+        <div class="sub-section-title">销售/报价明细</div>
+        <div class="quote-table">
+          <div class="quote-row quote-head">
+            <span>区域</span><span>位置</span><span>产品</span><span>工艺</span><span>色号</span><span>面积</span><span>标价金额</span><span>成交金额</span>
+          </div>
+          <div v-for="(item, index) in form.quotation_items" :key="index" class="quote-row">
+            <el-input v-model="item.area_group" :disabled="!canApply" />
+            <el-input v-model="item.position" :disabled="!canApply" />
+            <el-input v-model="item.product_name" :disabled="!canApply" />
+            <el-input v-model="item.process" :disabled="!canApply" />
+            <el-input v-model="item.color_no" :disabled="!canApply" />
+            <el-input v-model="item.area" type="number" :disabled="!canApply" />
+            <el-input v-model="item.list_amount" type="number" :disabled="!canApply" />
+            <el-input v-model="item.final_amount" type="number" :disabled="!canApply" />
+          </div>
+          <el-empty v-if="!form.quotation_items.length" description="暂无销售/报价明细" :image-size="70" />
+        </div>
+
+        <div class="form-section">收款和其他事项</div>
+        <el-row :gutter="12">
+          <el-col :span="6"><el-form-item label="预估总金额"><el-input v-model="form.finance.estimated_total_amount" type="number" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="18"><el-form-item label="已收款"><el-input v-model="form.finance.received_summary" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="未收款"><el-input v-model="form.finance.unpaid_summary" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="返点/退款"><el-input v-model="form.finance.rebate_note" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="24"><el-form-item label="报价说明"><el-input v-model="form.finance.pricing_note" type="textarea" :rows="2" :disabled="!canApply" /></el-form-item></el-col>
+        </el-row>
+
+        <div class="form-section">图片资料</div>
+        <div class="image-note">
+          <strong>表内图片：{{ form.images.embedded_count || 0 }} 张</strong>
+          <span>{{ form.images.note || '未检测到表内图片。' }}</span>
+          <span>{{ form.images.attachment_note || '现场图片、工艺参考图、签字图片可作为工单附件单独上传。' }}</span>
         </div>
 
         <div class="form-section">签字/确认</div>
@@ -485,6 +561,13 @@ async function readJson(res) {
   font-weight: 700;
 }
 
+.sub-section-title {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .form-section.with-action,
 .save-bar {
   display: flex;
@@ -494,6 +577,13 @@ async function readJson(res) {
 }
 
 .items-table {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.quote-table {
+  margin-top: 8px;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -519,6 +609,41 @@ async function readJson(res) {
   font-weight: 700;
 }
 
+.quote-row {
+  display: grid;
+  grid-template-columns: .8fr .9fr 1.2fr .9fr .9fr 80px 100px 100px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+.quote-row:first-child {
+  border-top: 0;
+}
+
+.quote-head {
+  background: var(--bg-page);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.image-note {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-page);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.image-note strong {
+  color: var(--text-primary);
+}
+
 .save-bar {
   margin-top: 14px;
   padding: 10px 12px;
@@ -534,6 +659,10 @@ async function readJson(res) {
   }
 
   .item-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .quote-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

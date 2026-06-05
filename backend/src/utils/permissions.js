@@ -8,7 +8,7 @@ export function canAccessModule(db, user, module, permission = 'can_view') {
 
 export function getModulePermission(db, user, module) {
   if (!user) return null
-  if (['super_admin', 'admin'].includes(user.role)) {
+  if (user.role === 'super_admin') {
     return {
       module,
       can_view: 1,
@@ -19,12 +19,26 @@ export function getModulePermission(db, user, module) {
     }
   }
 
-  return db.prepare(`
+  const row = db.prepare(`
     SELECT rp.*
     FROM role_permissions rp
     JOIN roles r ON rp.role_id = r.id
     WHERE r.name = ? AND rp.module = ?
   `).get(user.role, module)
+  if (row) return row
+
+  if (user.role === 'admin') {
+    return {
+      module,
+      can_view: 1,
+      can_create: 1,
+      can_edit: 1,
+      can_delete: 1,
+      data_scope: 'all'
+    }
+  }
+
+  return null
 }
 
 export function requireModuleAccess(db, request, reply, module, permission = 'can_view', message = '无权限') {

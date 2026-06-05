@@ -3,10 +3,10 @@
     <template v-if="project">
       <!-- 顶部导航 -->
       <div class="detail-header">
-        <el-button @click="$router.push('/main/projects')">← 返回列表</el-button>
+        <el-button @click="$router.push('/main/projects/construction')">← 返回施工工单</el-button>
         <div class="header-info">
           <h2>{{ project.name }}</h2>
-          <span class="header-meta">业主：{{ project.customer }} | 电话：{{ project.phone || '无' }} | 来源：{{ project.source || '未填写' }} | 状态：{{ project.status_label }}</span>
+          <span class="header-meta">业主：{{ project.customer }} | 联系方式：{{ project.phone || '无' }} | 来源：{{ project.source || '未填写' }} | 状态：{{ project.status_label }}</span>
           <div class="assignment-line">
             <el-tag size="small" type="info">负责人：{{ displayUser(project.manager_real_name, project.manager_username) }}</el-tag>
             <el-tag size="small" type="success">施工负责人：{{ displayUser(project.assignee_real_name, project.assignee_username) }}</el-tag>
@@ -31,7 +31,8 @@
           <template #header>
             <div class="summary-header">
               <span>门店交接资料</span>
-              <el-tag v-if="requiredMissingFields.length" type="danger" size="small">缺核心 {{ requiredMissingFields.length }} 项</el-tag>
+              <el-tag v-if="isProjectClosed" type="success" size="small">已归档</el-tag>
+              <el-tag v-else-if="requiredMissingFields.length" type="danger" size="small">缺核心 {{ requiredMissingFields.length }} 项</el-tag>
               <el-tag v-else-if="suggestedMissingFields.length" type="warning" size="small">待完善 {{ suggestedMissingFields.length }} 项</el-tag>
               <el-tag v-else type="success" size="small">资料齐</el-tag>
             </div>
@@ -62,10 +63,10 @@
               <strong>{{ project.handover_note || '未填写' }}</strong>
             </div>
           </div>
-          <div v-if="requiredMissingFields.length" class="missing-line danger">
+          <div v-if="!isProjectClosed && requiredMissingFields.length" class="missing-line danger">
             必须补齐：{{ requiredMissingFields.join('、') }}
           </div>
-          <div v-if="suggestedMissingFields.length" class="missing-line">
+          <div v-if="!isProjectClosed && suggestedMissingFields.length" class="missing-line">
             建议完善：{{ suggestedMissingFields.join('、') }}
           </div>
         </el-card>
@@ -98,7 +99,7 @@
         </el-card>
       </div>
 
-      <ProjectDocumentSummary :project="project" />
+      <ProjectDocumentSummary :project="project" :refresh-key="documentRefreshKey" />
       <ProjectDocumentImportPanel :project="project" :can-apply="canManageProject" @applied="fetchDetail" />
 
       <!-- 当前阶段工作单 -->
@@ -118,7 +119,7 @@
           <template v-if="project.status === 'handover_received'">
             <div class="stage-hint">
               <strong>先核对门店交接资料。</strong>
-              <span>来源、接单人、电话和详细地址补齐后，才能安排现场勘察。</span>
+              <span>来源、接单人、业主联系方式和详细地址补齐后，才能安排现场勘察。</span>
             </div>
           </template>
 
@@ -252,6 +253,9 @@
                 <span>如后续客户报修，可单独发起售后，不影响主工程归档。</span>
               </div>
             </div>
+            <div class="warranty-line" :class="{ expired: warrantyInfo.expired }">
+              {{ warrantyInfo.text }}
+            </div>
           </template>
 
           <template v-else-if="project.status.startsWith('repair_')">
@@ -268,7 +272,7 @@
           <el-button v-if="currentTask.next && canRunCurrentTask" type="primary" size="large" :loading="saving" :disabled="currentMissingFields.length > 0" @click="saveAndAdvance(currentTask.next)">
             {{ currentTask.action }}
           </el-button>
-          <el-button v-if="project.status === 'archived' && canStartRepair" type="warning" plain @click="advanceStatus('repair_requested')">
+          <el-button v-if="project.status === 'archived' && canStartRepair && !warrantyInfo.expired" type="warning" plain @click="advanceStatus('repair_requested')">
             发起售后单
           </el-button>
           <el-button plain @click="showEdit = true" v-if="canEditProject">编辑完整资料</el-button>
@@ -289,6 +293,7 @@
         entity-type="project"
         :entity-id="project.id"
         title="工单附件"
+        @updated="handleAttachmentsUpdated"
       />
 
       <!-- 阶段详情 -->
@@ -345,7 +350,7 @@
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="开工日期">{{ project.start_date || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="预计完工">{{ project.expected_end_date || '未填写' }}</el-descriptions-item>
-            <el-descriptions-item label="人员状态">{{ crewStatusLabel(project.crew_status) }}</el-descriptions-item>
+            <el-descriptions-item label="人员状态">{{ crewStatusLabel(project.crew_status, project.status) }}</el-descriptions-item>
             <el-descriptions-item label="材料出库">{{ materialStatusLabel(project.material_out_status) }}</el-descriptions-item>
             <el-descriptions-item label="施工备注" :span="2">{{ project.construction_note || '未填写' }}</el-descriptions-item>
           </el-descriptions>
@@ -430,7 +435,7 @@
             </el-row>
             <el-row :gutter="16">
               <el-col :span="12">
-                <el-form-item label="联系电话"><el-input v-model="editForm.phone" /></el-form-item>
+                <el-form-item label="联系方式"><el-input v-model="editForm.phone" /></el-form-item>
               </el-col>
               <el-col :span="12">
                 <el-form-item label="来源门店/渠道">
@@ -575,6 +580,7 @@ const showEdit = ref(false)
 const saving = ref(false)
 const editForm = ref({})
 const assignees = ref([])
+const documentRefreshKey = ref(0)
 
 const phases = [
   { phase: 1, label: '交接勘察' },
@@ -606,18 +612,19 @@ const isAssignedEmployee = computed(() => {
 })
 const canEditProject = computed(() => canManageProject.value || (userRole === 'employee' && isAssignedEmployee.value))
 const formattedAddress = computed(() => formatProjectAddress(project.value || {}))
+const isProjectClosed = computed(() => ['finance_settled', 'archived', 'repair_done'].includes(project.value?.status))
 const requiredMissingFields = computed(() => {
   if (!project.value) return []
   const checks = [
     ['source', '来源门店/渠道'],
     ['order_taker', '门店接单人'],
-    ['phone', '业主电话'],
+    ['phone', '业主联系方式'],
     ['address_detail', '详细地址']
   ]
   return checks.filter(([field]) => !String(project.value[field] || '').trim()).map(([, label]) => label)
 })
 const suggestedMissingFields = computed(() => {
-  if (!project.value) return []
+  if (!project.value || isProjectClosed.value) return []
   const checks = [
     ['order_date', '接单日期'],
     ['external_order_no', '门店单号'],
@@ -641,7 +648,7 @@ const TASK_FALLBACK = {
 const TASKS = {
   handover_received: {
     title: '门店交接资料核对',
-    desc: '确认来源、接单人、电话和详细地址，资料齐后安排现场勘察。',
+    desc: '确认来源、接单人、业主联系方式和详细地址，资料齐后安排现场勘察。',
     action: '资料核对完成，安排勘察',
     next: 'survey_pending',
     roles: ['super_admin', 'admin', 'engineering'],
@@ -790,6 +797,24 @@ const materialRequestDisabledReason = computed(() => {
   return '需要先完成复尺、施工组安排和开工交底，才能发起材料出库。'
 })
 const canStartRepair = computed(() => ['super_admin', 'admin', 'engineering'].includes(userRole))
+const warrantyInfo = computed(() => {
+  const base = project.value?.acceptance_date || project.value?.end_date || ''
+  if (!base) return { expired: false, text: '质保期：未填写验收/完工日期，暂无法自动计算。' }
+  const start = new Date(`${base}T00:00:00`)
+  if (Number.isNaN(start.getTime())) return { expired: false, text: '质保期：日期格式异常，需人工确认。' }
+  const end = new Date(start)
+  end.setDate(end.getDate() + 30)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const expired = today > end
+  const dateText = end.toLocaleDateString('zh-CN')
+  return {
+    expired,
+    text: expired
+      ? `质保期已结束（截止 ${dateText}），主工单自动完结。`
+      : `30 天质保期内，截止 ${dateText}。`
+  }
+})
 
 function token() { return localStorage.getItem('token') }
 function formatTime(t) { return t ? new Date(t).toLocaleString('zh-CN') : '' }
@@ -839,6 +864,11 @@ async function fetchDetail() {
       }
     }
   } finally { loading.value = false }
+}
+
+async function handleAttachmentsUpdated() {
+  documentRefreshKey.value += 1
+  await fetchDetail()
 }
 
 async function fetchAssignees() {
@@ -947,7 +977,10 @@ function parseCrewMemberIds(value) {
   }
 }
 
-function crewStatusLabel(value) {
+function crewStatusLabel(value, status = '') {
+  if (['inspection_done', 'material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived'].includes(status)) {
+    return '已完工/已撤场'
+  }
   return {
     pending: '待进场',
     onsite: '已进场',
@@ -1202,6 +1235,18 @@ onMounted(() => {
 }
 .phase-panels { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
 .project-attachments { margin-bottom: 20px; }
+.warranty-line {
+  margin-top: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #10b981 10%, var(--bg-card));
+  color: #047857;
+  font-size: 13px;
+}
+.warranty-line.expired {
+  background: color-mix(in srgb, #64748b 12%, var(--bg-card));
+  color: var(--text-secondary);
+}
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .phase-card,
 .log-card {

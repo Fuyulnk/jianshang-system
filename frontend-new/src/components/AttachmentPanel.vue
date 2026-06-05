@@ -10,6 +10,8 @@ const props = defineProps({
   compact: { type: Boolean, default: false }
 })
 
+const emit = defineEmits(['updated'])
+
 const attachments = ref([])
 const pendingFiles = ref([])
 const loading = ref(false)
@@ -103,6 +105,7 @@ async function uploadPending() {
     pendingFiles.value = pendingFiles.value.filter(item => !uploadedIds.has(item.id))
     ElMessage.success('附件已上传')
     await fetchAttachments()
+    emit('updated')
   } catch (error) {
     pendingFiles.value = pendingFiles.value.filter(item => !uploadedIds.has(item.id))
     ElMessage.error(error.message || '上传失败')
@@ -146,6 +149,7 @@ async function deleteAttachment(file) {
     if (json.success) {
       ElMessage.success('附件已删除')
       await fetchAttachments()
+      emit('updated')
     } else {
       ElMessage.error(json.message || '删除失败')
     }

@@ -16,14 +16,14 @@ export default function productRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireModuleAccess(db, request, reply, 'products', 'can_create', '无权限新增产品')) return
 
-    const { name, category, unit, stock, min_stock } = request.body
+    const { name, category, unit, spec, unit_price, price_unit, stock, min_stock } = request.body
     if (!name) {
       return { success: false, message: '产品名称不能为空' }
     }
 
     const result = db.prepare(
-      'INSERT INTO products (name, category, unit, stock, min_stock) VALUES (?, ?, ?, ?, ?)'
-    ).run(name, category || null, unit || 'kg', stock || 0, min_stock || 0)
+      'INSERT INTO products (name, category, unit, spec, unit_price, price_unit, stock, min_stock) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(name, category || null, unit || 'kg', spec || '', toNumber(unit_price), price_unit || unit || 'kg', toNumber(stock), toNumber(min_stock))
 
     return { success: true, id: result.lastInsertRowid }
   })
@@ -33,10 +33,17 @@ export default function productRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireModuleAccess(db, request, reply, 'products', 'can_edit', '无权限编辑产品')) return
 
-    const { name, category, unit, stock, min_stock } = request.body
-    db.prepare(
-      `UPDATE products SET name = ?, category = ?, unit = ?, stock = ?, min_stock = ?, updated_at = datetime('now', 'localtime') WHERE id = ?`
-    ).run(name, category, unit, stock, min_stock, request.params.id)
+    const { name, category, unit, spec, unit_price, price_unit, stock, min_stock } = request.body
+    if (!String(name || '').trim()) {
+      return { success: false, message: '产品名称不能为空' }
+    }
+    const result = db.prepare(
+      `UPDATE products SET name = ?, category = ?, unit = ?, spec = ?, unit_price = ?, price_unit = ?, stock = ?, min_stock = ?, updated_at = datetime('now', 'localtime') WHERE id = ?`
+    ).run(String(name).trim(), category, unit, spec || '', toNumber(unit_price), price_unit || unit || 'kg', toNumber(stock), toNumber(min_stock), request.params.id)
+    if (result.changes === 0) {
+      reply.code(404).send({ success: false, message: '产品不存在' })
+      return
+    }
 
     return { success: true }
   })
@@ -46,7 +53,16 @@ export default function productRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireModuleAccess(db, request, reply, 'products', 'can_delete', '无权限删除产品')) return
 
-    db.prepare('DELETE FROM products WHERE id = ?').run(request.params.id)
+    const result = db.prepare('DELETE FROM products WHERE id = ?').run(request.params.id)
+    if (result.changes === 0) {
+      reply.code(404).send({ success: false, message: '产品不存在' })
+      return
+    }
     return { success: true }
   })
+}
+
+function toNumber(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
 }

@@ -13,7 +13,12 @@
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="name" label="产品名称" min-width="140" />
         <el-table-column prop="category" label="分类" width="120" />
+        <el-table-column prop="spec" label="规格" width="110" />
         <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column label="单价" width="110">
+          <template #default="{ row }">￥{{ Number(row.unit_price || 0).toFixed(2) }}</template>
+        </el-table-column>
+        <el-table-column prop="price_unit" label="计价单位" width="90" />
         <el-table-column prop="stock" label="库存" width="100" />
         <el-table-column prop="min_stock" label="最低库存" width="100" />
         <el-table-column label="状态" width="100">
@@ -74,6 +79,24 @@
             <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
           </el-select>
         </el-form-item>
+        <el-form-item label="规格">
+          <el-input v-model="addForm.spec" placeholder="如 1kg/桶、500ml" />
+        </el-form-item>
+        <el-form-item label="单价">
+          <el-input-number v-model="addForm.unit_price" :min="0" :precision="2" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="计价单位">
+          <el-select
+            v-model="addForm.price_unit"
+            filterable
+            allow-create
+            default-first-option
+            style="width: 100%"
+            placeholder="如 kg、L、个"
+          >
+            <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="库存">
           <el-input-number v-model="addForm.stock" :min="0" style="width: 100%" />
         </el-form-item>
@@ -98,7 +121,7 @@ const list = ref([])
 const loading = ref(false)
 const showAdd = ref(false)
 const saving = ref(false)
-const addForm = ref({ name: '', category: '', unit: 'kg', stock: 0, min_stock: 0 })
+const addForm = ref({ name: '', category: '', spec: '', unit: 'kg', unit_price: 0, price_unit: 'kg', stock: 0, min_stock: 0 })
 const presetCategories = ['诺瓦艺术漆', '本杰明艺术漆', '艺术漆辅料', '基层材料', '工具耗材', '施工工具', '劳保用品', '设备配件', '其他']
 const presetUnits = ['kg', 'g', 'ml', 'L', '桶', '罐', '支', '把', '套', '份', '个', '颗', '箱', '卷', '米', '平方']
 
@@ -119,6 +142,9 @@ const productMemory = computed(() => {
     const memory = map.get(name)
     if (item.category) memory.categories.add(item.category)
     if (item.unit) memory.units.add(item.unit)
+    if (item.spec) memory.spec = item.spec
+    if (item.unit_price) memory.unit_price = item.unit_price
+    if (item.price_unit) memory.price_unit = item.price_unit
   }
   return [...map.values()].map(item => ({
     value: item.value,
@@ -166,7 +192,7 @@ async function handleAdd() {
     if (json.success) {
       ElMessage.success('新增成功')
       showAdd.value = false
-      addForm.value = { name: '', category: '', unit: 'kg', stock: 0, min_stock: 0 }
+      addForm.value = { name: '', category: '', spec: '', unit: 'kg', unit_price: 0, price_unit: 'kg', stock: 0, min_stock: 0 }
       fetchList()
     }
   } finally {
@@ -186,6 +212,9 @@ function applyProductSuggestion(item) {
   addForm.value.name = item.value
   if (item.categories.length === 1) addForm.value.category = item.categories[0]
   if (item.units.length === 1) addForm.value.unit = item.units[0]
+  if (item.spec && !addForm.value.spec) addForm.value.spec = item.spec
+  if (item.unit_price && !addForm.value.unit_price) addForm.value.unit_price = Number(item.unit_price)
+  if (item.price_unit && !addForm.value.price_unit) addForm.value.price_unit = item.price_unit
 }
 
 watch(() => addForm.value.name, (name) => {
@@ -193,6 +222,9 @@ watch(() => addForm.value.name, (name) => {
   if (!exact) return
   if (exact.categories.length === 1 && !addForm.value.category) addForm.value.category = exact.categories[0]
   if (exact.units.length === 1 && !addForm.value.unit) addForm.value.unit = exact.units[0]
+  if (exact.spec && !addForm.value.spec) addForm.value.spec = exact.spec
+  if (exact.unit_price && !addForm.value.unit_price) addForm.value.unit_price = Number(exact.unit_price)
+  if (exact.price_unit && !addForm.value.price_unit) addForm.value.price_unit = exact.price_unit
 })
 
 async function handleDelete(row) {

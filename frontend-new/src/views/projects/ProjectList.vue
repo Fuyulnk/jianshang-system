@@ -13,7 +13,8 @@
     <el-card class="page-card" shadow="never">
       <div class="page-header workorder-header">
         <div>
-          <h2>项目工单</h2>
+          <el-button class="back-branch" text @click="router.push('/main/projects')">← 项目工单分支</el-button>
+          <h2>施工项目工单</h2>
           <p class="page-desc">门店/渠道签单后，由简尚承接施工交付；重点看资料是否齐、下一步卡在哪里。</p>
         </div>
         <div class="header-actions">
@@ -31,7 +32,7 @@
       </div>
 
       <div class="toolbar">
-        <el-input v-model="keyword" placeholder="搜索工单/业主/电话/门店/单号" clearable style="width:300px" @input="fetchList" />
+        <el-input v-model="keyword" placeholder="搜索工单/业主/联系方式/门店/单号" clearable style="width:300px" @input="fetchList" />
         <el-select v-model="phaseFilter" placeholder="按阶段筛选" clearable style="width:140px" @change="fetchList">
           <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
@@ -54,7 +55,8 @@
       </el-table-column>
       <el-table-column label="资料" width="120">
         <template #default="{ row }">
-          <el-tag v-if="requiredMissingFields(row).length" type="danger" size="small">缺核心 {{ requiredMissingFields(row).length }}</el-tag>
+          <el-tag v-if="isClosedProject(row)" type="success" size="small">已归档</el-tag>
+          <el-tag v-else-if="requiredMissingFields(row).length" type="danger" size="small">缺核心 {{ requiredMissingFields(row).length }}</el-tag>
           <el-tag v-else-if="suggestedMissingFields(row).length" type="warning" size="small">待完善</el-tag>
           <el-tag v-else type="success" size="small">资料齐</el-tag>
         </template>
@@ -68,7 +70,7 @@
       <el-table-column label="施工负责人" width="130">
         <template #default="{ row }">{{ displayUser(row.assignee_real_name, row.assignee_username) }}</template>
       </el-table-column>
-      <el-table-column prop="phone" label="电话" width="130" show-overflow-tooltip />
+      <el-table-column prop="phone" label="联系方式" width="130" show-overflow-tooltip />
       <el-table-column label="阶段" width="140">
         <template #default="{ row }">
           <el-tag :type="phaseTagType(row.phase)" size="small">
@@ -114,8 +116,8 @@
         </el-row>
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="联系电话">
-              <el-input v-model="form.phone" placeholder="业主电话" />
+            <el-form-item label="联系方式">
+              <el-input v-model="form.phone" placeholder="手机号、微信联系、现场联系等" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -279,7 +281,7 @@ const boardStats = computed(() => [
     key: 'missing',
     label: '核心资料待补',
     count: list.value.filter(row => requiredMissingFields(row).length).length,
-    desc: '来源、接单人、电话、地址',
+    desc: '来源、接单人、联系方式、地址',
     tone: 'warning'
   },
   {
@@ -324,19 +326,24 @@ function requiredMissingFields(row) {
   const checks = [
     ['source', '来源'],
     ['order_taker', '接单人'],
-    ['phone', '电话'],
+    ['phone', '联系方式'],
     ['address_detail', '详细地址']
   ]
   return checks.filter(([field]) => !String(row[field] || '').trim()).map(([, label]) => label)
 }
 
 function suggestedMissingFields(row) {
+  if (isClosedProject(row)) return []
   const checks = [
     ['order_date', '接单日期'],
     ['external_order_no', '门店单号'],
     ['handover_note', '交接备注']
   ]
   return checks.filter(([field]) => !String(row[field] || '').trim()).map(([, label]) => label)
+}
+
+function isClosedProject(row) {
+  return ['finance_settled', 'archived', 'repair_done'].includes(row.status)
 }
 
 function userOptionLabel(user) {
@@ -463,6 +470,9 @@ onMounted(() => {
 
 <style scoped>
 .project-page { padding: 0; }
+.back-branch {
+  margin: 0 0 4px -8px;
+}
 .workorder-header {
   align-items: flex-start;
   margin-bottom: 14px;

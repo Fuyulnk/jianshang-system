@@ -13,6 +13,17 @@
 - 敏感操作和增删改接口需要按项目权限规则处理。
 - 结束时记录：任务、修改文件、验证方式、遗留问题。
 
+## 对接文件结构规则
+
+- `ALIGNMENT.md` 只记录跨 Agent 需要知道的事实：阶段目标、改动范围、验证结果、部署状态、遗留风险、下一步建议。
+- 新记录统一写到 `## 对接记录` 下方，按时间倒序追加；今天的记录放最上面，旧记录不要插到文件顶部。
+- 每条记录建议使用固定结构：任务、修改文件、验证、注意事项、下一步。不要只写“已完成”。
+- 同一天同一阶段如果有 Codex、Claude、Hermes 多轮协作，允许拆多条，但标题要写清角色和动作，例如“Codex 开发”“Claude 部署”“Hermes 终审”。
+- 线上部署、数据库迁移、权限/安全修复必须单独写清楚；本地演示数据也必须注明“本地测试库，不代表线上”。
+- 历史快照、旧 Git 状态、废弃说明放到附录或标注为历史，不能写成“当前状态”。
+- 如果产生路线图、SOP、阶段总结、老板版汇报等独立文件，必须在 `## 关键文件索引` 补入口。
+- 不要把长篇代码、完整日志、终端噪声贴进本文件；只保留可交接结论和必要命令。
+
 ## 当前项目要点
 
 - 前端：`frontend-new/`
@@ -43,9 +54,32 @@
   - 系统设置里的 AI 权限、用户管理等大块功能后续可拆成子组件并按 tab 延迟加载。
 - 现阶段不用为了这个警告做激进优化；功能稳定后安排一次“前端加载结构整理”即可。
 
-## 当前 Git 状态快照
+## 2026-06-05 下午 Codex：项目工单分支和完工样本校正
 
-记录时间：2026-05-18
+- 背景：财务看系统后指出“完工成本核算表”和“财务结算/归档”展示内容几乎一样，不符合实际；同时用户确认项目工单需要拆出“项目供货单”分支。
+- 本轮定位：
+  - 施工项目工单：走门店交接、工勘、交底、出入库、施工、验收、工费、成本、财务归档。
+  - 项目供货单：单独分支，流程为“销售下单 → 财务确认收款 → 仓库订材料 → 材料到位发货 → 完结”，不进入施工资料链。
+- 修改重点：
+  - `frontend-new/src/router/index.js`：`/main/projects` 改为项目工单分支首页；施工列表移动到 `/main/projects/construction`；新增 `/main/projects/supply`。
+  - `frontend-new/src/views/projects/ProjectWorkOrderHome.vue`：新增分支选择页。
+  - `frontend-new/src/views/projects/ProjectSupplyList.vue`：新增项目供货单 V1 骨架页，先展示流程和样板，不假装已完成真实入库。
+  - `frontend-new/src/components/projects/ProjectDocumentSummary.vue`：成本核算和财务归档弹窗拆开；成本表展示费用/利润，财务归档展示收款、尾款、凭证说明、归档状态。
+  - `frontend-new/src/views/projects/ProjectList.vue`、`ProjectDetail.vue`：已归档项目不再因为门店单号等建议项显示“待完善”；详情返回改到施工工单列表。
+- 本地样本：
+  - 已将本地测试项目 `#4 何总 项目工单` 补成已归档演示状态：工勘、交底、材料、验收、工费、成本、财务归档单据均为 `confirmed`。
+  - 这是本地测试库演示数据，不代表线上已改。
+- 验证：
+  - `node --check backend/src/routes/project-imports.js && node --check backend/src/routes/projects.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+  - 直查本地库确认项目 #4：`status=archived`，7 类项目单据均 `confirmed`。
+- 后续：
+  - 项目供货单现在只是 V1 骨架，后续应补后端表、权限、收款联动、库存/采购联动和附件/日志。
+  - 财务归档需要继续接交易流水/账户收款记录，不能只靠项目单据 JSON。
+
+## 历史 Git 状态快照（仅解释早期工作树为什么脏）
+
+记录时间：2026-05-18。此段不是当前工作树状态；当前状态请以运行 `git status --short` 的结果为准。
 
 当时工作树不是 clean 状态，包含以下已跟踪修改：
 
@@ -74,6 +108,32 @@
 注意：这些改动可能是用户或其他 Agent 的已有成果。除非用户明确要求，不要清理或回滚。
 
 ## 对接记录
+
+### 2026-06-05 Codex 修复 Hermes 终审 P1
+
+- 任务：修复 Hermes 对“项目工单表格体验、供货单 V1 和完工闭环”终审发现的 3 个 P1，并补对接文件结构规则。
+- 修改文件：
+  - `backend/src/utils/permissions.js` — `super_admin` 仍固定全权限；`admin` 优先读取数据库中的 `role_permissions.data_scope`，缺配置时才回退 all，避免 data_scope 配了 self 仍被硬编码绕过。
+  - `backend/src/routes/supply-orders.js` — 供货单列表/详情按 `getDataScope(db, user, 'projects')` 判断是否看全部；金额、单价、数量统一限制为非负并设置上限 `100000000`；数量保留 3 位小数，金额保留 2 位小数。
+  - `backend/src/routes/products.js` — PUT 校验产品名不能为空；PUT/DELETE 根据 `changes === 0` 返回 404，避免不存在 ID 返回 success。
+  - `frontend-new/src/components/projects/ProjectDocumentSummary.vue` — 产品价格记忆加载失败不再空 catch，改为 `console.warn`。
+  - `ALIGNMENT.md` — 新增“对接文件结构规则”。
+- 验证：
+  - `node --check backend/src/utils/permissions.js`
+  - `node --check backend/src/routes/supply-orders.js`
+  - `node --check backend/src/routes/products.js`
+  - `npm run build`（在 `frontend-new/`，成功；仍有 Vite 大 chunk 警告）
+- 注意事项：
+  - 本轮未上传服务器。
+  - Hermes 的 P2“状态推进角色硬编码”暂未展开，建议下一轮把供货单五步动作做成角色权限项或流程权限表，避免现在为了修 P1 把权限体系拉太大。
+
+### 2026-06-04 Claude 施工交底单导入预览+Hermes修复 上线
+
+- 任务：Codex 完成施工交底单 P1 修复+材料出库表预览骨架，Hermes 修复代码后 Claude 部署上线。
+- 已完成：前端构建 -> rsync -> PM2 重启，已备份，已推送 GitHub。
+- 验证：/health 正常，pm2 list online。
+- 注意事项：无。
+
 
 ### 2026-06-04 Codex 施工交底单 P1 修复 + 材料出库表预览骨架
 
@@ -1140,6 +1200,33 @@
   - 本地验证时重启过后端 `backend npm run dev`，因为旧 3001 进程还在跑旧代码；后续看页面前也要注意前后端都加载到最新代码。
   - 出库确认仍会真实扣库存，后续做端到端测试时优先用测试物料或临时项目，避免污染真实库存。
   - 下一阶段建议进入“总监表格字段映射 V2”：把勘察 PPT、施工交底单、材料出库表、班组工费结算单、完工成本核算表、财务结算附件逐步映射到项目工单字段和附件检查清单。
+
+### 2026-06-05 Codex
+
+- 任务：项目工单表格体验、供货单 V1 和完工闭环修复。
+- 本轮实现：
+  - 新增 `frontend-new/src/components/projects/DecimalCellInput.vue`，解决数量/金额输入吞小数点的问题。
+  - 新增 `frontend-new/src/components/projects/SystemSheetTable.vue`，作为系统版表格编辑器：列宽可拖拽、列宽保存到 `localStorage`、表格滚动边界收在弹窗内。
+  - `ProjectDocumentSummary.vue`：交底、材料、工费、成本等弹窗改用系统表格；材料出库/回库拆成总览、出库明细、回库明细、剩余/差异；成本核算恢复费用小记；财务归档继续只放收款/尾款/凭证状态，避免和成本表长得一样。
+  - 工勘/验收节点补 `PPT可视图` 和 `上传PPT` 入口；任意 PPTX 仍只作为原始附件留存，系统版 PPT 草稿先以结构化数据承载。
+  - 二次勘察改回真正按需：只有上传二次勘察表、首次工勘勾选需要复勘、或备注明确“需要复勘/二次”才计入待处理，不再被普通“复尺完成”误触发。
+  - 产品库存扩展 `spec / unit_price / price_unit`，为材料自动匹配单位和单价做基础。
+  - 新增供货单后端 `backend/src/routes/supply-orders.js` 和表结构：销售下单 -> 财务确认收款 -> 仓库订材料 -> 材料到位发货 -> 完结。
+  - `ProjectSupplyList.vue` 从静态骨架改为真实 API 页面，支持新建、编辑、列表、搜索和按流程推进；本轮不扣库存。
+  - `AttachmentPanel.vue` 上传/删除后向父级 emit `updated`；`ProjectDetail.vue` 收到后刷新详情和资料链，不需要退出重进。
+  - 已归档工单人员状态显示为“已完工/已撤场”；售后区增加按验收/完工日期计算的 30 天质保提示，超过后隐藏“发起售后单”按钮。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/supply-orders.js`
+  - `node --check backend/src/routes/project-imports.js`
+  - `node --check backend/src/routes/products.js`
+  - `npm run build`（在 `frontend-new/`，成功；仍有 Vite 大 chunk 警告）
+- 注意事项：
+  - 本轮未上传服务器。
+  - 供货单 V1 只做流程和日志，不自动扣库存，库存扣减必须等真实价格/库存规则再接。
+  - 材料自动匹配目前按产品名精确匹配 `products.name`，后续真实仓库数据进库后再做同义词/规格/供应商价格体系。
+  - PPT 可视图是系统版草稿，不是任意 PPTX 反向解析；上传的原始 PPTX 可追溯下载。
+  - 如果继续做这一线，下一步建议：让 Hermes 审 `supply-orders.js` 权限/状态机，再用测试账号实测财务、仓库、普通员工的可见性。
 
 ### 2026-05-23 Codex
 
