@@ -15,13 +15,25 @@
       </div>
       <el-form :model="form" class="login-form">
         <el-form-item>
-          <el-input
+          <el-autocomplete
             v-model="form.username"
+            class="account-input"
+            :fetch-suggestions="queryAccountHistory"
             placeholder="请输入账号"
             :prefix-icon="User"
             size="large"
+            clearable
+            :trigger-on-focus="true"
+            @select="selectAccount"
             @keydown.enter="handleLogin"
-          />
+          >
+            <template #default="{ item }">
+              <div class="account-option">
+                <span>{{ item.value }}</span>
+                <button type="button" @mousedown.prevent.stop @click.stop="removeSavedAccount(item.value)">移除</button>
+              </div>
+            </template>
+          </el-autocomplete>
         </el-form-item>
         <el-form-item>
           <el-input
@@ -35,9 +47,14 @@
           />
         </el-form-item>
         <el-form-item>
-          <el-checkbox v-model="rememberMe" size="small" class="remember-checkbox">
-            7天自动登录
-          </el-checkbox>
+          <div class="login-options">
+            <el-checkbox v-model="rememberAccount" size="small" class="remember-checkbox">
+              记住账号
+            </el-checkbox>
+            <el-checkbox v-model="rememberMe" size="small" class="remember-checkbox">
+              7天自动登录
+            </el-checkbox>
+          </div>
         </el-form-item>
         <el-form-item>
           <el-button
@@ -84,18 +101,109 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const form = ref({ username: '', password: '' })
+const rememberAccount = ref(true)
 const rememberMe = ref(false)
+const accountHistory = ref([])
 const loading = ref(false)
 const errorMsg = ref('')
 const showRegister = ref(false)
 const regLoading = ref(false)
 const regForm = ref({ username: '', password: '', name: '', phone: '' })
+
+onMounted(async () => {
+  restoreLoginPreference()
+  if (await hasValidToken()) {
+    router.replace('/main/dashboard')
+  }
+})
+
+function restoreLoginPreference() {
+  const savedRememberAccount = localStorage.getItem('remember-account')
+  rememberAccount.value = savedRememberAccount !== 'false'
+  rememberMe.value = localStorage.getItem('remember-login') === 'true'
+  accountHistory.value = loadAccountHistory()
+  if (rememberAccount.value) {
+    form.value.username = localStorage.getItem('saved-username') || accountHistory.value[0] || ''
+  }
+}
+
+async function hasValidToken() {
+  const token = localStorage.getItem('token')
+  if (!token) return false
+  try {
+    const res = await fetch('/api/me', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    const json = await res.json().catch(() => ({}))
+    if (res.ok && json.success) return true
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    return false
+  } catch {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    return false
+  }
+}
+
+function saveLoginPreference(username) {
+  const cleanUsername = String(username || '').trim()
+  localStorage.setItem('remember-account', rememberAccount.value ? 'true' : 'false')
+  localStorage.setItem('remember-login', rememberMe.value ? 'true' : 'false')
+  if (rememberAccount.value && cleanUsername) {
+    const next = [cleanUsername, ...accountHistory.value.filter(item => item !== cleanUsername)].slice(0, 8)
+    accountHistory.value = next
+    localStorage.setItem('saved-username', cleanUsername)
+    localStorage.setItem('saved-accounts', JSON.stringify(next))
+  } else {
+    localStorage.removeItem('saved-username')
+  }
+}
+
+function loadAccountHistory() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('saved-accounts') || '[]')
+    const legacy = localStorage.getItem('saved-username') || ''
+    return [...new Set([legacy, ...parsed].map(item => String(item || '').trim()).filter(Boolean))].slice(0, 8)
+  } catch {
+    const legacy = localStorage.getItem('saved-username') || ''
+    return legacy ? [legacy] : []
+  }
+}
+
+function queryAccountHistory(query, callback) {
+  const keyword = String(query || '').trim().toLowerCase()
+  const list = accountHistory.value
+    .filter(account => !keyword || account.toLowerCase().includes(keyword))
+    .map(account => ({ value: account }))
+  callback(list)
+}
+
+function selectAccount(item) {
+  form.value.username = item.value
+  form.value.password = ''
+}
+
+function removeSavedAccount(username) {
+  const target = String(username || '').trim()
+  accountHistory.value = accountHistory.value.filter(item => item !== target)
+  localStorage.setItem('saved-accounts', JSON.stringify(accountHistory.value))
+  if (localStorage.getItem('saved-username') === target) {
+    const next = accountHistory.value[0] || ''
+    if (next) localStorage.setItem('saved-username', next)
+    else localStorage.removeItem('saved-username')
+  }
+  if (form.value.username === target) {
+    form.value.username = accountHistory.value[0] || ''
+    form.value.password = ''
+  }
+}
 
 const handleLogin = async () => {
   if (!form.value.username || !form.value.password) {
@@ -113,6 +221,8 @@ const handleLogin = async () => {
     const result = await response.json()
     if (result.success) {
       localStorage.setItem('token', result.token)
+      localStorage.removeItem('user')
+      saveLoginPreference(form.value.username)
       router.push('/main/dashboard')
     } else {
       errorMsg.value = result.message || '登录失败'
@@ -144,6 +254,9 @@ const handleRegister = async () => {
     const json = await res.json()
     if (json.success) {
       localStorage.setItem('token', json.token)
+      localStorage.removeItem('user')
+      rememberAccount.value = true
+      saveLoginPreference(regForm.value.username)
       showRegister.value = false
       router.push('/main/dashboard')
     } else {
@@ -279,10 +392,47 @@ const handleRegister = async () => {
   color: #6b6d75;
 }
 
+.account-input {
+  width: 100%;
+}
+
+.account-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.account-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-option button {
+  border: none;
+  background: transparent;
+  color: #8b8d97;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.account-option button:hover {
+  color: var(--color-danger);
+}
+
 .login-form :deep(.el-button--primary) {
   height: 44px;
   font-size: 15px;
   letter-spacing: 2px;
+}
+
+.login-options {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
 }
 
 .remember-checkbox {

@@ -1,7 +1,8 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 import DecimalCellInput from '../../components/projects/DecimalCellInput.vue'
 import SystemSheetTable from '../../components/projects/SystemSheetTable.vue'
 
@@ -30,9 +31,16 @@ const products = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const showDialog = ref(false)
+const showImportDialog = ref(false)
 const editingId = ref(0)
 const filters = ref({ keyword: '', status: '' })
 const form = ref(emptyForm())
+const importFile = ref(null)
+const importFileInput = ref(null)
+const importParsing = ref(false)
+const importConfirming = ref(false)
+const importParsed = ref(null)
+const importForm = ref(emptyForm())
 
 const board = computed(() => [
   { label: '待财务确认', count: list.value.filter(row => row.status === 'ordered').length, desc: '已下单，等收款确认' },
@@ -53,7 +61,8 @@ function emptyForm() {
     address: '',
     amount: 0,
     note: '',
-    items: [emptyItem()]
+    items: [emptyItem()],
+    meta: {}
   }
 }
 
@@ -110,6 +119,97 @@ function openCreate() {
   showDialog.value = true
 }
 
+function openImport() {
+  resetImport()
+  showImportDialog.value = true
+}
+
+function resetImport() {
+  importFile.value = null
+  importParsed.value = null
+  importForm.value = emptyForm()
+  if (importFileInput.value) importFileInput.value.value = ''
+}
+
+function openImportPicker() {
+  importFileInput.value?.click()
+}
+
+function onImportFileChange(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (!/\.(csv|xls|xlsx)$/i.test(file.name)) {
+    ElMessage.warning('项目供货单暂只支持 CSV / XLS / XLSX')
+    event.target.value = ''
+    return
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    ElMessage.warning('单个文件不能超过 10MB')
+    event.target.value = ''
+    return
+  }
+  importFile.value = file
+  importParsed.value = null
+  importForm.value = emptyForm()
+}
+
+async function parseImport() {
+  if (!importFile.value) {
+    ElMessage.warning('请先选择供货销售单或材料预算单')
+    return
+  }
+  importParsing.value = true
+  try {
+    const json = await requestJson('/api/supply-orders/imports/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        file_name: importFile.value.name,
+        file_data: await readAsDataUrl(importFile.value)
+      })
+    })
+    importParsed.value = json.data
+    importForm.value = normalizeParsedOrder(json.data?.form_data || {})
+    ElMessage.success('供货单已解析，请核对后创建')
+  } catch (err) {
+    ElMessage.error(err.message || '供货单解析失败')
+  } finally {
+    importParsing.value = false
+  }
+}
+
+async function confirmImportCreate() {
+  if (!importParsed.value) {
+    ElMessage.warning('请先解析供货单')
+    return
+  }
+  if (!String(importForm.value.customer || '').trim()) {
+    ElMessage.warning('客户/项目名称必填')
+    return
+  }
+  importConfirming.value = true
+  try {
+    refreshImportAmount()
+    const json = await requestJson('/api/supply-orders/imports/confirm-create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parsed_data: importParsed.value,
+        confirmed_data: importForm.value,
+        warnings: importParsed.value.warnings || [],
+        source_file: importFile.value?.name || importParsed.value.source_file || ''
+      })
+    })
+    ElMessage.success(`供货单已创建：${json.order_no || ''}`)
+    showImportDialog.value = false
+    await fetchList()
+  } catch (err) {
+    ElMessage.error(err.message || '创建供货单失败')
+  } finally {
+    importConfirming.value = false
+  }
+}
+
 async function openEdit(row) {
   try {
     const json = await requestJson(`/api/supply-orders/${row.id}`)
@@ -142,6 +242,19 @@ function normalizeItem(item) {
   }
 }
 
+function normalizeParsedOrder(input) {
+  return {
+    customer: input.customer || '',
+    phone: input.phone || '',
+    source: input.source || '',
+    address: input.address || '',
+    amount: Number(input.amount || 0),
+    note: input.note || '',
+    items: Array.isArray(input.items) && input.items.length ? input.items.map(normalizeItem) : [emptyItem()],
+    meta: input.meta || {}
+  }
+}
+
 function addItem() {
   form.value.items.push(emptyItem())
 }
@@ -166,8 +279,36 @@ function onItemChange({ row, column }) {
   }
 }
 
+function onImportItemChange({ row, column }) {
+  if (column.key === 'product_name') {
+    const matched = products.value.find(item => String(item.name || '').trim() === String(row.product_name || '').trim())
+    if (matched) {
+      if (!row.category) row.category = matched.category || ''
+      if (!row.unit) row.unit = matched.unit || ''
+      if (!row.unit_price) row.unit_price = Number(matched.unit_price || 0)
+    }
+  }
+  if (['quantity', 'unit_price', 'product_name'].includes(column.key)) {
+    row.amount = roundMoney(Number(row.quantity || 0) * Number(row.unit_price || 0))
+    refreshImportAmount()
+  }
+}
+
 function refreshAmount() {
   form.value.amount = roundMoney(form.value.items.reduce((sum, item) => sum + Number(item.amount || 0), 0))
+}
+
+function refreshImportAmount() {
+  importForm.value.amount = roundMoney(importForm.value.items.reduce((sum, item) => sum + Number(item.amount || 0), 0))
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 }
 
 async function saveOrder() {
@@ -214,6 +355,25 @@ async function advance(row) {
   }
 }
 
+async function deleteOrder(row) {
+  try {
+    await ElMessageBox.confirm(`确定删除供货单「${row.order_no || row.customer}」？删除后明细和流程记录也会一起移除。`, '确认删除', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    saving.value = true
+    await requestJson(`/api/supply-orders/${row.id}`, { method: 'DELETE' })
+    ElMessage.success('供货单已删除')
+    await fetchList()
+  } catch (err) {
+    if (err === 'cancel' || err === 'close') return
+    ElMessage.error(err.message || '删除供货单失败')
+  } finally {
+    saving.value = false
+  }
+}
+
 function statusType(status) {
   if (status === 'completed') return 'success'
   if (status === 'ordered') return 'warning'
@@ -247,7 +407,10 @@ onMounted(() => {
         <h2>项目供货单</h2>
         <p>不走施工交付的材料供货分支：销售下单、财务确认收款、仓库订材料、材料到位发货、完结。</p>
       </div>
-      <el-button type="primary" @click="openCreate">新建供货单</el-button>
+      <div class="header-actions">
+        <el-button @click="openImport">导入供货单</el-button>
+        <el-button type="primary" @click="openCreate">新建供货单</el-button>
+      </div>
     </div>
 
     <div class="supply-board">
@@ -295,10 +458,11 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="190" fixed="right">
+        <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <el-button link @click="openEdit(row)">查看/编辑</el-button>
             <el-button v-if="row.next_status" link type="primary" :loading="saving" @click="advance(row)">推进</el-button>
+            <el-button link type="danger" :loading="saving" @click="deleteOrder(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -331,6 +495,87 @@ onMounted(() => {
         <el-button type="primary" :loading="saving" @click="saveOrder">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showImportDialog" title="导入项目供货单" width="1080px" class="supply-import-dialog" @closed="resetImport">
+      <div class="import-layout">
+        <section class="import-source">
+          <div class="section-title">供货单来源</div>
+          <div class="upload-box" @click="openImportPicker">
+            <input ref="importFileInput" class="hidden-input" type="file" accept=".csv,.xls,.xlsx" @change="onImportFileChange" />
+            <el-icon :size="28"><UploadFilled /></el-icon>
+            <div>
+              <strong>{{ importFile?.name || '选择供货销售单 / 材料预算单' }}</strong>
+              <span>支持别人向简尚下单的 .xls / .xlsx / .csv，AI分析后生成可编辑草稿。</span>
+            </div>
+          </div>
+          <el-button class="parse-button" type="primary" :loading="importParsing" @click="parseImport">AI分析供货单</el-button>
+
+          <div class="analysis-card">
+            <span>识别类型</span>
+            <strong>{{ importParsed?.analysis?.order_type_label || '待分析' }}</strong>
+            <p>{{ importParsed?.analysis?.summary?.join(' · ') || '上传后会识别客户、地址、联系人、供货明细和金额异常。' }}</p>
+          </div>
+
+          <div v-if="importParsed?.warnings?.length" class="warning-list">
+            <div v-for="warning in importParsed.warnings" :key="warning">
+              <el-icon><WarningFilled /></el-icon>
+              <span>{{ warning }}</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="import-form">
+          <div class="result-header">
+            <div>
+              <div class="section-title">系统版项目供货单</div>
+              <p>AI只负责拆字段和提示异常，创建前请人工核对金额、电话和送货地址。</p>
+            </div>
+            <el-button type="primary" :disabled="!importParsed" :loading="importConfirming" @click="confirmImportCreate">确认创建供货单</el-button>
+          </div>
+
+          <el-form :model="importForm" label-position="top">
+            <div class="form-grid">
+              <el-form-item label="客户/项目名称"><el-input v-model="importForm.customer" /></el-form-item>
+              <el-form-item label="联系方式"><el-input v-model="importForm.phone" /></el-form-item>
+              <el-form-item label="来源/顾问"><el-input v-model="importForm.source" /></el-form-item>
+              <el-form-item label="供货金额"><DecimalCellInput v-model="importForm.amount" /></el-form-item>
+              <el-form-item class="wide" label="收货/项目地址"><el-input v-model="importForm.address" /></el-form-item>
+              <div v-if="importParsed" class="wide parsed-meta">
+                <div class="meta-item">
+                  <span>下单日期</span>
+                  <strong>{{ importForm.meta?.order_date || '表内未提供' }}</strong>
+                </div>
+                <div class="meta-item">
+                  <span>订单顾问</span>
+                  <strong>{{ importForm.meta?.consultant || '表内未提供' }}</strong>
+                </div>
+                <div class="meta-item wide">
+                  <span>联系地址</span>
+                  <strong>{{ importForm.meta?.address_duplicated ? '与收货/项目地址一致' : (importForm.meta?.contact_address || '表内未提供') }}</strong>
+                </div>
+                <div class="meta-item wide">
+                  <span>付款/转账信息</span>
+                  <strong>{{ importForm.meta?.payment_note || '表内未提供' }}</strong>
+                </div>
+              </div>
+              <el-form-item class="wide" label="表内备注"><el-input v-model="importForm.note" type="textarea" :rows="2" /></el-form-item>
+            </div>
+          </el-form>
+
+          <div class="dialog-toolbar">
+            <strong>供货明细</strong>
+            <el-button size="small" @click="importForm.items.push(emptyItem())">新增一行</el-button>
+          </div>
+          <SystemSheetTable
+            :columns="itemColumns"
+            :rows="importForm.items"
+            storage-key="supply-order-import-items"
+            empty-text="解析后会显示供货明细"
+            @cell-change="onImportItemChange"
+          />
+        </section>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -346,6 +591,11 @@ onMounted(() => {
   justify-content: space-between;
   gap: 16px;
   align-items: flex-start;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .supply-header h2,
@@ -425,6 +675,38 @@ onMounted(() => {
   grid-column: 1 / -1;
 }
 
+.parsed-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-page);
+}
+
+.meta-item {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.meta-item.wide {
+  grid-column: 1 / -1;
+}
+
+.meta-item span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.meta-item strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  word-break: break-word;
+}
+
 .dialog-toolbar {
   display: flex;
   justify-content: space-between;
@@ -432,16 +714,117 @@ onMounted(() => {
   margin: 4px 0 10px;
 }
 
+.import-layout {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: 18px;
+  min-height: 560px;
+}
+
+.section-title {
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.upload-box {
+  min-height: 96px;
+  padding: 14px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-page);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.upload-box strong,
+.upload-box span {
+  display: block;
+}
+
+.upload-box strong {
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.hidden-input {
+  display: none;
+}
+
+.parse-button {
+  width: 100%;
+  margin: 12px 0;
+}
+
+.analysis-card {
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.analysis-card span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.analysis-card strong {
+  display: block;
+  margin: 4px 0;
+  font-size: 18px;
+}
+
+.analysis-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.warning-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.warning-list div {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, #f59e0b 12%, var(--bg-card));
+  color: var(--color-warning);
+  font-size: 13px;
+}
+
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.result-header p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
 @media (max-width: 860px) {
   .supply-header,
   .card-head,
-  .filters {
+  .filters,
+  .result-header {
     display: grid;
     min-width: 0;
   }
 
   .supply-board,
-  .form-grid {
+  .form-grid,
+  .import-layout {
     grid-template-columns: 1fr;
   }
 }

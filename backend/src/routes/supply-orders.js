@@ -1,5 +1,6 @@
 import { authMiddleware } from '../middleware/auth.js'
-import { canAccessModule, getDataScope } from '../utils/permissions.js'
+import { canAccessModule, canAccessProjectRecord, getDataScope } from '../utils/permissions.js'
+import { parseSupplyOrderDocument } from '../utils/supplyOrderImport.js'
 
 const MAX_MONEY_VALUE = 100000000
 
@@ -22,10 +23,9 @@ export default function supplyOrderRoutes(server, db) {
     const status = cleanText(request.query?.status)
     const params = []
     let sql = 'SELECT * FROM supply_orders WHERE 1=1'
-    if (!canSeeAll(db, request.user)) {
-      sql += ' AND created_by = ?'
-      params.push(request.user.userId)
-    }
+    const scoped = buildScopedOrderWhere(db, request.user)
+    sql += scoped.sql
+    params.push(...scoped.params)
     if (status) {
       sql += ' AND status = ?'
       params.push(status)
@@ -38,6 +38,80 @@ export default function supplyOrderRoutes(server, db) {
     sql += ' ORDER BY id DESC LIMIT 200'
     const rows = db.prepare(sql).all(...params).map(row => decorateOrder(db, row, false))
     return { success: true, data: rows }
+  })
+
+  server.post('/api/supply-orders/imports/parse', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canAccessModule(db, request.user, 'projects', 'can_create')) {
+      logAiAudit(db, request.user, {
+        toolName: 'parse_supply_order',
+        status: 'denied',
+        errorMessage: '无权限导入项目供货单'
+      })
+      reply.code(403).send({ success: false, message: '无权限导入项目供货单' })
+      return
+    }
+    const { file_name = '', file_data = '' } = request.body || {}
+    if (!file_name || !file_data) return { success: false, message: '请上传供货销售单或材料预算单' }
+    try {
+      const parsed = parseSupplyOrderDocument(file_name, file_data)
+      logAiAudit(db, request.user, {
+        toolName: 'parse_supply_order',
+        requestSummary: file_name,
+        resultSummary: `供货单识别：${parsed.form_data?.items?.length || 0} 条明细，金额 ${parsed.form_data?.amount || 0}`
+      })
+      return { success: true, data: parsed }
+    } catch (err) {
+      logAiAudit(db, request.user, {
+        toolName: 'parse_supply_order',
+        status: 'failed',
+        errorMessage: err.message || '供货单解析失败'
+      })
+      reply.code(400).send({ success: false, message: err.message || '供货单解析失败' })
+    }
+  })
+
+  server.post('/api/supply-orders/imports/confirm-create', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canAccessModule(db, request.user, 'projects', 'can_create')) {
+      logAiAudit(db, request.user, {
+        toolName: 'create_supply_order',
+        status: 'denied',
+        errorMessage: '无权限从导入草稿创建供货单'
+      })
+      reply.code(403).send({ success: false, message: '无权限从导入草稿创建供货单' })
+      return
+    }
+    const validation = validateOrderInput(request.body?.confirmed_data || {}, { requireItems: true })
+    if (validation) return { success: false, message: validation }
+    const draft = normalizeOrder(request.body?.confirmed_data || {})
+    const items = normalizeItems(request.body?.confirmed_data?.items)
+    if (!draft.customer) return { success: false, message: '客户/项目名称必填' }
+    const warnings = Array.isArray(request.body?.warnings) ? request.body.warnings : []
+    const sourceFile = cleanText(request.body?.source_file || request.body?.parsed_data?.source_file)
+    const orderNo = nextOrderNo(db)
+    const tx = db.transaction(() => {
+      const result = db.prepare(`
+        INSERT INTO supply_orders (order_no, project_id, customer, phone, source, address, amount, note, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(orderNo, draft.project_id, draft.customer, draft.phone, draft.source, draft.address, draft.amount, draft.note, request.user.userId)
+      saveItems(db, result.lastInsertRowid, items)
+      addLog(
+        db,
+        result.lastInsertRowid,
+        '导入供货单创建',
+        request.user.username,
+        `由供货单导入创建；来源文件：${sourceFile || '未记录'}；AI分析提示 ${warnings.length} 项`
+      )
+      return result.lastInsertRowid
+    })
+    const id = tx()
+    logAiAudit(db, request.user, {
+      toolName: 'create_supply_order',
+      requestSummary: sourceFile || draft.customer,
+      resultSummary: `创建供货单 ${orderNo}，明细 ${items.length} 条，金额 ${draft.amount}`
+    })
+    return { success: true, id, order_no: orderNo }
   })
 
   server.get('/api/supply-orders/:id', async (request, reply) => {
@@ -56,15 +130,17 @@ export default function supplyOrderRoutes(server, db) {
       reply.code(403).send({ success: false, message: '无权限新建项目供货单' })
       return
     }
+    const validation = validateOrderInput(request.body || {}, { requireItems: true })
+    if (validation) return { success: false, message: validation }
     const draft = normalizeOrder(request.body || {})
     if (!draft.customer) return { success: false, message: '客户/项目名称必填' }
     const items = normalizeItems(request.body?.items)
     const orderNo = nextOrderNo(db)
     const tx = db.transaction(() => {
       const result = db.prepare(`
-        INSERT INTO supply_orders (order_no, customer, phone, source, address, amount, note, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(orderNo, draft.customer, draft.phone, draft.source, draft.address, draft.amount, draft.note, request.user.userId)
+        INSERT INTO supply_orders (order_no, project_id, customer, phone, source, address, amount, note, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(orderNo, draft.project_id, draft.customer, draft.phone, draft.source, draft.address, draft.amount, draft.note, request.user.userId)
       saveItems(db, result.lastInsertRowid, items)
       addLog(db, result.lastInsertRowid, '新建供货单', request.user.username, `创建供货单 ${orderNo}`)
       return result.lastInsertRowid
@@ -83,14 +159,16 @@ export default function supplyOrderRoutes(server, db) {
       reply.code(403).send({ success: false, message: '无权限编辑该供货单' })
       return
     }
+    const validation = validateOrderInput(request.body || {}, { requireItems: true })
+    if (validation) return { success: false, message: validation }
     const draft = normalizeOrder(request.body || {})
     const items = normalizeItems(request.body?.items)
     const tx = db.transaction(() => {
       db.prepare(`
         UPDATE supply_orders
-        SET customer = ?, phone = ?, source = ?, address = ?, amount = ?, note = ?, updated_at = datetime('now', 'localtime')
+        SET project_id = ?, customer = ?, phone = ?, source = ?, address = ?, amount = ?, note = ?, updated_at = datetime('now', 'localtime')
         WHERE id = ?
-      `).run(draft.customer, draft.phone, draft.source, draft.address, draft.amount, draft.note, order.id)
+      `).run(draft.project_id, draft.customer, draft.phone, draft.source, draft.address, draft.amount, draft.note, order.id)
       db.prepare('DELETE FROM supply_order_items WHERE order_id = ?').run(order.id)
       saveItems(db, order.id, items)
       addLog(db, order.id, '编辑供货单', request.user.username, '更新供货单基础信息和明细')
@@ -131,6 +209,26 @@ export default function supplyOrderRoutes(server, db) {
     tx()
     return { success: true }
   })
+
+  server.delete('/api/supply-orders/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const order = db.prepare('SELECT * FROM supply_orders WHERE id = ?').get(toInt(request.params.id))
+    if (!order || !canViewOrder(db, request.user, order)) {
+      reply.code(404).send({ success: false, message: '供货单不存在或无权限' })
+      return
+    }
+    if (!canDeleteOrder(db, request.user, order)) {
+      reply.code(403).send({ success: false, message: '无权限删除该供货单' })
+      return
+    }
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM supply_order_items WHERE order_id = ?').run(order.id)
+      db.prepare('DELETE FROM supply_order_logs WHERE order_id = ?').run(order.id)
+      db.prepare('DELETE FROM supply_orders WHERE id = ?').run(order.id)
+    })
+    tx()
+    return { success: true }
+  })
 }
 
 function decorateOrder(db, order, withDetail) {
@@ -159,6 +257,7 @@ function saveItems(db, orderId, items) {
 
 function normalizeOrder(input) {
   return {
+    project_id: toInt(input.project_id),
     customer: cleanText(input.customer),
     phone: cleanText(input.phone),
     source: cleanText(input.source),
@@ -166,6 +265,45 @@ function normalizeOrder(input) {
     amount: toMoney(input.amount),
     note: cleanText(input.note)
   }
+}
+
+function validateOrderInput(input, { requireItems = false } = {}) {
+  const customer = cleanText(input?.customer)
+  if (!customer) return '客户/项目名称必填'
+  const amountMessage = validateNumberInput(input?.amount, '供货金额', { allowZero: true, max: MAX_MONEY_VALUE })
+  if (amountMessage) return amountMessage
+
+  const rawItems = Array.isArray(input?.items) ? input.items : []
+  if (requireItems && !rawItems.length) return '至少需要一条供货明细'
+  const meaningfulItems = rawItems.filter(hasMeaningfulItemValue)
+  if (requireItems && !meaningfulItems.length) return '至少需要一条有效供货明细'
+  for (const [index, item] of meaningfulItems.entries()) {
+    const rowLabel = `第 ${index + 1} 条供货明细`
+    if (!cleanText(item.product_name)) return `${rowLabel}缺产品/材料名称`
+    const quantityMessage = validateNumberInput(item.quantity, `${rowLabel}数量`, { allowZero: false, max: MAX_MONEY_VALUE })
+    if (quantityMessage) return quantityMessage
+    const priceMessage = validateNumberInput(item.unit_price, `${rowLabel}单价`, { allowZero: true, max: MAX_MONEY_VALUE })
+    if (priceMessage) return priceMessage
+    const amountMessage = validateNumberInput(item.amount, `${rowLabel}金额`, { allowZero: true, max: MAX_MONEY_VALUE })
+    if (amountMessage) return amountMessage
+  }
+  return ''
+}
+
+function hasMeaningfulItemValue(item) {
+  return ['product_name', 'category', 'unit', 'quantity', 'unit_price', 'amount', 'note']
+    .some(key => cleanText(item?.[key]) !== '')
+}
+
+function validateNumberInput(value, label, { allowZero, max }) {
+  const text = cleanText(value)
+  if (!text) return allowZero ? '' : `${label}必须大于 0`
+  const n = Number(text)
+  if (!Number.isFinite(n)) return `${label}必须是有效数字`
+  if (n < 0) return `${label}不能为负数`
+  if (!allowZero && n <= 0) return `${label}必须大于 0`
+  if (n > max) return `${label}不能超过 ${max}`
+  return ''
 }
 
 function normalizeItems(items) {
@@ -196,7 +334,7 @@ function nextOrderNo(db) {
 
 function canViewOrder(db, user, order) {
   if (!canAccessModule(db, user, 'projects', 'can_view')) return false
-  return canSeeAll(db, user) || order.created_by === user.userId
+  return canSeeAll(db, user) || order.created_by === user.userId || canAccessLinkedProject(db, user, order)
 }
 
 function canEditOrder(db, user, order) {
@@ -204,14 +342,78 @@ function canEditOrder(db, user, order) {
   return order.status === 'ordered' && order.created_by === user.userId && canAccessModule(db, user, 'projects', 'can_edit')
 }
 
+function canDeleteOrder(db, user, order) {
+  if (!canAccessModule(db, user, 'projects', 'can_delete')) return false
+  return canSeeAll(db, user) || order.created_by === user.userId || canAccessLinkedProject(db, user, order)
+}
+
 function canSeeAll(db, user) {
   if (user?.role === 'super_admin') return true
   return getDataScope(db, user, 'projects') === 'all'
 }
 
+function buildScopedOrderWhere(db, user) {
+  if (canSeeAll(db, user)) return { sql: '', params: [] }
+  const scope = getDataScope(db, user, 'projects')
+  const userId = toInt(user?.userId)
+  if (!userId || scope === 'none' || scope === 'private_grant') return { sql: ' AND 1=0', params: [] }
+  if (scope === 'project_related' || scope === 'department' || scope === 'self') {
+    return {
+      sql: `
+        AND (
+          created_by = ?
+          OR project_id IN (
+            SELECT id FROM projects
+            WHERE created_by = ?
+              OR manager_user_id = ?
+              OR assignee_user_id = ?
+              OR EXISTS (
+                SELECT 1 FROM json_each(COALESCE(projects.crew_member_user_ids, '[]'))
+                WHERE CAST(json_each.value AS INTEGER) = ?
+              )
+          )
+        )
+      `,
+      params: [userId, userId, userId, userId, userId]
+    }
+  }
+  return { sql: ' AND created_by = ?', params: [userId] }
+}
+
+function canAccessLinkedProject(db, user, order) {
+  const projectId = toInt(order?.project_id)
+  if (!projectId) return false
+  const project = db.prepare(`
+    SELECT id, created_by, manager_user_id, assignee_user_id, crew_member_user_ids
+    FROM projects
+    WHERE id = ?
+  `).get(projectId)
+  return canAccessProjectRecord(db, user, project)
+}
+
 function addLog(db, orderId, action, operator, content) {
   db.prepare('INSERT INTO supply_order_logs (order_id, action, operator, content) VALUES (?, ?, ?, ?)')
     .run(orderId, action, operator || '', content || '')
+}
+
+function logAiAudit(db, user, data) {
+  db.prepare(`
+    INSERT INTO ai_audit_logs (
+      user_id, employee_id, role, action_type, tool_name, request_summary,
+      result_summary, status, error_message, model
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    user?.userId || 0,
+    user?.employeeId || 0,
+    user?.role || '',
+    data.actionType || 'tool_write',
+    data.toolName || '',
+    cleanText(data.requestSummary || '').slice(0, 500),
+    cleanText(data.resultSummary || '').slice(0, 500),
+    data.status || 'ok',
+    cleanText(data.errorMessage || '').slice(0, 500),
+    'builtin-supply-import'
+  )
 }
 
 function cleanText(value) {

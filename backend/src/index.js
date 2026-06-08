@@ -611,6 +611,7 @@ function ensureCoreTables(db) {
     CREATE TABLE IF NOT EXISTS supply_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       order_no TEXT UNIQUE NOT NULL,
+      project_id INTEGER DEFAULT 0,
       customer TEXT NOT NULL,
       phone TEXT DEFAULT '',
       source TEXT DEFAULT '',
@@ -821,8 +822,10 @@ function ensureCoreTables(db) {
   try { db.exec("ALTER TABLE products ADD COLUMN spec TEXT DEFAULT ''") } catch {}
   try { db.exec('ALTER TABLE products ADD COLUMN unit_price REAL DEFAULT 0') } catch {}
   try { db.exec("ALTER TABLE products ADD COLUMN price_unit TEXT DEFAULT ''") } catch {}
+  try { db.exec('ALTER TABLE supply_orders ADD COLUMN project_id INTEGER DEFAULT 0') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_status ON supply_orders(status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_created_by ON supply_orders(created_by, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_project ON supply_orders(project_id, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_requests_project ON material_requests(project_id, status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_requests_status ON material_requests(status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_request_items_request ON material_request_items(request_id)') } catch {}

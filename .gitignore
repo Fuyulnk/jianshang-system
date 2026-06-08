@@ -37,6 +37,7 @@ backend/src/public/
 # Deprecated/local artifacts kept out of the collaboration baseline
 frontend/
 outputs/
+handoff/*.html
 
 # IDE
 .vscode/

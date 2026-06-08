@@ -68,6 +68,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS products (
 db.exec(`CREATE TABLE IF NOT EXISTS supply_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   order_no TEXT UNIQUE NOT NULL,
+  project_id INTEGER DEFAULT 0,
   customer TEXT NOT NULL,
   phone TEXT DEFAULT '',
   source TEXT DEFAULT '',
