@@ -109,6 +109,52 @@
 
 ## 对接记录
 
+### 2026-06-05 Codex 暗色主题弹窗热修复
+
+- 问题：线上 18:00 后自动切到夜间主题，导入施工交底单弹窗里 `textarea`、普通按钮和部分输入状态仍使用 Element Plus 默认白底/浅边框，视觉割裂。
+- 修复：
+  - `frontend-new/src/styles/element-overrides.css`：补全暗色模式下 `el-textarea`、`el-input`、禁用输入、自动填充、普通按钮、表单标签和弹窗正文的全局覆盖。
+  - 不改业务逻辑、不改交底单解析/创建接口。
+- 验证：
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite chunk size 警告）
+- 部署：
+  - 本地已完成构建并同步到 `backend/public/`。
+  - 线上 `rsync` 部署被 Codex 外部命令审批/额度限制拦截，未实际上传服务器；需要后续由 Claude 或人工执行部署命令。
+- 注意事项：
+  - 如果 Safari 仍显示旧白块，优先强制刷新页面，因为 CSS 文件名已变化但浏览器可能保留旧页面上下文。
+
+### 2026-06-05 Codex 头像持久化修复
+
+- 问题：用户反馈服务器上头像再次丢失。
+- 根因：头像上传原本保存到 `backend/public/avatars`，而 `public/` 同时承载前端构建产物；部署时同步/覆盖 `public` 会让头像这类用户上传文件丢失。
+- 修复：
+  - `backend/src/routes/users.js`：头像上传目录从 `public/avatars` 改为 `data/avatars`。
+  - `backend/src/index.js`：新增 `/avatars/` 静态目录映射到 `backend/data/avatars`，URL 不变，前端无需改。
+  - 将本地历史头像同步到服务器 `/root/jianshang-system/backend/data/avatars/`。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/users.js`
+  - 服务器本机 `curl -I http://localhost:3000/avatars/avatar_1_d4474a0d.png` 返回 `content-type: image/png`。
+  - 服务器 JS 静态资源仍返回 `content-type: application/javascript`。
+- 注意事项：
+  - 后续部署必须继续排除 `backend/data/`，这是用户上传文件和数据库的持久目录。
+  - 不要再把头像、聊天附件、项目附件放进 `public/`。
+
+### 2026-06-05 Codex 线上白屏热修复
+
+- 问题：用户反馈线上页面纯白。
+- 根因：`backend/src/index.js` 的 `@fastify/static` 配置保留了 `wildcard: false`，导致 `/assets/index-*.js` 和 `/assets/index-*.css` 没被静态资源命中，而是进入 SPA fallback 返回 `index.html`；浏览器加载 module JS 时拿到 HTML，页面白屏。
+- 修复：
+  - 删除 `fastifyStatic` 配置中的 `wildcard: false`。
+  - 仅同步 `backend/src/index.js` 到服务器并重启 `pm2 restart jianshang-web`。
+- 验证：
+  - `node --check backend/src/index.js`
+  - 服务器本机 `curl http://localhost:3000/assets/index-pGCRJXzF.js` 返回 `content-type: application/javascript`，内容为 JS。
+  - 服务器本机 `curl http://localhost:3000/assets/index-CQ6ogMeM.css` 返回 `content-type: text/css`。
+  - `/health` 正常，PM2 `jianshang-web` online。
+- 注意事项：
+  - 如果浏览器仍白屏，优先强制刷新或清 Safari 缓存，因为白屏期间 Safari 请求过旧资产 `index-DQIorD_V.js`。
+
 ### 2026-06-05 Claude 部署 项目供货单V1 + 工单分支重构 + 权限修复
 
 - 任务：项目供货单 V1、工单分支首页（施工/供货）、permissions.js data_scope 修复、products.js 404 校验，由 Claude 部署上线。

@@ -238,10 +238,18 @@ const realtime = { io: null }
 server.register(fastifyStatic, {
   root: join(__dirname, '../public'),
   prefix: '/',
-  wildcard: false,
   setHeaders: (res, path) => {
     if (path.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript')
     else if (path.endsWith('.css')) res.setHeader('Content-Type', 'text/css')
+  }
+})
+
+server.register(fastifyStatic, {
+  root: join(__dirname, '../data/avatars'),
+  prefix: '/avatars/',
+  decorateReply: false,
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
   }
 })
 

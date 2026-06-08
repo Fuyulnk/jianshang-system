@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url'
 import crypto from 'crypto'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const AVATAR_DIR = join(__dirname, '../../public/avatars')
+const AVATAR_DIR = join(__dirname, '../../data/avatars')
 
 function ensureAvatarDir() {
   if (!existsSync(AVATAR_DIR)) mkdirSync(AVATAR_DIR, { recursive: true })
