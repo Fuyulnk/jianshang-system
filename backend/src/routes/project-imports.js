@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx'
 import { fileURLToPath } from 'url'
 import { dirname, extname, join } from 'path'
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import crypto from 'crypto'
 import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule, canAccessProjectRecord, getDataScope } from '../utils/permissions.js'
@@ -20,6 +20,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const UPLOAD_DIR = join(__dirname, '../../data/uploads')
 const MAX_FILE_SIZE = 10 * 1024 * 1024
+const LARGE_DELIVERY_BODY_LIMIT = 80 * 1024 * 1024
 const MAX_MONEY_VALUE = 100000000
 const ALLOWED_BRIEFING_ATTACHMENT_EXTS = new Set(['.csv', '.xls', '.xlsx', '.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.ppt', '.pptx'])
 const DELIVERY_DOCUMENT_TYPES = new Set(['survey_initial', 'survey_recheck', 'briefing', 'material_io', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'])
@@ -271,7 +272,7 @@ export default function projectImportRoutes(server, db) {
     }
   })
 
-  server.post('/api/projects/:id/delivery-chain/survey/generate-ppt', async (request, reply) => {
+  server.post('/api/projects/:id/delivery-chain/survey/generate-ppt', { bodyLimit: LARGE_DELIVERY_BODY_LIMIT }, async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
     if (!project || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
@@ -280,24 +281,197 @@ export default function projectImportRoutes(server, db) {
     }
     try {
       const documentType = request.body?.document_type === 'survey_recheck' ? 'survey_recheck' : 'survey_initial'
-      const confirmedData = normalizeSurveyDraft(project, request.body || {}, documentType)
-      const buffer = buildSurveyPptx(project, confirmedData)
-      const attachmentId = saveGeneratedProjectAttachment(db, request.user, project.id, `${project.name || project.customer || '项目'}-${deliveryDocumentLabel(documentType)}.pptx`, 'application/vnd.openxmlformats-officedocument.presentationml.presentation', buffer)
+      const existingDoc = getLatestProjectDocument(db, project.id, documentType)
+      const existingData = existingDoc?.confirmed_data || emptyDeliveryDocument(documentType, project)
+      const input = {
+        ...existingData.survey,
+        ...(request.body || {}),
+        images: Array.isArray(request.body?.images) && request.body.images.length
+          ? request.body.images
+          : existingData.survey?.images || []
+      }
+      const draftData = normalizeSurveyDraft(project, input, documentType)
+      if (!draftData.survey.images.length) {
+        reply.code(400).send({ success: false, message: '请先上传现场图片，再生成 PPT' })
+        return
+      }
+      const buffer = buildSurveyPptx(db, project, draftData)
+      const imageAttachments = normalizeExistingSurveyImageAttachments(draftData.survey?.images || [])
+      const confirmedData = stripSurveyImagePayloads(draftData, imageAttachments)
+      const attachmentId = saveGeneratedProjectAttachment(
+        db,
+        request.user,
+        project.id,
+        `${project.name || project.customer || '项目'}-${deliveryDocumentLabel(documentType)}-现场图片PPT.pptx`,
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        buffer
+      )
       const documentId = upsertProjectDocument(db, {
         projectId: project.id,
         documentType,
         sourceAttachmentId: attachmentId,
-        parsedData: { source: 'image_upload_generate_ppt' },
+        parsedData: {
+          source: 'image_upload_generate_ppt',
+          ppt_attachment_id: attachmentId,
+          image_attachment_ids: imageAttachments.map(item => item.attachment_id)
+        },
         confirmedData,
         warnings: [],
         userId: request.user.userId
       })
       syncProjectFromDeliveryDocument(db, project, documentType, confirmedData)
       addProjectLog(db, project.id, `生成${deliveryDocumentLabel(documentType)}`, request.user.username,
-        `上传 ${confirmedData.survey.image_count || 0} 张图片生成 PPT 附件 #${attachmentId}，单据 #${documentId}。`)
+        `上传 ${confirmedData.survey.image_count || 0} 张图片生成 PPT 附件 #${attachmentId}，图片附件 ${imageAttachments.map(item => `#${item.attachment_id}`).join('、') || '无'}，单据 #${documentId}。`)
       return { success: true, data: { document_id: documentId, source_attachment_id: attachmentId, chain: buildDeliveryChain(db, db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id)) } }
     } catch (err) {
       reply.code(400).send({ success: false, message: err.message || '生成勘察 PPT 失败' })
+    }
+  })
+
+  server.post('/api/projects/:id/delivery-chain/survey/images', { bodyLimit: LARGE_DELIVERY_BODY_LIMIT }, async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
+    if (!project || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
+      reply.code(404).send({ success: false, message: '项目不存在或无权限' })
+      return
+    }
+    try {
+      const documentType = request.body?.document_type === 'survey_recheck' ? 'survey_recheck' : 'survey_initial'
+      const existingDoc = getLatestProjectDocument(db, project.id, documentType)
+      const existingData = existingDoc?.confirmed_data || emptyDeliveryDocument(documentType, project)
+      const draftData = normalizeSurveyDraft(project, {
+        ...existingData.survey,
+        ...(request.body || {}),
+        images: request.body?.images || []
+      }, documentType)
+      if (!draftData.survey.images.length) {
+        reply.code(400).send({ success: false, message: '请选择要上传的现场图片' })
+        return
+      }
+      const imageAttachments = saveSurveyImageAttachments(db, request.user, project, documentType, draftData.survey.images)
+      const confirmedData = stripSurveyImagePayloads(draftData, imageAttachments)
+      const documentId = upsertProjectDocument(db, {
+        projectId: project.id,
+        documentType,
+        sourceAttachmentId: existingDoc?.source_attachment_id || 0,
+        parsedData: {
+          ...(existingDoc?.parsed_data || {}),
+          source: 'survey_image_upload',
+          image_attachment_ids: imageAttachments.map(item => item.attachment_id)
+        },
+        confirmedData,
+        warnings: existingDoc?.warnings || [],
+        userId: request.user.userId
+      })
+      syncProjectFromDeliveryDocument(db, project, documentType, confirmedData)
+      addProjectLog(db, project.id, `上传${deliveryDocumentLabel(documentType)}现场图片`, request.user.username,
+        `已保存 ${confirmedData.survey.image_count || 0} 张现场图片，单据 #${documentId}；尚未生成 PPT。`)
+      return { success: true, data: { document_id: documentId, chain: buildDeliveryChain(db, db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id)) } }
+    } catch (err) {
+      reply.code(400).send({ success: false, message: err.message || '上传现场图片失败' })
+    }
+  })
+
+  server.post('/api/projects/:id/delivery-chain/:type/confirm-step', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
+    const documentType = normalizeDeliveryDocumentType(request.params.type)
+    if (!project || !documentType || !canAccessProjectRecord(db, request.user, project)) {
+      reply.code(404).send({ success: false, message: '项目不存在、单据类型无效或无权限' })
+      return
+    }
+    const rule = deliveryStepConfirmRule(documentType, project)
+    if (!rule) {
+      reply.code(400).send({ success: false, message: '当前单据暂不支持直接确认推进' })
+      return
+    }
+    if (!canConfirmDeliveryStep(request.user, rule)) {
+      reply.code(403).send({ success: false, message: '当前角色不能确认这个步骤' })
+      return
+    }
+
+    const doc = getLatestProjectDocument(db, project.id, documentType)
+    if (!doc) {
+      reply.code(400).send({ success: false, message: `请先保存或上传${deliveryDocumentLabel(documentType)}` })
+      return
+    }
+    const guard = validateDeliveryStepConfirmation(db, project, documentType, doc)
+    if (!guard.ok) {
+      reply.code(400).send({ success: false, message: guard.message })
+      return
+    }
+
+    const currentStatus = String(project.status || '')
+    const targetStatus = guard.targetStatus || rule.targetStatus
+    const shouldMove = targetStatus && rule.from.includes(currentStatus)
+    const confirmedData = {
+      ...doc.confirmed_data,
+      step_confirmed: true,
+      step_confirmed_at: new Date().toISOString(),
+      step_confirmed_by: request.user.userId
+    }
+    if (doc.confirmed_data?.survey) {
+      confirmedData.survey = {
+        ...doc.confirmed_data.survey,
+        step_confirmed: true,
+        step_confirmed_at: confirmedData.step_confirmed_at
+      }
+    }
+
+    try {
+      const tx = db.transaction(() => {
+        upsertProjectDocument(db, {
+          projectId: project.id,
+          documentType,
+          sourceAttachmentId: doc.source_attachment_id,
+          parsedData: doc.parsed_data || {},
+          confirmedData,
+          warnings: doc.warnings || [],
+          userId: request.user.userId
+        })
+        syncProjectFromDeliveryDocument(db, project, documentType, confirmedData)
+        const updates = stepConfirmProjectUpdates(documentType, confirmedData, guard)
+        const values = updates.map(item => item.value)
+        if (shouldMove) {
+          updates.push({ field: 'status', value: targetStatus })
+          values.push(targetStatus)
+        }
+        if (updates.length) {
+          const assignments = updates.map(item => `${item.field} = ?`)
+          assignments.push("updated_at = datetime('now', 'localtime')")
+          values.push(project.id)
+          let result
+          if (shouldMove) {
+            values.push(currentStatus)
+            result = db.prepare(`UPDATE projects SET ${assignments.join(', ')} WHERE id = ? AND status = ?`).run(...values)
+          } else {
+            result = db.prepare(`UPDATE projects SET ${assignments.join(', ')} WHERE id = ?`).run(...values)
+          }
+          if (shouldMove && result.changes === 0) {
+            const conflict = new Error('项目状态已被其他请求推进，请刷新后重试')
+            conflict.code = 'PROJECT_STATUS_CONFLICT'
+            throw conflict
+          }
+        }
+        const label = deliveryDocumentLabel(documentType)
+        const statusNote = shouldMove
+          ? `项目状态推进到${deliveryStatusLabel(targetStatus)}。`
+          : '项目已处于后续阶段，本次只确认单据。'
+        addProjectLog(db, project.id, `确认${label}`, request.user.username,
+          `${label}已确认完成；${guard.logExtra || ''}${statusNote}`)
+      })
+      tx()
+      const nextProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id)
+      return {
+        success: true,
+        data: {
+          project_status: nextProject.status,
+          message: shouldMove ? '当前步骤已完成，项目已进入下一步' : '当前步骤已完成',
+          chain: buildDeliveryChain(db, nextProject)
+        }
+      }
+    } catch (err) {
+      reply.code(err.code === 'PROJECT_STATUS_CONFLICT' ? 409 : 400).send({ success: false, message: err.message || '确认当前步骤失败' })
     }
   })
 
@@ -607,13 +781,178 @@ function canApplyProjectDocumentImport(user) {
   return ['super_admin', 'admin', 'engineering'].includes(user?.role)
 }
 
+const DELIVERY_CONFIRM_RULES = {
+  survey_initial: {
+    from: ['handover_received', 'survey_pending'],
+    targetStatus: 'survey_done',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  survey_recheck: {
+    from: ['survey_done'],
+    targetStatus: 'recheck_done',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  briefing: {
+    from: ['recheck_done'],
+    targetStatus: 'briefing_done',
+    roles: ['super_admin', 'admin', 'engineering']
+  },
+  material_io: {
+    from: ['inspection_done'],
+    targetStatus: 'material_returned',
+    roles: ['super_admin', 'admin', 'warehouse', 'engineering']
+  },
+  completion_inspection: {
+    from: ['in_progress', 'material_out'],
+    targetStatus: 'inspection_done',
+    roles: ['super_admin', 'admin', 'engineering', 'employee']
+  },
+  labor_settlement: {
+    from: ['material_returned'],
+    targetStatus: 'labor_settled',
+    roles: ['super_admin', 'admin', 'finance', 'engineering']
+  },
+  cost_check: {
+    from: ['labor_settled'],
+    targetStatus: 'cost_checked',
+    roles: ['super_admin', 'admin', 'finance']
+  },
+  finance_settlement: {
+    from: ['cost_checked'],
+    targetStatus: 'finance_settled',
+    roles: ['super_admin', 'admin', 'finance']
+  }
+}
+
+function deliveryStepConfirmRule(documentType, project) {
+  const rule = DELIVERY_CONFIRM_RULES[documentType]
+  if (!rule) return null
+  if (documentType === 'survey_initial') {
+    return { ...rule, targetStatus: surveyInitialTargetStatus(project) }
+  }
+  return rule
+}
+
+function surveyInitialTargetStatus(project) {
+  const status = String(project?.status || '')
+  return ['handover_received', 'survey_pending'].includes(status) ? 'recheck_done' : 'survey_done'
+}
+
+function canConfirmDeliveryStep(user, rule) {
+  if (user?.role === 'super_admin') return true
+  return rule.roles.includes(user?.role)
+}
+
+function validateDeliveryStepConfirmation(db, project, documentType, doc) {
+  const data = doc.confirmed_data || {}
+  if (['survey_initial', 'survey_recheck', 'completion_inspection'].includes(documentType)) {
+    const survey = data.survey || {}
+    const images = Array.isArray(survey.images) ? survey.images : []
+    const pptAttachment = getAttachment(db, doc.source_attachment_id)
+    if (documentType !== 'completion_inspection') {
+      if (!images.length && (!pptAttachment || !isPptAttachment(pptAttachment))) {
+        return { ok: false, message: '请先上传现场图片或直接上传工勘 PPT' }
+      }
+      if (!pptAttachment || !isPptAttachment(pptAttachment)) {
+        return { ok: false, message: '请先生成或上传工勘 PPT，再确认完成' }
+      }
+    }
+    if (documentType === 'survey_initial') {
+      const judgment = String(survey.entry_judgment || '').trim()
+      if (!['ready', 'conditional', 'blocked'].includes(judgment)) {
+        return { ok: false, message: '请先选择工勘结论：无需复尺、需要复尺或暂不具备进场条件' }
+      }
+      if (judgment === 'blocked') {
+        return { ok: false, message: '当前结论为暂不具备进场条件，请先处理整改或改为需要复尺后再推进' }
+      }
+      const needsRecheck = !!survey.need_recheck || judgment === 'conditional'
+      return {
+        ok: true,
+        targetStatus: needsRecheck ? 'survey_done' : 'recheck_done',
+        logExtra: needsRecheck ? '结论：需要复尺；' : '结论：无需复尺，已跳过复尺节点；'
+      }
+    }
+    return {
+      ok: true,
+      logExtra: `PPT 附件 #${doc.source_attachment_id || 0}；现场图片 ${images.length} 张。`
+    }
+  }
+  if (documentType === 'briefing') {
+    const items = Array.isArray(data.items) ? data.items : []
+    if (!data.project?.customer && !project.customer) return { ok: false, message: '施工交底单缺少客户姓名' }
+    if (!items.length) return { ok: false, message: '施工交底单缺少施工项目明细' }
+  }
+  if (documentType === 'material_io') {
+    const summary = data.summary || {}
+    if (String(project.status || '') === 'briefing_done') {
+      return { ok: false, message: '出库阶段请走“材料出库联动”申请，由仓库确认后推进' }
+    }
+    if (summary.material_return_status && summary.material_return_status !== 'done') {
+      return { ok: false, message: '材料回库状态未完成，不能确认回库节点' }
+    }
+  }
+  if (documentType === 'labor_settlement' && !Number(data.summary?.labor_fee || 0)) {
+    return { ok: false, message: '请先填写或导入人工费合计' }
+  }
+  if (documentType === 'cost_check' && !Number(data.summary?.total_cost || 0)) {
+    return { ok: false, message: '请先填写或导入成本合计' }
+  }
+  if (documentType === 'finance_settlement' && data.summary?.payment_status !== 'paid') {
+    return { ok: false, message: '财务归档前请先把收款状态确认为已收齐' }
+  }
+  return { ok: true, logExtra: '' }
+}
+
+function stepConfirmProjectUpdates(documentType, confirmedData, guard) {
+  const updates = []
+  const survey = confirmedData?.survey || {}
+  const summary = confirmedData?.summary || {}
+  if (['survey_initial', 'survey_recheck'].includes(documentType)) {
+    if (survey.survey_date) updates.push({ field: 'survey_date', value: survey.survey_date })
+    if (survey.conclusion) {
+      updates.push({
+        field: documentType === 'survey_initial' ? 'survey_report' : 'condition_note',
+        value: survey.conclusion
+      })
+    }
+    if (documentType === 'survey_initial' && guard?.targetStatus === 'recheck_done') {
+      updates.push({ field: 'condition_note', value: `无需复尺：${survey.conclusion || '首次工勘确认具备进场条件'}` })
+    }
+  }
+  if (documentType === 'completion_inspection') {
+    if (survey.survey_date) updates.push({ field: 'acceptance_date', value: survey.survey_date })
+    if (survey.conclusion) updates.push({ field: 'construction_note', value: survey.conclusion })
+  }
+  if (documentType === 'material_io') {
+    updates.push({ field: 'material_return_status', value: 'done' })
+    if (summary.material_return_note) updates.push({ field: 'material_return_note', value: summary.material_return_note })
+  }
+  if (documentType === 'cost_check' && Number(summary.revenue_amount || 0)) {
+    updates.push({ field: 'settlement_amount', value: Number(summary.revenue_amount || 0) })
+  }
+  return updates
+}
+
+function deliveryStatusLabel(status) {
+  return {
+    survey_done: '勘察完成待复尺',
+    recheck_done: '无需复尺/复尺完成待交底',
+    briefing_done: '交底完成待出库',
+    inspection_done: '验收完成待回库',
+    material_returned: '回库完成待工费结算',
+    labor_settled: '工费结算完成待成本核算',
+    cost_checked: '成本核算完成待财务结算',
+    finance_settled: '财务结算完成待归档'
+  }[status] || status
+}
+
 const DELIVERY_NODE_RULES = [
   {
     key: 'survey_initial',
     stage: '工勘',
     label: '首次工勘表',
     desc: '上传现场图片生成标准工勘 PPT，记录基层、保护、整改和进场判断。',
-    rx: /现场勘察|首次|工勘|基层勘察|现场基层/i,
+    rx: /现场勘察|首次|工勘|工勘表|基层勘察|现场基层/i,
     required: true,
     actions: ['generate_ppt', 'view', 'import']
   },
@@ -622,7 +961,7 @@ const DELIVERY_NODE_RULES = [
     stage: '复勘',
     label: '二次勘察表',
     desc: '仅当前端/工程确认现场有问题时启用；不是每个项目必填。',
-    rx: /二次|复勘|复尺|复核|基层二次/i,
+    rx: /二次|二次勘察表|复勘|复尺|复核|基层二次/i,
     optional: true,
     actions: ['generate_ppt', 'view', 'import']
   },
@@ -723,7 +1062,15 @@ function buildDeliveryChain(db, project) {
 }
 
 function buildDeliveryNode(rule, project, doc, attachments, finance, needRecheck) {
-  const files = attachments.filter(file => rule.rx.test(file.original_name || ''))
+  const linkedIds = documentAttachmentIds(doc)
+  const seen = new Set()
+  const files = attachments.filter(file => {
+    const id = Number(file.id)
+    if (seen.has(id)) return false
+    if (!linkedIds.has(id) && !rule.rx.test(file.original_name || '')) return false
+    seen.add(id)
+    return true
+  })
   const optional = !!rule.optional
   const requiredNow = !optional || needRecheck || !!doc || files.length > 0
   const confirmedData = doc?.confirmed_data || emptyDeliveryDocument(rule.key, project)
@@ -741,12 +1088,33 @@ function buildDeliveryNode(rule, project, doc, attachments, finance, needRecheck
     status,
     status_type: status === '已确认' ? 'success' : status === '按需' ? 'info' : status === '有差异待确认' ? 'warning' : files.length ? 'warning' : 'danger',
     attachment_count: files.length,
-    attachments: files.slice(0, 5),
+    attachments: files.slice(0, 8),
     document: doc || null,
     table_data: confirmedData,
     summary: summarizeDeliveryNode(rule.key, confirmedData, finance),
     differences: differenceCount
   }
+}
+
+function documentAttachmentIds(doc) {
+  const ids = new Set()
+  const sourceId = toInt(doc?.source_attachment_id)
+  if (sourceId) ids.add(sourceId)
+  const surveyImages = doc?.confirmed_data?.survey?.images
+  if (Array.isArray(surveyImages)) {
+    for (const image of surveyImages) {
+      const id = toInt(image?.attachment_id)
+      if (id) ids.add(id)
+    }
+  }
+  const parsedIds = doc?.parsed_data?.image_attachment_ids
+  if (Array.isArray(parsedIds)) {
+    for (const id of parsedIds) {
+      const cleanId = toInt(id)
+      if (cleanId) ids.add(cleanId)
+    }
+  }
+  return ids
 }
 
 function buildDeliveryFinanceSummary(project, docs) {
@@ -1040,6 +1408,32 @@ function upsertProjectDocument(db, { projectId, documentType, sourceAttachmentId
   return result.lastInsertRowid
 }
 
+function getLatestProjectDocument(db, projectId, documentType) {
+  const row = db.prepare(`
+    SELECT d.*, a.original_name as source_file_name
+    FROM project_documents d
+    LEFT JOIN attachments a ON a.id = d.source_attachment_id
+    WHERE d.project_id = ? AND d.document_type = ?
+    ORDER BY d.id DESC
+    LIMIT 1
+  `).get(projectId, documentType)
+  return row ? formatProjectDocument(row) : null
+}
+
+function getAttachment(db, id) {
+  const cleanId = toInt(id)
+  if (!cleanId) return null
+  return db.prepare(`
+    SELECT id, original_name, mime_type
+    FROM attachments
+    WHERE id = ? AND COALESCE(deleted_at, '') = ''
+  `).get(cleanId)
+}
+
+function isPptAttachment(file) {
+  return /ppt|presentation/i.test(file?.mime_type || '') || /\.(ppt|pptx)$/i.test(file?.original_name || '')
+}
+
 function formatProjectDocument(row) {
   return {
     ...row,
@@ -1089,8 +1483,93 @@ function saveGeneratedProjectAttachment(db, user, projectId, originalName, mimeT
   return result.lastInsertRowid
 }
 
+
+function readAttachmentBytes(db, attachmentId) {
+  const record = db.prepare('SELECT stored_name, mime_type FROM attachments WHERE id = ?').get(attachmentId)
+  if (!record) return null
+  const filePath = join(UPLOAD_DIR, String(record.stored_name))
+  try {
+    const buffer = readFileSync(filePath)
+    return { buffer, mimeType: record.mime_type || 'image/png' }
+  } catch (e) {
+    return null
+  }
+}
+
+function saveSurveyImageAttachments(db, user, project, documentType, images) {
+  if (!Array.isArray(images) || !images.length) return []
+  const label = deliveryDocumentLabel(documentType)
+  const projectName = safeFileName(project.name || project.customer || `项目${project.id}`)
+  return images.map((image, index) => {
+    if (image.attachment_id) {
+      return {
+        attachment_id: image.attachment_id,
+        name: safeFileName(image.name || ''),
+        original_name: safeFileName(image.name || ''),
+        mime_type: image.mime_type || 'image/png',
+        size: image.size || 0,
+        note: safeText(image.note || image.name || `现场图片 ${index + 1}`, 300)
+      }
+    }
+    const buffer = decodeData(image.data)
+    if (!buffer.length) throw new Error(`第 ${index + 1} 张现场图片内容为空`)
+    if (buffer.length > MAX_FILE_SIZE) throw new Error(`第 ${index + 1} 张现场图片超过 10MB`)
+    const ext = imageExtension(image)
+    const originalName = `${projectName}-${label}-现场图片-${String(index + 1).padStart(2, '0')}-${safeFileName(image.name || '现场图片')}${extname(image.name || '') ? '' : ext}`
+    const attachmentId = saveGeneratedProjectAttachment(db, user, project.id, originalName, image.mime_type || 'image/png', buffer)
+    return {
+      attachment_id: attachmentId,
+      name: safeFileName(image.name || originalName),
+      original_name: safeFileName(originalName),
+      mime_type: image.mime_type || 'image/png',
+      size: buffer.length,
+      note: safeText(image.note || image.name || `现场图片 ${index + 1}`, 300)
+    }
+  })
+}
+
+function stripSurveyImagePayloads(data, imageAttachments) {
+  const clean = JSON.parse(JSON.stringify(data || {}))
+  if (!clean.survey) clean.survey = {}
+  // saveSurveyImageAttachments 会按前端传入顺序返回「已有附件 + 新附件」。
+  // 这里必须直接使用返回值，不能只保存新生成的图片，否则下次追加上传会丢掉旧图。
+  const seen = new Set()
+  clean.survey.images = imageAttachments.filter(img => {
+    const id = toInt(img.attachment_id)
+    if (!id || seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+  clean.survey.image_count = clean.survey.images.length
+  return clean
+}
+
+function normalizeExistingSurveyImageAttachments(images) {
+  if (!Array.isArray(images)) return []
+  return images
+    .filter(image => image?.attachment_id)
+    .map((image, index) => ({
+      attachment_id: toInt(image.attachment_id),
+      name: safeFileName(image.name || image.original_name || ''),
+      original_name: safeFileName(image.original_name || image.name || ''),
+      mime_type: image.mime_type || 'image/png',
+      size: image.size || 0,
+      note: safeText(image.note || image.name || `现场图片 ${index + 1}`, 300)
+    }))
+}
+
+function imageExtension(image) {
+  const nameExt = extname(image?.name || '').toLowerCase()
+  if (['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(nameExt)) return nameExt
+  const mime = String(image?.mime_type || '').toLowerCase()
+  if (mime.includes('jpeg') || mime.includes('jpg')) return '.jpg'
+  if (mime.includes('webp')) return '.webp'
+  if (mime.includes('gif')) return '.gif'
+  return '.png'
+}
+
 function normalizeSurveyDraft(project, input, documentType) {
-  const images = Array.isArray(input.images) ? input.images.slice(0, 24).map(normalizeSurveyImage).filter(item => item.data) : []
+  const images = Array.isArray(input.images) ? input.images.slice(0, 24).map(normalizeSurveyImage).filter(item => item.data || item.attachment_id) : []
   return {
     ...emptyDeliveryDocument(documentType, project),
     survey: {
@@ -1113,11 +1592,13 @@ function normalizeSurveyImage(item = {}) {
     name: safeText(item.name || '现场图片', 120),
     mime_type: safeText(item.mime_type || item.type || 'image/png', 80),
     note: safeText(item.note || '', 300),
-    data: typeof item.data === 'string' ? item.data : ''
+    data: typeof item.data === 'string' ? item.data : '',
+    attachment_id: typeof item.attachment_id === 'number' ? item.attachment_id : undefined,
+    size: typeof item.size === 'number' ? item.size : undefined,
   }
 }
 
-function buildSurveyPptx(project, data) {
+function buildSurveyPptx(db, project, data) {
   const survey = data.survey || {}
   const images = Array.isArray(survey.images) ? survey.images : []
   const projectTitle = project.name || project.address_detail || project.customer || '项目'
@@ -1149,10 +1630,10 @@ function buildSurveyPptx(project, data) {
       images: []
     }
   ]
-  return createMinimalPptx(slides)
+  return createMinimalPptx(slides, db)
 }
 
-function createMinimalPptx(slides) {
+function createMinimalPptx(slides, db) {
   const files = new Map()
   files.set('[Content_Types].xml', contentTypesXml(slides))
   files.set('_rels/.rels', relsXml([{ id: 'rId1', type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument', target: 'ppt/presentation.xml' }]))
@@ -1168,11 +1649,19 @@ function createMinimalPptx(slides) {
     const rels = [{ id: 'rId1', type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout', target: '../slideLayouts/slideLayout1.xml' }]
     const slideImages = []
     for (const image of slide.images || []) {
-      const buffer = decodeData(image.data)
-      if (!buffer.length) continue
-      const ext = image.mime_type?.includes('jpeg') || image.mime_type?.includes('jpg') ? 'jpg' : 'png'
+      let imgBuffer = null
+      let imgMime = ''
+      if (image.data) {
+        imgBuffer = decodeData(image.data)
+        imgMime = image.mime_type || 'image/png'
+      } else if (image.attachment_id) {
+        const result = readAttachmentBytes(db, image.attachment_id)
+        if (result) { imgBuffer = result.buffer; imgMime = result.mimeType }
+      }
+      if (!imgBuffer || !imgBuffer.length) continue
+      const ext = imgMime.includes('jpeg') || imgMime.includes('jpg') ? 'jpg' : 'png'
       const mediaName = `image${media.length + 1}.${ext}`
-      files.set(`ppt/media/${mediaName}`, buffer)
+      files.set(`ppt/media/${mediaName}`, imgBuffer)
       rels.push({ id: `rId${rels.length + 1}`, type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', target: `../media/${mediaName}` })
       slideImages.push({ relId: `rId${rels.length}`, index: slideImages.length })
       media.push(mediaName)

@@ -1,20 +1,24 @@
 import { authMiddleware } from '../middleware/auth.js'
+import { canAccessProjectRecord, getDataScope } from '../utils/permissions.js'
 
 const STATUS_LABELS = {
-  info_confirmed:  { phase: 1, label: '信息确认', phaseLabel: '项目前期' },
-  survey_done:     { phase: 1, label: '工勘完成', phaseLabel: '项目前期' },
-  condition_met:   { phase: 2, label: '条件确认', phaseLabel: '准备阶段' },
-  team_assigned:   { phase: 2, label: '班组安排', phaseLabel: '准备阶段' },
-  briefing_done:   { phase: 2, label: '开工交底', phaseLabel: '准备阶段' },
-  material_out:    { phase: 3, label: '材料出库', phaseLabel: '施工过程' },
-  in_progress:     { phase: 3, label: '施工中', phaseLabel: '施工过程' },
-  inspection_done: { phase: 3, label: '检查完成', phaseLabel: '施工过程' },
-  completed:       { phase: 4, label: '已完工', phaseLabel: '完工验收' },
-  material_returned: { phase: 4, label: '材料回库', phaseLabel: '完工验收' },
-  settled:         { phase: 4, label: '已结算', phaseLabel: '完工验收' },
-  repair_requested: { phase: 5, label: '报修待处理', phaseLabel: '售后服务' },
-  repair_assigned:  { phase: 5, label: '维修中', phaseLabel: '售后服务' },
-  repair_done:      { phase: 5, label: '维修完成', phaseLabel: '售后服务' },
+  handover_received: { phase: 1, label: '门店交接待核对', phaseLabel: '交接/勘察' },
+  survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '交接/勘察' },
+  survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '交接/勘察' },
+  recheck_done: { phase: 2, label: '复尺完成待交底', phaseLabel: '复尺/交底/出库' },
+  briefing_done: { phase: 2, label: '交底完成待出库', phaseLabel: '复尺/交底/出库' },
+  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/交底/出库' },
+  material_out: { phase: 3, label: '已出库待进场', phaseLabel: '进场/施工/验收' },
+  in_progress: { phase: 3, label: '施工中', phaseLabel: '进场/施工/验收' },
+  inspection_done: { phase: 3, label: '验收完成待回库', phaseLabel: '进场/施工/验收' },
+  material_returned: { phase: 4, label: '回库完成待工费结算', phaseLabel: '回库/工费/成本' },
+  labor_settled: { phase: 4, label: '工费结算完成待成本核算', phaseLabel: '回库/工费/成本' },
+  cost_checked: { phase: 4, label: '成本核算完成待财务结算', phaseLabel: '回库/工费/成本' },
+  finance_settled: { phase: 5, label: '财务结算完成待归档', phaseLabel: '财务/归档' },
+  archived: { phase: 5, label: '已归档', phaseLabel: '财务/归档' },
+  repair_requested: { phase: 6, label: '售后待安排', phaseLabel: '售后处理' },
+  repair_assigned:  { phase: 6, label: '售后处理中', phaseLabel: '售后处理' },
+  repair_done:      { phase: 6, label: '售后已完成', phaseLabel: '售后处理' },
 }
 
 // 每个角色关注的阶段/状态
@@ -22,15 +26,25 @@ const ROLE_FOCUS = {
   finance: {
     label: '财务',
     groups: [
-      { key: 'payment', label: '待收款', statuses: ['completed', 'material_returned'] },
-      { key: 'settle', label: '待结算', statuses: ['settled'] },
+      { key: 'labor', label: '待工费/成本', statuses: ['material_returned', 'labor_settled'] },
+      { key: 'finance', label: '待财务结算', statuses: ['cost_checked'] },
+      { key: 'archive', label: '待归档', statuses: ['finance_settled'] },
     ]
   },
   warehouse: {
     label: '仓管',
     groups: [
-      { key: 'prepare', label: '待备料', statuses: ['briefing_done'] },
-      { key: 'return', label: '待回库', statuses: ['completed'] },
+      { key: 'out', label: '待出库', statuses: ['briefing_done', 'material_requested'] },
+      { key: 'return', label: '待回库', statuses: ['inspection_done'] },
+    ]
+  },
+  engineering: {
+    label: '工程部',
+    groups: [
+      { key: 'handover', label: '待交接/工勘', statuses: ['handover_received', 'survey_pending', 'survey_done'] },
+      { key: 'briefing', label: '待交底', statuses: ['recheck_done'] },
+      { key: 'onsite', label: '待进场/施工', statuses: ['material_out', 'in_progress'] },
+      { key: 'inspection', label: '待验收', statuses: ['inspection_done'] },
     ]
   },
   employee: {
@@ -38,18 +52,20 @@ const ROLE_FOCUS = {
     groups: [
       { key: 'prepare', label: '待开工', statuses: ['material_out'] },
       { key: 'active', label: '施工中', statuses: ['in_progress'] },
-      { key: 'review', label: '待检查/验收', statuses: ['inspection_done'] },
+      { key: 'repair', label: '售后处理', statuses: ['repair_assigned'] },
     ]
   },
   super_admin: {
     label: '管理员',
     groups: [
-      { key: 'pending', label: '待处理', statuses: ['info_confirmed', 'survey_done', 'condition_met', 'team_assigned', 'briefing_done', 'material_out'] },
-      { key: 'active', label: '进行中', statuses: ['in_progress', 'inspection_done'] },
-      { key: 'done', label: '待结算', statuses: ['completed', 'material_returned', 'settled'] },
+      { key: 'handover', label: '交接/工勘阻塞', statuses: ['handover_received', 'survey_pending', 'survey_done', 'recheck_done'] },
+      { key: 'warehouse', label: '仓库/施工阻塞', statuses: ['briefing_done', 'material_requested', 'material_out', 'in_progress', 'inspection_done'] },
+      { key: 'finance', label: '结算/归档阻塞', statuses: ['material_returned', 'labor_settled', 'cost_checked', 'finance_settled'] },
     ]
   }
 }
+
+ROLE_FOCUS.admin = ROLE_FOCUS.super_admin
 
 export default function employeeDashboardRoutes(server, db) {
   // 员工工作台数据
@@ -67,7 +83,7 @@ export default function employeeDashboardRoutes(server, db) {
 
     // 获取项目。普通员工只看和自己相关的项目；仓管/财务/管理层看职责范围内的项目。
     let allProjects
-    if (['super_admin', 'admin', 'finance', 'warehouse'].includes(role)) {
+    if (getDataScope(db, request.user, 'projects') === 'all') {
       allProjects = db.prepare(`
         SELECT p.*, au.username as assignee_username, au.real_name as assignee_real_name
         FROM projects p
@@ -83,6 +99,7 @@ export default function employeeDashboardRoutes(server, db) {
         ORDER BY p.created_at DESC LIMIT 200
       `).all(request.user.userId, request.user.userId, request.user.userId)
     }
+    allProjects = allProjects.filter(project => canAccessProjectRecord(db, request.user, project))
 
     // 按角色关注的分组统计
     const groups = focus.groups.map(g => {

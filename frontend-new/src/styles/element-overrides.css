@@ -288,11 +288,52 @@ html.dark .el-table th.el-table__cell {
   background: #121214 !important;
   color: var(--text-secondary) !important;
 }
-html.dark .el-table td.el-table__cell {
+html.dark .el-table,
+html.dark .el-table__inner-wrapper,
+html.dark .el-table__body-wrapper,
+html.dark .el-table__header-wrapper,
+html.dark .el-table__header,
+html.dark .el-table__body,
+html.dark .el-table__empty-block,
+html.dark .el-table__append-wrapper,
+html.dark .el-table__fixed,
+html.dark .el-table__fixed-right,
+html.dark .el-table__fixed-header-wrapper,
+html.dark .el-table__fixed-body-wrapper {
+  background: var(--bg-card) !important;
+  color: var(--text-secondary) !important;
+}
+html.dark .el-table tr,
+html.dark .el-table__header tr,
+html.dark .el-table__body tr,
+html.dark .el-table__row {
   background: var(--bg-card) !important;
 }
+html.dark .el-table td.el-table__cell {
+  background: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+}
+html.dark .el-table th.el-table__cell,
+html.dark .el-table__header th.el-table__cell {
+  background: #121214 !important;
+}
+html.dark .el-table--striped .el-table__body tr.el-table__row--striped,
 html.dark .el-table--striped .el-table__body tr.el-table__row--striped td {
   background: #101012 !important;
+}
+html.dark .el-table__body tr:hover,
+html.dark .el-table__body tr:hover > td,
+html.dark .el-table__body tr.el-table__row--striped:hover,
+html.dark .el-table__body tr.el-table__row--striped:hover > td {
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--bg-card)) !important;
+}
+html.dark .el-table__empty-text {
+  color: var(--text-tertiary) !important;
+}
+html.dark .el-table::before,
+html.dark .el-table__inner-wrapper::before,
+html.dark .el-table__border-left-patch {
+  background: var(--border-color) !important;
 }
 html.dark .el-input__wrapper {
   background: #121214 !important;

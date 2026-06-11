@@ -43,7 +43,7 @@ const importParsed = ref(null)
 const importForm = ref(emptyForm())
 
 const board = computed(() => [
-  { label: '待财务确认', count: list.value.filter(row => row.status === 'ordered').length, desc: '已下单，等收款确认' },
+  { label: '待财务确认', count: list.value.filter(row => row.status === 'ordered').length, desc: '导入或新建后，财务先核对收款' },
   { label: '待仓库订料', count: list.value.filter(row => row.status === 'payment_confirmed').length, desc: '收款后进入仓库' },
   { label: '待发货', count: list.value.filter(row => row.status === 'materials_ordered').length, desc: '材料到位后发货' },
   { label: '已完结', count: list.value.filter(row => row.status === 'completed').length, desc: '供货闭环完成' }
@@ -200,7 +200,7 @@ async function confirmImportCreate() {
         source_file: importFile.value?.name || importParsed.value.source_file || ''
       })
     })
-    ElMessage.success(`供货单已创建：${json.order_no || ''}`)
+    ElMessage.success(`供货单已创建：${json.order_no || ''}，已进入财务确认收款`)
     showImportDialog.value = false
     await fetchList()
   } catch (err) {
@@ -380,6 +380,10 @@ function statusType(status) {
   return 'primary'
 }
 
+function displayStatus(row) {
+  return row.todo_label || row.status_label || '-'
+}
+
 function stepActive(row, step) {
   return steps.findIndex(item => item.key === step.key) <= steps.findIndex(item => item.key === row.status)
 }
@@ -426,7 +430,7 @@ onMounted(() => {
         <div class="card-head">
           <div>
             <h3>供货单列表</h3>
-            <p>这条线不进入施工资料链，后续再联动库存扣减和收款凭证。</p>
+            <p>导入或新建后先进入财务确认收款，财务核对后再交给仓库订料和发货。</p>
           </div>
           <div class="filters">
             <el-input v-model="filters.keyword" clearable placeholder="搜索客户/电话/地址" @keyup.enter="fetchList" />
@@ -448,7 +452,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column prop="status_label" label="当前步骤" width="140">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small">{{ row.status_label }}</el-tag>
+            <el-tag :type="statusType(row.status)" size="small">{{ displayStatus(row) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="流程" min-width="420">
@@ -461,7 +465,9 @@ onMounted(() => {
         <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <el-button link @click="openEdit(row)">查看/编辑</el-button>
-            <el-button v-if="row.next_status" link type="primary" :loading="saving" @click="advance(row)">推进</el-button>
+            <el-button v-if="row.next_status" link type="primary" :loading="saving" @click="advance(row)">
+              {{ row.action_label || '推进' }}
+            </el-button>
             <el-button link type="danger" :loading="saving" @click="deleteOrder(row)">删除</el-button>
           </template>
         </el-table-column>

@@ -19,12 +19,65 @@
 
       <!-- 阶段进度 -->
       <div class="phase-steps">
-        <div v-for="(p, i) in phases" :key="i"
-          :class="['phase-step', { active: project.phase >= p.phase, current: project.phase === p.phase }]">
-          <div class="step-dot">{{ p.phase }}</div>
+        <button
+          v-for="(p, i) in workflowSteps"
+          :key="p.key"
+          type="button"
+          :class="['phase-step', { active: p.done, current: p.current, skipped: p.skipped }]"
+          @click="scrollToWorkflowSection(p)"
+        >
+          <div class="step-dot">{{ i + 1 }}</div>
           <div class="step-label">{{ p.label }}</div>
-        </div>
+          <small v-if="p.skipped">已跳过</small>
+        </button>
       </div>
+
+      <el-card id="current-workbench" class="current-workbench" shadow="never">
+        <template #header>
+          <div class="current-workbench-head">
+            <div>
+              <div class="work-kicker">当前步骤工作台</div>
+              <h3>{{ currentWorkflowStep.label }}</h3>
+              <p>{{ currentTask.desc }}</p>
+            </div>
+            <el-tag :type="project.status === 'archived' ? 'success' : 'primary'">{{ project.status_label }}</el-tag>
+          </div>
+        </template>
+        <div class="current-workbench-body">
+          <div class="next-action-card">
+            <strong>{{ currentTask.title }}</strong>
+            <span>{{ currentActionHint }}</span>
+            <div v-if="currentMissingFields.length" class="task-blocker inline">
+              <strong>当前不能推进：</strong>
+              <span>请先补齐 {{ currentMissingFields.join('、') }}。</span>
+            </div>
+            <div class="work-actions compact">
+              <el-button
+                v-if="currentTask.next && canRunCurrentTask"
+                type="primary"
+                size="large"
+                :loading="saving"
+                :disabled="currentMissingFields.length > 0"
+                @click="saveAndAdvance(currentTask.next)"
+              >
+                {{ currentTask.action }}
+              </el-button>
+              <el-button v-if="currentDocumentKey" plain @click="scrollToWorkflowSection({ target: 'documents' })">
+                打开当前单据
+              </el-button>
+              <el-button v-if="project.status === 'archived' && canStartRepair && !warrantyInfo.expired" type="warning" plain @click="advanceStatus('repair_requested')">
+                发起售后单
+              </el-button>
+              <el-button plain @click="showEdit = true" v-if="canEditProject">编辑完整资料</el-button>
+            </div>
+          </div>
+          <div class="step-context-card">
+            <span>相关资料</span>
+            <strong>{{ currentDocumentLabel }}</strong>
+            <p>{{ currentStepNote }}</p>
+          </div>
+        </div>
+      </el-card>
 
       <div class="workorder-summary">
         <el-card class="summary-card handover-summary" shadow="never">
@@ -99,17 +152,14 @@
         </el-card>
       </div>
 
-      <ProjectDocumentSummary :project="project" :refresh-key="documentRefreshKey" />
-      <ProjectDocumentImportPanel :project="project" :can-apply="canManageProject" @applied="fetchDetail" />
-
       <!-- 当前阶段工作单 -->
       <el-card class="work-card" shadow="never">
         <template #header>
           <div class="work-header">
             <div>
-              <div class="work-kicker">当前工作单</div>
+              <div class="work-kicker">步骤补充资料</div>
               <h3>{{ currentTask.title }}</h3>
-              <p>{{ currentTask.desc }}</p>
+              <p>这里填写当前步骤需要同步到项目工单的结构化字段。</p>
             </div>
             <el-tag :type="project.status === 'archived' ? 'success' : 'primary'">{{ project.status_label }}</el-tag>
           </div>
@@ -278,6 +328,16 @@
           <el-button plain @click="showEdit = true" v-if="canEditProject">编辑完整资料</el-button>
         </div>
       </el-card>
+
+      <ProjectDocumentSummary
+        id="project-documents"
+        :project="project"
+        :refresh-key="documentRefreshKey"
+        :current-step-key="currentDocumentKey"
+        @chain-updated="handleDeliveryChainUpdated"
+        @project-updated="handleAttachmentsUpdated"
+      />
+      <ProjectDocumentImportPanel :project="project" :can-apply="canManageProject" @applied="fetchDetail" />
 
       <MaterialRequestPanel
         :project-id="project.id"
@@ -581,15 +641,7 @@ const saving = ref(false)
 const editForm = ref({})
 const assignees = ref([])
 const documentRefreshKey = ref(0)
-
-const phases = [
-  { phase: 1, label: '交接勘察' },
-  { phase: 2, label: '复尺出库' },
-  { phase: 3, label: '施工验收' },
-  { phase: 4, label: '回库核算' },
-  { phase: 5, label: '财务归档' },
-  { phase: 6, label: '售后处理' },
-]
+const deliveryChain = ref(null)
 
 // 当前用户角色
 const userRole = (() => {
@@ -656,11 +708,11 @@ const TASKS = {
   },
   survey_pending: {
     title: '现场勘察',
-    desc: '填写勘察日期和现场记录，或从工程部工作台关联勘察表。',
-    action: '勘察完成，等待复尺',
-    next: 'survey_done',
+    desc: '上传现场图片、编辑说明并生成工勘 PPT；确认结论后系统会自动决定是否进入复尺。',
+    action: '',
+    next: '',
     roles: ['super_admin', 'admin', 'engineering'],
-    required: ['survey']
+    required: []
   },
   survey_done: {
     title: '复尺和开工条件复核',
@@ -778,6 +830,82 @@ const TASKS = {
 }
 
 const currentTask = computed(() => TASKS[project.value?.status] || TASK_FALLBACK)
+const deliveryNodes = computed(() => deliveryChain.value?.nodes || [])
+const needRecheck = computed(() => {
+  const recheckNode = deliveryNodes.value.find(node => node.key === 'survey_recheck')
+  if (recheckNode?.status && recheckNode.status !== '按需') return true
+  const condition = String(project.value?.condition_note || '')
+  return /需要二次|需二次|需要复勘|需复勘|整改待复核|问题待复核/.test(condition)
+})
+const skipRecheck = computed(() => {
+  const status = project.value?.status || ''
+  const condition = String(project.value?.condition_note || '')
+  return !needRecheck.value && ['recheck_done', 'briefing_done', 'material_requested', 'material_out', 'in_progress', 'inspection_done', 'material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived'].includes(status)
+    && /无需复尺|跳过复尺/.test(condition)
+})
+const currentDocumentKey = computed(() => {
+  const status = project.value?.status || ''
+  if (['survey_pending', 'survey_done'].includes(status)) return needRecheck.value && status === 'survey_done' ? 'survey_recheck' : 'survey_initial'
+  if (status === 'recheck_done') return 'briefing'
+  if (['briefing_done', 'material_requested', 'material_out'].includes(status)) return 'material_io'
+  if (status === 'in_progress') return 'completion_inspection'
+  if (status === 'inspection_done') return 'material_io'
+  if (status === 'material_returned') return 'labor_settlement'
+  if (status === 'labor_settled') return 'cost_check'
+  if (['cost_checked', 'finance_settled'].includes(status)) return 'finance_settlement'
+  return ''
+})
+const currentDocumentLabel = computed(() => {
+  if (!currentDocumentKey.value) return '暂无关联单据'
+  return deliveryNodes.value.find(node => node.key === currentDocumentKey.value)?.label || {
+    survey_initial: '首次工勘表',
+    survey_recheck: '二次勘察表',
+    briefing: '施工交底单',
+    material_io: '材料出库/回库表',
+    completion_inspection: '完工验收质检表',
+    labor_settlement: '施工班组工费结算单',
+    cost_check: '完工成本核算表',
+    finance_settlement: '财务结算/归档'
+  }[currentDocumentKey.value] || '当前单据'
+})
+const currentWorkflowStep = computed(() => workflowSteps.value.find(step => step.current) || workflowSteps.value[0] || { label: '当前步骤' })
+const currentActionHint = computed(() => {
+  if (currentMissingFields.value.length) return `还差 ${currentMissingFields.value.join('、')}，补齐后才能推进。`
+  if (currentTask.value.action) return `资料齐后点击「${currentTask.value.action}」。`
+  if (currentDocumentKey.value) return `请处理「${currentDocumentLabel.value}」相关动作。`
+  return '当前阶段暂无需要推进的动作。'
+})
+const currentStepNote = computed(() => {
+  if (project.value?.status === 'survey_pending') return '先上传现场图片、补充说明，再生成 PPT 并确认工勘结果。'
+  if (project.value?.status === 'survey_done') return needRecheck.value ? '该项目需要复尺，处理二次勘察后再交底。' : '该项目可跳过复尺，下一步进入施工交底。'
+  if (project.value?.status === 'recheck_done') return '核对施工交底单，确认班组、面积、工艺和进场注意事项。'
+  if (project.value?.status === 'briefing_done') return '交底完成后从材料出库联动发起申请。'
+  if (project.value?.status === 'inspection_done') return '验收完成后重点处理材料回库和余料说明。'
+  return '当前步骤相关资料会在下方资料链中高亮。'
+})
+const workflowSteps = computed(() => {
+  if (!project.value) return []
+  const status = project.value.status
+  const order = [
+    { key: 'handover', label: '交接核对', statuses: ['handover_received'] },
+    { key: 'survey', label: '首次工勘', statuses: ['survey_pending'] },
+    { key: 'recheck', label: '复尺复核', statuses: ['survey_done'], optional: true },
+    { key: 'briefing', label: '施工交底', statuses: ['recheck_done'] },
+    { key: 'material', label: '出库进场', statuses: ['briefing_done', 'material_requested', 'material_out'] },
+    { key: 'build', label: '施工验收', statuses: ['in_progress', 'inspection_done'] },
+    { key: 'settle', label: '回库核算', statuses: ['material_returned', 'labor_settled', 'cost_checked'] },
+    { key: 'archive', label: '财务归档', statuses: ['finance_settled', 'archived'] }
+  ]
+  const filtered = order.filter(step => !step.optional || needRecheck.value || skipRecheck.value || status === 'survey_done')
+  const currentIndex = Math.max(0, filtered.findIndex(step => step.statuses.includes(status)))
+  return filtered.map((step, index) => ({
+    ...step,
+    current: step.statuses.includes(status),
+    done: index < currentIndex || status === 'archived',
+    skipped: step.optional && skipRecheck.value,
+    target: step.key === 'handover' ? 'current-workbench' : step.key === 'survey' || step.key === 'recheck' || step.key === 'briefing' ? 'documents' : step.key
+  }))
+})
 const canRunCurrentTask = computed(() => {
   const roles = currentTask.value.roles || []
   if (!currentTask.value.next || !roles.length) return false
@@ -869,6 +997,17 @@ async function fetchDetail() {
 async function handleAttachmentsUpdated() {
   documentRefreshKey.value += 1
   await fetchDetail()
+}
+
+function handleDeliveryChainUpdated(chain) {
+  deliveryChain.value = chain
+}
+
+function scrollToWorkflowSection(step = {}) {
+  const target = step.target || 'current-workbench'
+  const id = target === 'documents' ? 'project-documents' : target === 'current-workbench' ? 'current-workbench' : ''
+  if (!id) return
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 async function fetchAssignees() {
@@ -1028,6 +1167,10 @@ onMounted(() => {
 }
 .phase-step {
   flex: 1; text-align: center; position: relative;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  min-width: 0;
 }
 .phase-step:not(:last-child)::after {
   content: ''; position: absolute; top: 16px; left: 60%; right: -40%;
@@ -1041,8 +1184,82 @@ onMounted(() => {
 }
 .phase-step.active .step-dot { background: var(--color-primary); color: #fff; }
 .phase-step.current .step-dot { box-shadow: 0 0 0 4px rgba(79,109,245,0.25); }
+.phase-step.skipped .step-dot {
+  background: color-mix(in srgb, #64748b 18%, var(--bg-page));
+  color: var(--text-tertiary);
+}
 .step-label { font-size: 13px; color: var(--text-tertiary); }
 .phase-step.active .step-label { color: var(--color-primary); font-weight: 500; }
+.phase-step small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-placeholder);
+  font-size: 11px;
+}
+.current-workbench {
+  margin-bottom: 16px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 34%, var(--border-light));
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+.current-workbench-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+.current-workbench-head h3 {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: 19px;
+}
+.current-workbench-head p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.current-workbench-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+}
+.next-action-card,
+.step-context-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-page));
+}
+.next-action-card strong,
+.next-action-card span,
+.step-context-card span,
+.step-context-card strong,
+.step-context-card p {
+  display: block;
+}
+.next-action-card > strong {
+  margin-bottom: 4px;
+  color: var(--text-primary);
+  font-size: 16px;
+}
+.next-action-card > span,
+.step-context-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.step-context-card span {
+  margin-bottom: 4px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.step-context-card strong {
+  margin-bottom: 7px;
+  color: var(--text-primary);
+  font-size: 15px;
+}
 .workorder-summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -1157,6 +1374,10 @@ onMounted(() => {
   align-items: center;
   padding-top: 6px;
 }
+.work-actions.compact {
+  margin-top: 12px;
+  padding-top: 0;
+}
 .task-blocker {
   margin: 4px 0 12px;
   padding: 10px 12px;
@@ -1164,6 +1385,9 @@ onMounted(() => {
   background: color-mix(in srgb, #ef4444 10%, var(--bg-card));
   color: #b91c1c;
   font-size: 13px;
+}
+.task-blocker.inline {
+  margin: 10px 0 0;
 }
 .task-blocker strong {
   margin-right: 4px;
@@ -1297,6 +1521,15 @@ onMounted(() => {
   }
   .work-header {
     flex-direction: column;
+  }
+  .current-workbench-body {
+    grid-template-columns: 1fr;
+  }
+  .phase-steps {
+    overflow-x: auto;
+  }
+  .phase-step {
+    min-width: 92px;
   }
 }
 </style>

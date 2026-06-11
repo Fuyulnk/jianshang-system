@@ -1,14 +1,17 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Collection, DocumentChecked, Download, UploadFilled, View, MagicStick } from '@element-plus/icons-vue'
+import { Collection, DocumentChecked, Download, UploadFilled, View, MagicStick, MoreFilled, Delete } from '@element-plus/icons-vue'
 import DecimalCellInput from './DecimalCellInput.vue'
 import SystemSheetTable from './SystemSheetTable.vue'
 
 const props = defineProps({
   project: { type: Object, required: true },
-  refreshKey: { type: [Number, String], default: 0 }
+  refreshKey: { type: [Number, String], default: 0 },
+  currentStepKey: { type: String, default: '' }
 })
+
+const emit = defineEmits(['project-updated', 'chain-updated'])
 
 const loading = ref(false)
 const saving = ref(false)
@@ -21,14 +24,53 @@ const surveyInput = ref(null)
 const importingType = ref('')
 const activeSheet = ref('overview')
 const products = ref([])
+const surveyPreviewUrls = ref({})
+
+const gridSize = ref(150) // min-width for survey image thumbnails
+const dragIndex = ref(-1)
+const previewImageUrl = ref('')
+const previewImageVisible = ref(false)
+// 累计上传的图片数据（含 base64），用于追加上传时合并
+const sessionImageData = ref([])
 
 const nodes = computed(() => chain.value?.nodes || [])
+const visibleNodes = computed(() => {
+  if (!props.currentStepKey) return nodes.value
+  return nodes.value.filter(node => {
+    if (node.key === props.currentStepKey) return true
+    if (node.status === '已确认') return true
+    if (node.attachment_count > 0) return true
+    if (node.status === '按需') return false
+    return false
+  })
+})
 const metrics = computed(() => chain.value?.metrics || {})
 const finance = computed(() => chain.value?.finance || {})
 const missingLabel = computed(() => metrics.value.missing_count ? `待处理 ${metrics.value.missing_count} 项` : '资料链完整')
 const missingType = computed(() => metrics.value.missing_count ? 'warning' : 'success')
+const uniqAttachments = computed(() => {
+  const seen = new Set()
+  // 已作为现场图片展示的 attachment_id，不再重复显示在关联附件
+  const imageIds = new Set(
+    surveyImages(activeData.value)
+      .filter(img => img.attachment_id)
+      .map(img => Number(img.attachment_id))
+  )
+  return (activeNode.value?.attachments || []).filter(f => {
+    if (seen.has(f.id)) return false
+    if (imageIds.has(Number(f.id))) return false
+    seen.add(f.id)
+    return true
+  })
+})
 
 watch(() => [props.project?.id, props.refreshKey], fetchChain, { immediate: true })
+watch(dialogVisible, visible => {
+  if (!visible) {
+    revokeSurveyPreviewUrls()
+    sessionImageData.value = []
+  }
+})
 
 const briefingColumns = [
   { key: 'space_name', label: '空间', width: 110 },
@@ -121,6 +163,7 @@ async function fetchChain() {
   try {
     const json = await requestJson(`/api/projects/${props.project.id}/delivery-chain`, null, 'GET')
     chain.value = json.data
+    emit('chain-updated', json.data)
   } catch (err) {
     ElMessage.warning(err.message || '项目交付资料链读取失败')
   } finally {
@@ -143,6 +186,7 @@ function openNode(node) {
     activeNode.value = node
     activeData.value = normalizeDocumentData(node, clonePlainData(node.table_data || {}))
     activeSheet.value = node.key === 'material_io' ? 'overview' : 'form'
+    loadSurveyPreviews(activeData.value)
     fetchProducts()
     dialogVisible.value = true
   } catch (err) {
@@ -176,6 +220,7 @@ async function onImportFile(event) {
     const parsed = await requestJson(`/api/projects/${props.project.id}/delivery-chain/${importingType.value}/parse`, body)
     activeNode.value = nodes.value.find(node => node.key === importingType.value) || { key: importingType.value, label: parsed.data.document_label }
     activeData.value = normalizeDocumentData(activeNode.value, parsed.data.confirmed_data || {})
+    loadSurveyPreviews(activeData.value)
     activeNode.value.parsed_data = parsed.data
     activeNode.value.pending_file = {
       name: file.name,
@@ -194,6 +239,18 @@ async function onImportFile(event) {
 
 function openSurveyImages(node) {
   importingType.value = node.key
+  // 预加载已有图片，保障追加上传时不覆盖
+  const existingImages = node?.table_data?.survey?.images
+  if (Array.isArray(existingImages) && existingImages.length) {
+    sessionImageData.value = existingImages.map(img => ({
+      attachment_id: img.attachment_id,
+      name: img.name || img.original_name || img.note || '',
+      mime_type: img.mime_type || 'image/jpeg',
+      note: img.note || '',
+    }))
+  } else {
+    sessionImageData.value = []
+  }
   surveyInput.value?.click()
 }
 
@@ -202,6 +259,9 @@ function openPptUpload(node) {
   importInput.value?.click()
 }
 
+const MAX_IMAGES = 24
+const MAX_TOTAL_SIZE_MB = 50
+
 async function onSurveyImages(event) {
   const files = Array.from(event.target.files || []).filter(file => file.type.startsWith('image/')).slice(0, 12)
   event.target.value = ''
@@ -209,28 +269,94 @@ async function onSurveyImages(event) {
     ElMessage.warning('请选择现场图片')
     return
   }
+  // 检查图片数量上限
+  if (sessionImageData.value.length + files.length > MAX_IMAGES) {
+    ElMessage.warning(`图片总数不能超过 ${MAX_IMAGES} 张（已有 ${sessionImageData.value.length} 张）`)
+    return
+  }
   saving.value = true
   try {
-    const images = []
+    const newImages = []
     for (const file of files) {
-      images.push({
+      if (file.size > 10 * 1024 * 1024) {
+        ElMessage.warning(`"${file.name}" 超过 10MB，已跳过`)
+        continue
+      }
+      newImages.push({
         name: file.name,
         mime_type: file.type,
         note: file.name.replace(/\.[^.]+$/, ''),
+        size: file.size,
         data: await readAsDataUrl(file)
       })
+    }
+    if (!newImages.length) { saving.value = false; return }
+    // 检查总大小上限
+    const currentTotal = sessionImageData.value.reduce((sum, img) => sum + (img.size || (img.data ? img.data.length : 0)), 0)
+    const newTotal = newImages.reduce((sum, img) => sum + img.size, 0)
+    if ((currentTotal + newTotal) > MAX_TOTAL_SIZE_MB * 1024 * 1024) {
+      ElMessage.warning(`图片总大小不能超过 ${MAX_TOTAL_SIZE_MB}MB（当前 ${(currentTotal / 1024 / 1024).toFixed(1)}MB），请删减后重试`)
+      saving.value = false
+      return
+    }
+    for (const img of newImages) {
+      sessionImageData.value.push(img)
     }
     const body = {
       document_type: importingType.value === 'survey_recheck' ? 'survey_recheck' : 'survey_initial',
       survey_date: new Date().toISOString().slice(0, 10),
       conclusion: '现场图片已上传，请工程部补充勘察结论和整改意见。',
-      entry_judgment: 'conditional',
+      entry_judgment: '',
       need_recheck: importingType.value === 'survey_recheck',
+      images: sessionImageData.value
+    }
+    const json = await requestJson(`/api/projects/${props.project.id}/delivery-chain/survey/images`, body)
+    chain.value = json.data.chain
+    emit('chain-updated', json.data.chain)
+    const updatedNode = nodes.value.find(node => node.key === body.document_type)
+    if (updatedNode) {
+      activeNode.value = updatedNode
+      activeData.value = normalizeDocumentData(updatedNode, clonePlainData(updatedNode.table_data || {}))
+      activeSheet.value = 'ppt'
+      loadSurveyPreviews(activeData.value)
+      dialogVisible.value = true
+    }
+    ElMessage.success(`已上传 ${sessionImageData.value.length} 张现场图片，可继续编辑说明后生成 PPT`)
+  } catch (err) {
+    ElMessage.error(err.message || '上传现场图片失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function generateSurveyPpt(node = activeNode.value) {
+  if (!node) return
+  const documentType = node.key === 'survey_recheck' ? 'survey_recheck' : 'survey_initial'
+  const currentData = activeData.value?.survey ? activeData.value : normalizeDocumentData(node, clonePlainData(node.table_data || {}))
+  const images = surveyImages(currentData)
+  if (!images.length) {
+    ElMessage.warning('请先上传现场图片，再生成 PPT')
+    return
+  }
+  saving.value = true
+  try {
+    const body = {
+      document_type: documentType,
+      ...currentData.survey,
       images
     }
     const json = await requestJson(`/api/projects/${props.project.id}/delivery-chain/survey/generate-ppt`, body)
     chain.value = json.data.chain
-    ElMessage.success('已生成勘察 PPT 并关联到工单')
+    emit('chain-updated', json.data.chain)
+    const updatedNode = nodes.value.find(item => item.key === documentType)
+    if (updatedNode) {
+      activeNode.value = updatedNode
+      activeData.value = normalizeDocumentData(updatedNode, clonePlainData(updatedNode.table_data || {}))
+      activeSheet.value = 'ppt'
+      loadSurveyPreviews(activeData.value)
+      dialogVisible.value = true
+    }
+    ElMessage.success(`已用 ${images.length} 张现场图片生成 PPT`)
   } catch (err) {
     ElMessage.error(err.message || '生成勘察 PPT 失败')
   } finally {
@@ -251,6 +377,7 @@ async function saveActiveNode() {
     }
     const json = await requestJson(`/api/projects/${props.project.id}/delivery-chain/${activeNode.value.key}/save`, body)
     chain.value = json.data.chain
+    emit('chain-updated', json.data.chain)
     dialogVisible.value = false
     ElMessage.success('系统版单据已保存')
   } catch (err) {
@@ -261,11 +388,15 @@ async function saveActiveNode() {
 }
 
 async function downloadFirstAttachment(node) {
-  const file = node.attachments?.[0]
+  const file = preferredAttachment(node)
   if (!file) {
     ElMessage.warning('当前节点还没有附件')
     return
   }
+  await downloadAttachment(file)
+}
+
+async function downloadAttachment(file) {
   try {
     const res = await fetch(`/api/files/${file.id}/download`, {
       headers: { Authorization: `Bearer ${token()}` }
@@ -283,6 +414,165 @@ async function downloadFirstAttachment(node) {
   } catch (err) {
     ElMessage.error(err.message || '附件下载失败')
   }
+}
+
+function preferredAttachment(node) {
+  const files = Array.isArray(node?.attachments) ? node.attachments : []
+  return files.find(file => isPptFile(file)) || files[0]
+}
+
+function isPptFile(file) {
+  return /ppt|presentation/i.test(file?.mime_type || '') || /\.(ppt|pptx)$/i.test(file?.original_name || '')
+}
+
+function isImageFile(file) {
+  return /^image\//i.test(file?.mime_type || '') || /\.(png|jpe?g|webp|gif)$/i.test(file?.original_name || '')
+}
+
+function surveyImages(data = activeData.value) {
+  const images = data?.survey?.images
+  return Array.isArray(images) ? images.filter(item => item?.attachment_id || item?.data) : []
+}
+
+function hasSurveyImages(node = activeNode.value) {
+  if (!node) return false
+  if (activeNode.value?.key === node.key && activeData.value?.survey) return surveyImages(activeData.value).length > 0
+  return surveyImages(node.table_data || {}).length > 0
+}
+
+function surveyImageLabel(image, index) {
+  return image?.note || image?.original_name || image?.name || `现场图片 ${index + 1}`
+}
+
+function onImageDragStart(index, event) {
+  dragIndex.value = index
+  if (event?.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(index))
+  }
+}
+
+function onImageDragOver(e) {
+  e.preventDefault()
+}
+
+function onImageDrop(index, event) {
+  event?.preventDefault?.()
+  const fallbackIndex = Number(event?.dataTransfer?.getData('text/plain'))
+  const fromIndex = dragIndex.value >= 0 ? dragIndex.value : fallbackIndex
+  if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex === index) {
+    dragIndex.value = -1
+    return
+  }
+  const images = activeData.value?.survey?.images
+  if (!Array.isArray(images)) return
+  const [moved] = images.splice(fromIndex, 1)
+  images.splice(index, 0, moved)
+  dragIndex.value = -1
+  // 触发响应式更新
+  activeData.value = { ...activeData.value }
+  ElMessage.success('现场图片顺序已调整，生成 PPT 会按新顺序输出')
+}
+
+function generateSurveyNotes() {
+  const images = surveyImages()
+  if (!images.length) {
+    ElMessage.warning('请先上传现场图片')
+    return
+  }
+  const customer = activeData.value?.project?.customer || props.project?.customer || '客户'
+  const address = activeData.value?.project?.address || props.project?.address_detail || props.project?.address || ''
+  const templates = [
+    `现场整体环境：记录${customer}项目进场前的空间状态，作为工勘留底。`,
+    '基层情况：重点核对墙面平整度、开裂、空鼓、返潮及修补位置。',
+    '成品保护：记录门窗、柜体、地面、家具等需要保护的位置。',
+    '施工条件：核对脚手架、高空作业、二次搬运、水电照明和进场动线。',
+    '问题细节：请工程部确认是否需要整改、复勘或补充交底。',
+    '补充照片：用于完善现场勘察记录，生成 PPT 前可人工改成更准确的话术。'
+  ]
+  images.forEach((image, index) => {
+    const current = String(image.note || '').trim()
+    const looksLikeFilename = current && /^[\w.-]+\.(png|jpe?g|webp)$/i.test(current)
+    if (!current || looksLikeFilename || current === image.name) {
+      image.note = `${templates[index] || templates[templates.length - 1]}${address ? ` 地址：${address}` : ''}`
+    }
+  })
+  activeData.value = { ...activeData.value }
+  ElMessage.success('已生成现场图片说明，请人工检查后再生成 PPT')
+}
+
+function deleteImage(index) {
+  const images = activeData.value?.survey?.images
+  if (!Array.isArray(images)) return
+  images.splice(index, 1)
+  activeData.value = { ...activeData.value }
+  // 如果删完了，释放预览 URL
+  if (!images.length) revokeSurveyPreviewUrls()
+}
+
+function hasGeneratedSurveyPpt(node = activeNode.value) {
+  if (!node) return false
+  const sourceId = Number(node.document?.source_attachment_id || 0)
+  if (sourceId && (node.attachments || []).some(file => Number(file.id) === sourceId && isPptFile(file))) return true
+  return (node.attachments || []).some(file => isPptFile(file) && /PPT|ppt/i.test(file.original_name || ''))
+}
+
+async function confirmDeliveryStep(node = activeNode.value) {
+  if (!node) return
+  if (node.key === 'survey_initial' && !hasGeneratedSurveyPpt(node)) {
+    ElMessage.warning('请先生成或上传工勘 PPT，再确认工勘完成')
+    return
+  }
+  saving.value = true
+  try {
+    const json = await requestJson(`/api/projects/${props.project.id}/delivery-chain/${node.key}/confirm-step`, {})
+    chain.value = json.data.chain
+    emit('chain-updated', json.data.chain)
+    const updatedNode = nodes.value.find(item => item.key === node.key)
+    if (updatedNode) {
+      activeNode.value = updatedNode
+      activeData.value = normalizeDocumentData(updatedNode, clonePlainData(updatedNode.table_data || {}))
+      loadSurveyPreviews(activeData.value)
+    }
+    emit('project-updated')
+    ElMessage.success(json.data.message || '该步骤已确认，项目进度已刷新')
+  } catch (err) {
+    ElMessage.error(err.message || '确认步骤失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+function openPreview(url) {
+  previewImageUrl.value = url
+  previewImageVisible.value = true
+}
+
+function revokeSurveyPreviewUrls() {
+  for (const url of Object.values(surveyPreviewUrls.value)) {
+    if (url) URL.revokeObjectURL(url)
+  }
+  surveyPreviewUrls.value = {}
+}
+
+async function loadSurveyPreviews(data = activeData.value) {
+  revokeSurveyPreviewUrls()
+  const images = surveyImages(data).filter(image => image.attachment_id)
+  if (!images.length) return
+  const next = {}
+  await Promise.all(images.map(async image => {
+    try {
+      const res = await fetch(`/api/files/${image.attachment_id}/download`, {
+        headers: { Authorization: `Bearer ${token()}` }
+      })
+      if (!res.ok) throw new Error('图片读取失败')
+      const blob = await res.blob()
+      next[image.attachment_id] = URL.createObjectURL(blob)
+    } catch (err) {
+      console.warn('现场图片预览加载失败', image, err)
+    }
+  }))
+  surveyPreviewUrls.value = next
 }
 
 async function requestJson(url, body = null, method = 'POST') {
@@ -325,6 +615,26 @@ function nodeClass(node) {
 
 function actionVisible(node, action) {
   return Array.isArray(node.actions) && node.actions.includes(action)
+}
+
+function canConfirmNode(node) {
+  if (!node) return false
+  if (props.currentStepKey && node.key !== props.currentStepKey) return false
+  if (node.key === 'material_io' && props.project?.status !== 'inspection_done') return false
+  return ['survey_initial', 'survey_recheck', 'briefing', 'material_io', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'].includes(node.key)
+}
+
+function confirmButtonLabel(node) {
+  return {
+    survey_initial: '确认工勘完成',
+    survey_recheck: '确认复尺完成',
+    briefing: '确认交底完成',
+    material_io: '确认回库完成',
+    completion_inspection: '确认验收完成',
+    labor_settlement: '确认工费结算',
+    cost_check: '确认成本核算',
+    finance_settlement: '确认财务结算'
+  }[node?.key] || '确认完成'
 }
 
 function statusType(node) {
@@ -403,10 +713,11 @@ function normalizeDocumentData(node, data) {
       surveyor: data.survey?.surveyor || '',
       surveyor_phone: data.survey?.surveyor_phone || '',
       conclusion: data.survey?.conclusion || props.project?.survey_report || '',
-      entry_judgment: data.survey?.entry_judgment || 'conditional',
+      entry_judgment: data.survey?.entry_judgment || '',
       need_recheck: !!data.survey?.need_recheck,
       repair_required: !!data.survey?.repair_required,
       issues: Array.isArray(data.survey?.issues) ? data.survey.issues : [],
+      images: Array.isArray(data.survey?.images) ? data.survey.images : [],
       image_count: data.survey?.image_count || 0,
       ppt_title: data.survey?.ppt_title || `${project.customer || '项目'}${node?.label || '勘察表'}`,
       ppt_layout: data.survey?.ppt_layout || 'two-column'
@@ -564,7 +875,7 @@ function roundMoneyValue(value) {
     </div>
 
     <div class="chain-grid">
-      <article v-for="node in nodes" :key="node.key" class="chain-card" :class="nodeClass(node)">
+      <article v-for="node in visibleNodes" :key="node.key" class="chain-card" :class="[nodeClass(node), { current: node.key === currentStepKey }]">
         <div class="chain-title">
           <el-icon><DocumentChecked /></el-icon>
           <div>
@@ -592,7 +903,9 @@ function roundMoneyValue(value) {
           <el-button size="small" :icon="View" @click="openNode(node)">查看表格</el-button>
           <el-button v-if="actionVisible(node, 'import')" size="small" :icon="UploadFilled" @click="openImport(node)">导入/更新</el-button>
           <el-button v-if="actionVisible(node, 'sync')" size="small" text @click="openNode(node)">同步字段</el-button>
-          <el-button v-if="actionVisible(node, 'generate_ppt')" size="small" type="primary" :icon="MagicStick" @click="openSurveyImages(node)">上传图片生成PPT</el-button>
+          <el-button v-if="actionVisible(node, 'generate_ppt')" size="small" type="primary" :icon="UploadFilled" @click="openSurveyImages(node)">上传图片</el-button>
+          <el-button v-if="actionVisible(node, 'generate_ppt')" size="small" :icon="MagicStick" :disabled="!hasSurveyImages(node)" @click="generateSurveyPpt(node)">生成PPT</el-button>
+          <el-button v-if="canConfirmNode(node)" size="small" type="success" :icon="DocumentChecked" @click="confirmDeliveryStep(node)">{{ confirmButtonLabel(node) }}</el-button>
           <el-button v-if="actionVisible(node, 'generate_ppt')" size="small" text @click="openPptUpload(node)">上传PPT</el-button>
           <el-button v-if="node.attachments?.length" size="small" text :icon="Download" @click="downloadFirstAttachment(node)">下载</el-button>
         </div>
@@ -610,6 +923,18 @@ function roundMoneyValue(value) {
       </aside>
       <section class="table-panel">
         <div class="table-note">系统版表格 V2。界面按总监真实表格拆成可读区域，保存后仍会作为结构化单据入库。</div>
+        <div v-if="uniqAttachments.length" class="attachment-strip">
+          <span>关联附件</span>
+          <button
+            v-for="file in uniqAttachments"
+            :key="file.id"
+            type="button"
+            class="attachment-chip"
+            @click="downloadAttachment(file)"
+          >
+            {{ isPptFile(file) ? 'PPT' : isImageFile(file) ? '图片' : '文件' }} · {{ file.original_name }}
+          </button>
+        </div>
 
         <div class="sheet-block">
           <div class="sheet-title">项目基础信息</div>
@@ -630,7 +955,7 @@ function roundMoneyValue(value) {
             <label>日期<el-input v-model="activeData.survey.survey_date" placeholder="2026-04-08" /></label>
             <label>勘察/质检人<el-input v-model="activeData.survey.surveyor" /></label>
             <label>联系电话<el-input v-model="activeData.survey.surveyor_phone" /></label>
-            <label>进场判断<el-select v-model="activeData.survey.entry_judgment" style="width:100%"><el-option label="可进场" value="ready" /><el-option label="有条件进场" value="conditional" /><el-option label="暂不建议进场" value="blocked" /></el-select></label>
+            <label>工勘结论<el-select v-model="activeData.survey.entry_judgment" style="width:100%"><el-option label="无需复尺，进入交底" value="ready" /><el-option label="需要复尺/整改复核" value="conditional" /><el-option label="暂不具备进场条件" value="blocked" /></el-select></label>
             <label>需要二次勘察<el-switch v-model="activeData.survey.need_recheck" /></label>
             <label>触发整改/售后<el-switch v-model="activeData.survey.repair_required" /></label>
             <label class="wide">勘察/质检结论<el-input v-model="activeData.survey.conclusion" type="textarea" :rows="4" /></label>
@@ -643,12 +968,79 @@ function roundMoneyValue(value) {
             empty-text="暂无问题项，可在结论中先记录。"
             @cell-change="({ row, value }) => { activeData.survey.issues[row.id] = value }"
           />
+          <div class="survey-image-section">
+            <div class="sheet-title second">
+              现场图片
+              <span class="image-grid-tools">
+                <el-select v-model="gridSize" size="small" style="width: 90px" @change="activeData = {...activeData}">
+                  <el-option :value="100" label="小图" />
+                  <el-option :value="150" label="中图" />
+                  <el-option :value="220" label="大图" />
+                </el-select>
+                <span class="img-hint">拖拽可排序</span>
+              </span>
+            </div>
+            <div v-if="surveyImages().length" class="survey-image-grid" :style="{ gridTemplateColumns: `repeat(auto-fill, minmax(${gridSize}px, 1fr))` }">
+              <figure
+                v-for="(image, index) in surveyImages()"
+                :key="image.attachment_id || image.name || index"
+                class="survey-image-card"
+                :class="{ 'drag-over': dragIndex >= 0 && dragIndex !== index, 'is-dragging': dragIndex === index }"
+                draggable="true"
+                @dragstart="onImageDragStart(index, $event)"
+                @dragover="onImageDragOver"
+                @drop="onImageDrop(index, $event)"
+                @dragend="dragIndex = -1"
+              >
+                <img v-if="surveyPreviewUrls[image.attachment_id]" :src="surveyPreviewUrls[image.attachment_id]" :alt="surveyImageLabel(image, index)" />
+                <div v-else class="survey-image-missing">图片预览加载中</div>
+                <div class="image-overlay">
+                  <el-popover placement="top" :width="180" trigger="click" :hide-after="0">
+                    <template #reference>
+                      <el-button circle size="small" class="img-action-btn"><el-icon><MoreFilled /></el-icon></el-button>
+                    </template>
+                    <div class="img-popover-actions">
+                      <el-select v-model="gridSize" size="small" style="width: 100%">
+                        <el-option :value="100" label="小图展示" />
+                        <el-option :value="150" label="中图展示" />
+                        <el-option :value="220" label="大图展示" />
+                      </el-select>
+                      <el-button type="danger" size="small" plain style="width: 100%; margin-top: 8px;" @click="deleteImage(index)">
+                        删除此图片
+                      </el-button>
+                    </div>
+                  </el-popover>
+                </div>
+                <figcaption>
+                  <strong>{{ surveyImageLabel(image, index) }}</strong>
+                  <span v-if="image.original_name">{{ image.original_name }}</span>
+                </figcaption>
+                <el-input
+                  v-model="image.note"
+                  class="image-note-input"
+                  size="small"
+                  placeholder="图片说明，可由 AI 生成后修改"
+                />
+              </figure>
+            </div>
+            <el-empty v-else description="暂无现场图片，先上传图片，再生成 PPT。" :image-size="64" />
+          </div>
             </el-tab-pane>
             <el-tab-pane label="PPT可视图" name="ppt">
               <div class="ppt-toolbar">
-                <el-button type="primary" :icon="MagicStick" @click="openSurveyImages(activeNode)">上传图片生成PPT</el-button>
+                <el-button type="primary" :icon="UploadFilled" @click="openSurveyImages(activeNode)">上传图片</el-button>
+                <el-button :icon="MagicStick" :disabled="!hasSurveyImages(activeNode)" @click="generateSurveyNotes">AI生成说明</el-button>
+                <el-button :icon="MagicStick" :disabled="!hasSurveyImages(activeNode)" @click="generateSurveyPpt(activeNode)">生成PPT</el-button>
                 <el-button @click="openPptUpload(activeNode)">直接上传PPT</el-button>
-                <span>系统版 PPT 草稿可先编辑标题、结论和版式；任意 PPTX 原稿会作为附件留存。</span>
+                <el-button
+                  v-if="canConfirmNode(activeNode)"
+                  type="success"
+                  :icon="DocumentChecked"
+                  @click="confirmDeliveryStep(activeNode)"
+                >
+                  {{ confirmButtonLabel(activeNode) }}
+                </el-button>
+                <span>先上传现场图片，再编辑每张图片说明；生成 PPT 时会写入这些说明。</span>
               </div>
               <div class="ppt-preview">
                 <div class="ppt-slide">
@@ -661,7 +1053,47 @@ function roundMoneyValue(value) {
                   </div>
                   <div class="ppt-slide-body" :class="activeData.survey.ppt_layout">
                     <div class="ppt-photo-grid">
-                      <div v-for="n in Math.max(Number(activeData.survey.image_count || 0), 4)" :key="n" class="ppt-photo">现场图片 {{ n }}</div>
+                      <template v-if="surveyImages().length === 0">
+                        <div class="ppt-photo ppt-empty-hint">暂无图片，请先点击“上传图片”</div>
+                      </template>
+                      <template v-else>
+                        <figure
+                          v-for="(image, index) in surveyImages()"
+                          :key="image.attachment_id || image.name || index"
+                          class="ppt-photo is-image"
+                          :class="{
+                            'is-dragging': dragIndex === index,
+                            'drag-over': dragIndex >= 0 && dragIndex !== index,
+                            'ppt-photo-full': surveyImages().length <= 2
+                          }"
+                          draggable="true"
+                          @dragstart="onImageDragStart(index, $event)"
+                          @dragover="onImageDragOver"
+                          @drop="onImageDrop(index, $event)"
+                          @dragend="dragIndex = -1"
+                        >
+                          <img
+                            v-if="surveyPreviewUrls[image.attachment_id]"
+                            :src="surveyPreviewUrls[image.attachment_id]"
+                            :alt="surveyImageLabel(image, index)"
+                            class="ppt-photo-img"
+                            @click.stop="openPreview(surveyPreviewUrls[image.attachment_id])"
+                          />
+                          <span v-else>{{ surveyImageLabel(image, index) }}</span>
+                          <el-input
+                            v-model="image.note"
+                            class="ppt-note-input"
+                            size="small"
+                            placeholder="图片说明，可由 AI 生成后修改"
+                            @click.stop
+                          />
+                          <div class="image-overlay ppt-overlay">
+                            <el-button circle size="small" class="img-action-btn" @click.stop="deleteImage(index)">
+                              <el-icon><Delete /></el-icon>
+                            </el-button>
+                          </div>
+                        </figure>
+                      </template>
                     </div>
                     <div class="ppt-text">
                       <strong>{{ activeData.project.customer || '客户' }} · {{ activeData.survey.survey_date || '勘察日期' }}</strong>
@@ -769,6 +1201,14 @@ function roundMoneyValue(value) {
       <el-button @click="dialogVisible = false">关闭</el-button>
       <el-button type="primary" :loading="saving" @click="saveActiveNode">保存单据</el-button>
     </template>
+  </el-dialog>
+
+  <!-- 图片放大预览 -->
+  <el-dialog v-model="previewImageVisible" title="图片预览" width="auto" align-center :close-on-click-modal="true" destroy-on-close
+    :style="{ maxWidth: '90vw' }" class="preview-dialog">
+    <div class="preview-dialog-body">
+      <img v-if="previewImageUrl" :src="previewImageUrl" class="preview-full-img" />
+    </div>
   </el-dialog>
 </template>
 
@@ -880,6 +1320,11 @@ function roundMoneyValue(value) {
 .chain-card.confirmed {
   border-color: color-mix(in srgb, #22c55e 28%, var(--border-light));
   background: color-mix(in srgb, #22c55e 7%, var(--bg-card));
+}
+
+.chain-card.current {
+  border-color: color-mix(in srgb, var(--color-primary) 52%, var(--border-light));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 10%, transparent);
 }
 
 .chain-card.warning {
@@ -1063,6 +1508,186 @@ function roundMoneyValue(value) {
   font-size: 13px;
 }
 
+.attachment-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-page) 78%, var(--bg-card));
+}
+
+.attachment-strip > span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.attachment-chip {
+  max-width: 260px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.attachment-chip:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.survey-image-section {
+  margin-top: 12px;
+}
+
+.survey-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.survey-image-card {
+  display: grid;
+  grid-template-rows: minmax(120px, auto) auto auto;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.survey-image-card img {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  max-height: 260px;
+  object-fit: contain;
+  background: var(--bg-page);
+}
+
+.survey-image-missing {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  background: var(--bg-page);
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.survey-image-card figcaption {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.survey-image-card figcaption strong,
+.survey-image-card figcaption span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.survey-image-card figcaption strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.survey-image-card figcaption span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.image-note-input {
+  padding: 0 8px 8px;
+}
+
+/* 交互：悬浮遮罩 */
+.survey-image-card {
+  position: relative;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.survey-image-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+}
+.survey-image-card.is-dragging {
+  opacity: 0.4;
+  outline: 2px dashed var(--color-primary);
+}
+.survey-image-card.drag-over {
+  outline: 2px dashed var(--color-primary);
+  outline-offset: 2px;
+}
+.image-overlay {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 2;
+}
+.survey-image-card:hover .image-overlay,
+.ppt-photo:hover .image-overlay {
+  opacity: 1;
+}
+.img-action-btn {
+  background: rgba(0,0,0,0.55) !important;
+  color: #fff !important;
+  border: none !important;
+  backdrop-filter: blur(4px);
+}
+.img-action-btn:hover {
+  background: rgba(0,0,0,0.75) !important;
+}
+.img-popover-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.image-grid-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+}
+.img-hint {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+/* PPT 内图片交互 */
+.ppt-photo.is-image {
+  position: relative;
+  transition: opacity 0.15s ease;
+  cursor: grab;
+}
+.ppt-photo.is-image:active {
+  cursor: grabbing;
+}
+.ppt-photo.is-image.is-dragging {
+  opacity: 0.3;
+  outline: 2px dashed var(--color-primary);
+}
+.ppt-photo.is-image.drag-over {
+  outline: 2px dashed var(--color-primary);
+  outline-offset: 2px;
+}
+.ppt-overlay {
+  top: 4px;
+  right: 4px;
+}
+
 .ppt-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -1078,11 +1703,14 @@ function roundMoneyValue(value) {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-page);
+  overflow: auto;
+  max-height: 580px;
 }
 
 .ppt-slide {
-  aspect-ratio: 16 / 9;
+  width: min(100%, 920px);
   min-height: 360px;
+  margin: 0 auto;
   padding: 18px;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
@@ -1099,9 +1727,10 @@ function roundMoneyValue(value) {
 
 .ppt-slide-body {
   display: grid;
-  grid-template-columns: 1.2fr 0.8fr;
+  grid-template-columns: minmax(0, 1.1fr) minmax(240px, 0.75fr);
   gap: 14px;
-  height: calc(100% - 46px);
+  min-height: 260px;
+  align-items: start;
 }
 
 .ppt-slide-body.grid {
@@ -1110,8 +1739,8 @@ function roundMoneyValue(value) {
 
 .ppt-photo-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
 }
 
 .ppt-photo {
@@ -1123,6 +1752,80 @@ function roundMoneyValue(value) {
   background: #f8fafc;
   color: #64748b;
   font-size: 13px;
+}
+
+.ppt-empty-hint {
+  grid-column: 1 / -1;
+  min-height: 180px;
+}
+
+.ppt-photo.is-image {
+  overflow: hidden;
+  border-style: solid;
+  padding: 8px;
+  align-content: start;
+}
+.ppt-photo-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 110px;
+  max-height: 260px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #eef2f7;
+  transition: transform 0.25s ease;
+  cursor: zoom-in;
+}
+.ppt-photo-img:hover {
+  transform: scale(1.04);
+  z-index: 3;
+}
+.ppt-photo-full .ppt-photo-img:hover {
+  transform: scale(1.04);
+}
+/* 图片数≤2时宽一点 */
+.ppt-photo-full {
+  grid-column: span 1;
+}
+.ppt-photo-full:only-child {
+  grid-column: 1 / -1;
+}
+
+.ppt-note-input {
+  width: 100%;
+  margin: 8px 0 0;
+}
+.ppt-photo-full:only-child .ppt-photo-img {
+  max-height: 340px;
+  object-fit: contain;
+}
+.preview-dialog {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preview-dialog :deep(.el-dialog__body) {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 12px;
+  overflow: hidden;
+}
+.preview-dialog-body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  max-width: 100%;
+}
+.preview-full-img {
+  display: block;
+  max-width: 82vw;
+  max-height: 78vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 .ppt-text {

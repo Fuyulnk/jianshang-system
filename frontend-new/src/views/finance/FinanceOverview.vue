@@ -82,6 +82,31 @@
       </div>
     </el-card>
 
+    <!-- 供货收款待办 -->
+    <el-card class="page-card supply-todo-card">
+      <div class="page-header">
+        <div>
+          <h2>供货单收款待办</h2>
+          <p class="page-desc">项目供货单导入或新建后，会先进入财务确认收款</p>
+        </div>
+        <el-button type="primary" plain @click="router.push('/main/projects/supply')">去处理供货单</el-button>
+      </div>
+      <el-table :data="supplyTodos" stripe v-loading="loading" style="width: 100%">
+        <el-table-column prop="order_no" label="供货单号" width="150" />
+        <el-table-column prop="customer" label="客户/项目" min-width="170" />
+        <el-table-column prop="phone" label="电话" width="130" />
+        <el-table-column label="金额" width="130" align="right">
+          <template #default="{ row }">{{ formatMoney(row.amount) }}</template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="160" />
+        <el-table-column label="状态" width="150">
+          <template #default="{ row }">
+            <el-tag type="warning" size="small">{{ row.todo_label || '待财务确认收款' }}</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- 球型可视化 -->
     <el-row :gutter="20" style="margin-bottom: 20px;">
       <el-col :span="12">
@@ -186,6 +211,7 @@ const accounts = ref([])
 const totals = ref({ total_assets: 0, total_income: 0, total_expense: 0, account_count: 0 })
 const incomeCategories = ref([])
 const expenseCategories = ref([])
+const supplyTodos = ref([])
 const analysis = ref({
   this_month: { income: 0, expense: 0, net: 0, count: 0, income_change_percent: 0, expense_change_percent: 0 },
   last_month: { income: 0, expense: 0, net: 0, count: 0 },
@@ -212,14 +238,16 @@ function formatPercent(v) {
 async function fetchData() {
   loading.value = true
   try {
-    const [overviewRes, catRes, analysisRes] = await Promise.all([
+    const [overviewRes, catRes, analysisRes, supplyRes] = await Promise.all([
       fetch('/api/finance/overview', { headers: { Authorization: `Bearer ${token()}` } }),
       fetch('/api/finance/categories', { headers: { Authorization: `Bearer ${token()}` } }),
-      fetch('/api/finance/analysis', { headers: { Authorization: `Bearer ${token()}` } })
+      fetch('/api/finance/analysis', { headers: { Authorization: `Bearer ${token()}` } }),
+      fetch('/api/supply-orders?status=ordered', { headers: { Authorization: `Bearer ${token()}` } })
     ])
     const overview = await overviewRes.json()
     const cats = await catRes.json()
     const nextAnalysis = await analysisRes.json()
+    const supply = await supplyRes.json()
 
     if (overview.success) {
       accounts.value = overview.data.accounts
@@ -230,6 +258,7 @@ async function fetchData() {
       expenseCategories.value = cats.data.filter(c => c.type === 'expense')
     }
     if (nextAnalysis.success) analysis.value = nextAnalysis.data
+    if (supply.success) supplyTodos.value = supply.data || []
   } finally {
     loading.value = false
   }
@@ -301,6 +330,7 @@ onMounted(fetchData)
 .page-desc { margin: 4px 0 0; font-size: 13px; color: var(--text-tertiary); }
 
 .analysis-card { margin-bottom: 20px; }
+.supply-todo-card { margin-bottom: 20px; }
 .header-actions {
   display: flex;
   flex-wrap: wrap;

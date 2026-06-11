@@ -366,7 +366,10 @@ function statusMeta(status) {
 function decorateProjectStatus(project) {
   const rawStatus = project.status
   const canonicalStatus = canonicalProjectStatus(rawStatus)
-  const meta = statusMeta(rawStatus)
+  const meta = { ...statusMeta(rawStatus) }
+  if (canonicalStatus === 'recheck_done' && /无需复尺|跳过复尺/.test(String(project.condition_note || ''))) {
+    meta.label = '无需复尺，待施工交底'
+  }
   return {
     ...project,
     raw_status: rawStatus,

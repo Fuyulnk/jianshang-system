@@ -230,7 +230,7 @@ ensureAiToolPermissionRows(db)
 
 const server = fastify({
   logger: true,
-  bodyLimit: 1048576 * 20
+  bodyLimit: 1048576 * 30
 })
 const realtime = { io: null }
 

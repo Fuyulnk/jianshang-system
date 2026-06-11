@@ -114,6 +114,114 @@
 
 ## 对接记录
 
+### 2026-06-11 Codex：路线图边界更新，手机水印/PPT 模板暂缓
+
+- 背景：用户确认当前阶段目标是“把项目工单板块搞定”，不要把手机拍照水印、外部水印相机 MCP、完整 PPT 模板库提前并入本阶段。
+- 修改文件：
+  - `handoff/简尚系统路线图V1.md`：新增“当前阶段边界”，明确当前阶段只收敛项目工单主流程、资料链节点确认、岗位控制台待办分配；新增“手机拍照水印 / 外部水印相机 / PPT 模板库”暂停项。
+  - `handoff/简尚系统路线图进度看板.html`：新增暂停区卡片“手机拍照水印和真实 PPT 模板库”，状态为“后续阶段”，并把“后续阶段”加入看板状态选项。
+- 结论：
+  - 手机 H5 拍照水印、GPS/时间/员工/项目水印、防篡改、接入今日水印相机/API/MCP、AI 看图写说明、三页式工勘/复勘 PPT 模板，都属于项目工单主流程稳定后的后续阶段。
+  - 当前阶段继续优先：每个项目资料链节点的确认动作、前置条件、可操作角色、下一步状态、操作日志，以及工程/仓库/财务/员工控制台待办分配。
+- 验证：文档更新，无代码构建。
+
+### 2026-06-10 Codex：PPT 追加上传图片被覆盖 bug 完整修复（本地）
+
+- 问题：用户先上传 2 张图片生成工勘 PPT，关弹窗后发现缺图，再上传 2 张，结果 PPT 只剩后 2 张——前面的被覆盖了。
+- 根因（三层，分别在不同位置）：
+  1. 前端 openSurveyImages 每次重新上传时 sessionImageData 为空，没有预加载已有图片。
+  2. 前端 onSurveyImages 计算总大小时 img.data.length 炸掉（已有图片无 data 字段），导致上传直接报错。
+  3. 后端 createMinimalPptx 中 `decodeData(image.data)` 对已有图片（只有 attachment_id 无 data）返回空 buffer，后面 `if (!buffer.length) continue` 直接跳过——旧图根本不在 PPT 里。
+- 修改文件：
+  - frontend-new/src/components/projects/ProjectDocumentSummary.vue
+    - openSurveyImages：打开上传前从 node.table_data.survey.images 预加载已有图片（带 attachment_id）到 sessionImageData。
+    - onSurveyImages：修复 size 计算（img.size || (img.data ? img.data.length : 0)），避免已有图片无 data 时报错。
+  - backend/src/routes/project-imports.js
+    - normalizeSurveyImage：新增保留 attachment_id / size 字段。
+    - normalizeSurveyDraft：过滤条件改为 filter(item => item.data || item.attachment_id)。
+    - saveSurveyImageAttachments：已有 attachment_id 的图片直接透传，不重复创建附件。
+    - stripSurveyImagePayloads：新旧附件合并而非覆盖。
+    - 新增 readAttachmentBytes 辅助函数：从磁盘读取已有附件的文件二进制。
+    - buildSurveyPptx 增加 db 参数，传给 createMinimalPptx。
+    - createMinimalPptx 图片循环：有 data 的用 decodeData，有 attachment_id 的用 readAttachmentBytes 从磁盘读取；两者都无的跳过。
+- 后端调用链连线：buildSurveyPptx(db, ...) → createMinimalPptx(slides, db) → 对每张图片尝试 data 解码 → 磁盘读取 → 跳过。
+- 验证：
+  - node --check backend/src/routes/project-imports.js 通过。
+  - frontend-new npm run build 通过，仅既有 Vite chunk 警告。
+  - 本地 dist 已同步到 backend/public，后端 localhost:3001 已重启，health 正常。
+- 未完成登录冒烟检查（当前模型无法调用浏览器）。
+- 部署状态：本轮未上传服务器。
+
+
+### 2026-06-10 Codex：首次工勘图片生成 PPT 闭环修复（本地）
+
+- 任务：用户指出“首次工勘上传图片生成 PPT 后不知道生成到哪里，查看表格也看不到图片”，导致工勘资料不能闭环。
+- 原因定位：
+  - 后端原本会生成 PPTX 并写入 `attachments`，但生成文件名是“项目名-首次工勘表.pptx”，资料链节点筛选正则没有覆盖“工勘表”，所以卡片和表格附件区看不到。
+  - 上传的现场图片只参与生成 PPT，原始图片没有作为项目附件落库；单据 JSON 里还会带图片 data URL，既不可追溯，也容易让数据库膨胀。
+  - 前端 PPT 可视图只显示“现场图片 1/2/3”占位，不会从附件里加载真实图片。
+- 修改文件：
+  - `backend/src/routes/project-imports.js`：首次/二次工勘节点正则补“工勘表/二次勘察表”；生成 PPT 时同时把每张现场图片保存为项目附件；单据 `confirmed_data.survey.images` 只保存 `attachment_id/name/mime/size/note`，不再保存 base64；资料链节点按 `source_attachment_id` 和图片 `attachment_id` 回填附件，不再只靠文件名。
+  - `frontend-new/src/components/projects/ProjectDocumentSummary.vue`：查看表格弹窗新增“关联附件”和“现场图片”区域；用鉴权下载把图片转成 blob 缩略图展示；PPT 可视图展示真实缩略图；节点下载优先下载 PPT，不会误下载第一张图片。
+- 验证：
+  - `node --check backend/src/routes/project-imports.js` 通过。
+  - `frontend-new npm run build` 通过，仍只有既有 Vite chunk size 警告。
+  - 本地重启后端 `3001` 后，用超管接口对项目 #5 调 `/api/projects/5/delivery-chain/survey/generate-ppt`，返回首次工勘节点 `attachment_count=2`：PPTX 附件 + 图片附件；`table_data.survey.images[0].attachment_id` 正常。
+  - 下载验证：带 token 下载 PPTX 后 `file` 识别为 `Microsoft PowerPoint 2007+`，`unzip -l` 可看到 `ppt/media/image1.png`；图片下载为 PNG；未登录下载返回 401。
+  - 浏览器验证：登录 `fuyulnk/123456` 打开项目 #5，首次工勘卡片显示 PPT 和图片附件；点击“查看表格”后弹窗中能看到关联附件和现场图片缩略图。
+- 数据清理：
+  - 本地验证临时写入的项目 #5 测试工勘单据、PPT 附件、图片附件已清理；没有保留“本地验证”工勘记录。
+- 部署状态：
+  - 已同步本地 `frontend-new/dist/` 到 `backend/public/`。
+  - 本轮未上传服务器。若要修线上，需要按部署流程备份、rsync、PM2 重启并做线上登录/接口冒烟。
+
+### 2026-06-10 Codex：供货单财务待办和暗色表格线上修复
+
+- 任务：用户根据线上截图指出文件中心、产品库存、项目单列表在暗色模式仍有白色表格区域；项目供货入口按钮偏灰；供货单导入二次确认后应直接进入财务确认收款，并让财务账号看得见待处理供货单。
+- 修改文件：
+  - `backend/src/routes/supply-orders.js`：补充供货单状态的待办文案和操作文案；确认导入创建后返回“进入财务确认收款”的结果；供货单列表权限对 `admin`、`finance`、`warehouse` 放开全局可见，避免未绑定施工项目的供货单被项目数据范围挡住。
+  - `frontend-new/src/views/projects/ProjectSupplyList.vue`：列表状态优先展示 `todo_label`，操作按钮展示对应动作；确认创建成功提示改为进入财务确认收款。
+  - `frontend-new/src/views/projects/ProjectWorkOrderHome.vue`：项目供货入口按钮改为明确的绿色按钮，避免线上看起来像禁用态。
+  - `frontend-new/src/views/finance/FinanceOverview.vue`：新增“供货单收款待办”区域，财务可直接看到 `ordered` 状态供货单并跳转处理。
+  - `frontend-new/src/styles/element-overrides.css`：补齐 Element Plus 表格、empty block、fixed wrapper、空数据文案在暗色模式下的背景和文字颜色，处理白色 No Data 区域。
+- 验证：
+  - 本地：`node --check backend/src/routes/supply-orders.js` 通过；`frontend-new npm run build` 通过，仍只有既有 Vite chunk size 警告。
+  - 线上：已备份 `/root/jianshang-system`；已 rsync 到 `root@8.135.8.37:/root/jianshang-system/backend/`；已 `pm2 restart jianshang-web --update-env`，PM2 显示 online。
+  - 线上健康检查：`http://8.135.8.37:3000/health` 返回 ok；线上首页引用新资源 `assets/index-BNQhVCzF.js`、`assets/index-CxPdm1FN.css`。
+  - 线上接口冒烟：用超级管理员 5 分钟临时 token 调 `/api/me` 成功；调 `/api/supply-orders?status=ordered` 成功，现有供货单返回 `todo_label=待财务确认收款`、`action_label=财务确认收款`。
+- 注意事项：
+  - 线上当前只查到 `fuyulnk/super_admin` 一个用户，未查到真实 `finance` 用户；因此未完成真实财务账号登录冒烟检查。代码层已按 `finance` 角色放开供货单可见，等创建财务账号后需要再补一次真实账号验证。
+  - 本轮没有新增财务账号，也没有改线上业务数据。
+- 下一步：
+  - 创建或分配一个真实财务账号后，登录财务账号检查财务总览是否出现”供货单收款待办”，并确认从待办跳转到项目供货单处理页。
+
+### 2026-06-10 Claude：现场图片交互增强 + 附件去重
+
+- 任务：用户反馈 PPT 可视化图片操作不便、上传覆盖、关联附件重复显示。
+- 修改文件：
+  - `frontend-new/src/components/projects/ProjectDocumentSummary.vue`：图片拖拽排序、悬浮操作按钮、删除、缩略图尺寸切换、追加上传不覆盖、PPT 区域滚动条、点击放大预览、关联附件去重过滤
+  - `backend/src/routes/project-imports.js`：`buildDeliveryNode` 附件过滤加 `Set` 去重
+- 验证：`node --check` 通过；`npm run build` 通过
+- 注意事项：本轮未上传服务器
+- 交接文件：`handoff/2026-06-10-claude-image-interactions.md`
+
+#### 2026-06-10 Codex 补充：本地同步和财务体验号验证
+
+- 本地同步：已重新执行 `frontend-new npm run build`，并将 `dist/` 同步到 `backend/public/`，本地静态资源更新为 `assets/index-DWIMdu0R.js`、`assets/index-BZQYc8Lj.css`。
+- 本地财务验证：
+  - 本地库存在财务体验号 `caiwu`（角色 `finance`）。
+  - 已用 `caiwu/123456` 登录本地接口，`/api/me` 返回财务角色正常。
+  - 已在本地通过导入确认接口创建测试供货单 `GH-20260610-001`，客户为“本地财务验证客户”，仅用于本地权限验证。
+  - 用 `caiwu` 调 `/api/supply-orders?status=ordered` 成功看到该单，返回 `todo_label=待财务确认收款`、`action_label=财务确认收款`。
+- 暗色表格复查：
+  - 浏览器登录财务体验号后手动切到暗色模式，扫描 `/main/projects`、`/main/projects/supply`、`/main/projects/construction`、`/main/files`、`/main/accounts`、`/main/transactions`、`/main/finance/overview`、`/main/products`、`/main/employees`。
+  - 首轮发现不只是空表格，Element Plus 的 `tr` 行级背景也会在暗色模式下保持白色，影响有数据表格（账户、交易、员工、财务总览）和空表格表头。
+  - 已在 `frontend-new/src/styles/element-overrides.css` 继续补齐暗色模式下 `.el-table tr`、`.el-table__row`、header/body row、striped row、hover row 的背景色。
+  - 复扫后上述页面的大面积白色表格块为 0；文件中心、产品库存、施工项目列表的 `No Data` 区域背景均为 `rgb(24, 24, 27)`。
+- 本地服务：
+  - 后端 `3001` 已用 detached `screen` 会话 `jianshang-backend-3001` 启动；`http://127.0.0.1:3001/health` 正常。
+  - 前端 Vite 仍在 `http://127.0.0.1:5173/`。
+
 ### 2026-06-08 Codex 供货单导入备注字段收口
 
 - 任务：用户指出“AI分析备注”混入下单日期、订单顾问、联系地址、转账信息，字段重复且不可读。

@@ -5,11 +5,35 @@ import { parseSupplyOrderDocument } from '../utils/supplyOrderImport.js'
 const MAX_MONEY_VALUE = 100000000
 
 const STATUS_META = {
-  ordered: { label: '销售下单', next: 'payment_confirmed', roles: ['super_admin', 'admin', 'finance'] },
-  payment_confirmed: { label: '财务确认收款', next: 'materials_ordered', roles: ['super_admin', 'admin', 'warehouse'] },
-  materials_ordered: { label: '仓库订材料', next: 'shipped', roles: ['super_admin', 'admin', 'warehouse'] },
-  shipped: { label: '材料到位发货', next: 'completed', roles: ['super_admin', 'admin', 'warehouse'] },
-  completed: { label: '完结', next: '', roles: [] }
+  ordered: {
+    label: '销售下单',
+    todoLabel: '待财务确认收款',
+    next: 'payment_confirmed',
+    actionLabel: '财务确认收款',
+    roles: ['super_admin', 'admin', 'finance']
+  },
+  payment_confirmed: {
+    label: '财务已确认收款',
+    todoLabel: '待仓库订材料',
+    next: 'materials_ordered',
+    actionLabel: '仓库确认订料',
+    roles: ['super_admin', 'admin', 'warehouse']
+  },
+  materials_ordered: {
+    label: '仓库已订材料',
+    todoLabel: '待材料到位发货',
+    next: 'shipped',
+    actionLabel: '确认到位发货',
+    roles: ['super_admin', 'admin', 'warehouse']
+  },
+  shipped: {
+    label: '材料已发货',
+    todoLabel: '待完结',
+    next: 'completed',
+    actionLabel: '确认完结',
+    roles: ['super_admin', 'admin', 'warehouse']
+  },
+  completed: { label: '已完结', todoLabel: '已完结', next: '', actionLabel: '', roles: [] }
 }
 
 export default function supplyOrderRoutes(server, db) {
@@ -101,7 +125,7 @@ export default function supplyOrderRoutes(server, db) {
         result.lastInsertRowid,
         '导入供货单创建',
         request.user.username,
-        `由供货单导入创建；来源文件：${sourceFile || '未记录'}；AI分析提示 ${warnings.length} 项`
+        `由供货单导入创建；来源文件：${sourceFile || '未记录'}；AI分析提示 ${warnings.length} 项；已进入财务确认收款待办`
       )
       return result.lastInsertRowid
     })
@@ -111,7 +135,7 @@ export default function supplyOrderRoutes(server, db) {
       requestSummary: sourceFile || draft.customer,
       resultSummary: `创建供货单 ${orderNo}，明细 ${items.length} 条，金额 ${draft.amount}`
     })
-    return { success: true, id, order_no: orderNo }
+    return { success: true, id, order_no: orderNo, status: 'ordered', next_status: 'payment_confirmed', next_label: '财务确认收款' }
   })
 
   server.get('/api/supply-orders/:id', async (request, reply) => {
@@ -238,8 +262,10 @@ function decorateOrder(db, order, withDetail) {
   return {
     ...order,
     status_label: meta.label,
+    todo_label: meta.todoLabel || meta.label,
     next_status: meta.next,
     next_label: meta.next ? STATUS_META[meta.next]?.label : '',
+    action_label: meta.actionLabel || (meta.next ? STATUS_META[meta.next]?.label : ''),
     items,
     logs
   }
@@ -349,6 +375,7 @@ function canDeleteOrder(db, user, order) {
 
 function canSeeAll(db, user) {
   if (user?.role === 'super_admin') return true
+  if (['admin', 'finance', 'warehouse'].includes(user?.role)) return true
   return getDataScope(db, user, 'projects') === 'all'
 }
 

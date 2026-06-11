@@ -149,7 +149,7 @@ export function emptyDeliveryDocument(documentType = '', project = {}) {
         surveyor: '',
         surveyor_phone: '',
         conclusion: documentType === 'completion_inspection' ? clean(project.construction_note) : clean(project.survey_report),
-        entry_judgment: documentType === 'survey_initial' ? 'conditional' : '',
+        entry_judgment: '',
         need_recheck: false,
         repair_required: false,
         issues: [],
