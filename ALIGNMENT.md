@@ -114,6 +114,30 @@
 
 ## 对接记录
 
+### 2026-06-11 Codex：修复提交后本地/服务器界面不一致
+
+- 问题：Claude 已提交 `8f1abae`，但本地后端静态目录和线上页面仍不是最新界面。
+- 根因：
+  - `frontend-new/dist/` 和 `backend/public/` 都未纳入 Git 跟踪；提交源码不会自动更新实际服务的前端构建产物。
+  - 本地 `frontend-new/dist` 为 `assets/index-BWkTzsvi.js` / `assets/index-BZMRYArt.css`，但本地 `backend/public` 仍是旧资源，线上此前仍是 `assets/index-BNQhVCzF.js` / `assets/index-CxPdm1FN.css`。
+- 处理：
+  - 本地重新执行 `frontend-new npm run build`。
+  - 已将 `frontend-new/dist/` 同步到 `backend/public/`。
+  - 服务器备份：`/root/jianshang-system-backup-20260611-153625.tgz`。
+  - 已 rsync `backend/src/` 和 `backend/public/` 到 `root@8.135.8.37:/root/jianshang-system/backend/`，保留线上 `backend/data/`、数据库、上传文件和 `node_modules`。
+  - 已 `pm2 restart jianshang-web --update-env`。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/project-imports.js`
+  - `node --check backend/src/routes/supply-orders.js`
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/routes/employee-dashboard.js`
+  - `node --check backend/src/utils/projectDocumentImport.js`
+  - `npm run build`（frontend-new/，成功；仍有既有 Vite 大 chunk 警告）
+  - 线上 `/health` 返回 ok。
+  - 线上首页、本地 `backend/public/index.html`、服务器 `backend/public/index.html` 均引用 `assets/index-BWkTzsvi.js` / `assets/index-BZMRYArt.css`。
+- 注意事项：本轮未完成线上登录冒烟检查；原因是当前任务只排查部署产物差异，未临时创建或索取线上测试账号。
+
 ### 2026-06-11 Codex：路线图边界更新，手机水印/PPT 模板暂缓
 
 - 背景：用户确认当前阶段目标是“把项目工单板块搞定”，不要把手机拍照水印、外部水印相机 MCP、完整 PPT 模板库提前并入本阶段。
