@@ -38,6 +38,60 @@
 - 布局入口：`frontend-new/src/layouts/MainLayout.vue`
 - 项目规范：`CLAUDE.md`
 
+## 线上上传/部署步骤
+
+重要：`git commit` / `git push` 只代表源码已提交，不代表本地后端界面或服务器界面已更新。当前系统的前端构建产物不进 Git，必须按下面步骤上传。
+
+1. 部署前确认工作区和分支：
+   - `git status --short --branch`
+   - `git log --oneline --decorate -3`
+   - 确认当前分支是要部署的分支，并确认没有不明来源的未提交改动。
+
+2. 后端语法检查：
+   - 至少检查本轮改过的后端文件，例如：
+   - `node --check backend/src/index.js`
+   - `node --check backend/src/routes/project-imports.js`
+   - `node --check backend/src/routes/supply-orders.js`
+   - `node --check backend/src/routes/projects.js`
+   - `node --check backend/src/routes/employee-dashboard.js`
+   - `node --check backend/src/utils/projectDocumentImport.js`
+
+3. 前端构建：
+   - `cd frontend-new`
+   - `npm run build`
+   - Vite 大 chunk 警告目前是已知问题；只要构建成功即可继续。
+
+4. 同步本地静态目录：
+   - 回到仓库根目录。
+   - `rsync -a --delete frontend-new/dist/ backend/public/`
+   - 再检查 `backend/public/index.html` 是否引用了最新 `assets/index-*.js` 和 `assets/index-*.css`。
+   - 本地后端真正服务的是 `backend/public/`，不是 `frontend-new/dist/`。
+
+5. 服务器备份：
+   - `ssh root@8.135.8.37 "tar --exclude='jianshang-system/backend/node_modules' -czf /root/jianshang-system-backup-$(date +%Y%m%d-%H%M%S).tgz -C /root jianshang-system"`
+   - 记录备份文件路径到本次对接记录。
+
+6. 上传到服务器：
+   - `rsync -az --delete backend/src/ root@8.135.8.37:/root/jianshang-system/backend/src/`
+   - `rsync -az --delete backend/public/ root@8.135.8.37:/root/jianshang-system/backend/public/`
+   - 不要同步或删除服务器的 `backend/data/`、数据库、上传文件、头像目录、`node_modules/`。
+
+7. 重启线上服务：
+   - `ssh root@8.135.8.37 "pm2 restart jianshang-web --update-env"`
+   - `ssh root@8.135.8.37 "pm2 describe jianshang-web | grep -E 'status|script path|exec cwd'"`
+   - 确认状态为 `online`，脚本路径是 `/root/jianshang-system/backend/src/index.js`。
+
+8. 上线后核对：
+   - `curl -fsS http://8.135.8.37:3000/health`
+   - `curl -fsS http://8.135.8.37:3000/ | grep 'assets/index-'`
+   - 对比线上首页引用的 `index-*.js/css` 是否与本地 `backend/public/index.html` 一致。
+   - 涉及登录态、权限、接口或前端交互时，还必须做线上登录冒烟检查；如果做不了，要写清楚原因。
+
+9. 收尾记录：
+   - 在 `## 对接记录` 顶部追加本次部署记录。
+   - 必须写清楚：提交号、构建结果、备份路径、上传范围、PM2 状态、线上资源名、`/health` 结果、是否完成登录冒烟。
+   - 如果只提交了代码但没有执行以上上传步骤，要明确写“本轮未上传服务器”。
+
 ## 关键文件索引
 
 - `handoff/简尚系统路线图V1.md`：内部开发路线图。Codex、Claude、Hermes 后续接手前必须先读，用来判断任务是否属于主线、短中长期目标、暂停功能、风险和验收标准。
