@@ -2,7 +2,7 @@ import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule, canAccessPrivateResource, canAccessProjectRecord, logAccessAudit } from '../utils/permissions.js'
 import { fileURLToPath } from 'url'
 import { dirname, extname, join } from 'path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import crypto from 'crypto'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -55,7 +55,16 @@ export default function fileRoutes(server, db) {
     `).all(...params, limit)
 
     const visible = rows.filter(row => canAccessEntity(db, request.user, row.entity_type, row.entity_id, 'can_view'))
-    return { success: true, data: visible }
+    // 按文件名去重：同一归属下同名文件只保留最新的
+    const seen = new Map()
+    const deduped = []
+    for (const file of visible) {
+      const key = `${file.entity_type}:${file.entity_id}:${file.original_name || 'unnamed'}`
+      if (seen.has(key)) continue
+      seen.set(key, true)
+      deduped.push(file)
+    }
+    return { success: true, data: deduped }
   })
 
   server.get('/api/files', async (request, reply) => {
@@ -108,6 +117,14 @@ export default function fileRoutes(server, db) {
     const storedName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}${ext || ''}`
     writeFileSync(join(UPLOAD_DIR, storedName), buffer)
 
+    // 去重：同一归属下同名文件直接覆盖
+    const existing = db.prepare('SELECT id, stored_name FROM attachments WHERE entity_type = ? AND entity_id = ? AND original_name = ? AND COALESCE(deleted_at, \'\') = \'\'').get(entityType, entityId, originalName)
+    if (existing) {
+      const oldPath = join(UPLOAD_DIR, existing.stored_name)
+      try { unlinkSync(oldPath) } catch {}
+      db.prepare('UPDATE attachments SET stored_name = ?, mime_type = ?, size = ?, checksum = ?, uploaded_by = ?, created_at = datetime(\'now\', \'localtime\') WHERE id = ?').run(storedName, mime_type, buffer.length, checksum, request.user.userId, existing.id)
+      return { success: true, id: existing.id, replaced: true }
+    }
     const result = db.prepare(`
       INSERT INTO attachments (
         entity_type, entity_id, original_name, stored_name, mime_type, size, checksum, uploaded_by

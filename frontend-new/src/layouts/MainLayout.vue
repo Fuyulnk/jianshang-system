@@ -87,7 +87,12 @@
           <div class="user-info" @click="router.push('/main/system/settings')">
             <UserAvatar :username="userInfo.username" :avatar-url="userInfo.avatar_url" :size="30" />
             <span class="user-name">{{ userInfo.username }}</span>
-            <span class="user-role">{{ userInfo.role_label }}</span>
+            <span :class="['user-role', 'role-' + (userInfo.role || '')]">
+              <template v-if="userInfo.role === 'super_admin'"><span class="role-crown">👑</span> 超级管理员</template>
+              <template v-else-if="userInfo.role === 'admin'"><span class="role-admin-star">⭐</span> 管理员</template>
+              <template v-else-if="userInfo.role === 'finance'"><span class="role-coin">🪙</span> 财务</template>
+              <template v-else>{{ userInfo.role_label || userInfo.role }}</template>
+            </span>
           </div>
           <el-button text size="small" class="header-btn" @click="toggleTheme" :title="themeTitle">
             <el-icon><Moon v-if="isDark" /><Sunny v-else /></el-icon>
@@ -405,6 +410,47 @@ onUnmounted(() => {
   padding: 2px 10px;
   border-radius: 12px;
   font-weight: 500;
+  transition: all 0.3s ease;
+}
+.role-super_admin {
+  background: linear-gradient(135deg, #fbbf24, #f59e0b, #fbbf24) !important;
+  color: #1a1a2e !important;
+  font-weight: 700 !important;
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.4), 0 0 24px rgba(251, 191, 36, 0.15);
+  animation: super-admin-glow 2s ease-in-out infinite;
+}
+@keyframes super-admin-glow {
+  0%, 100% { box-shadow: 0 0 12px rgba(251, 191, 36, 0.4), 0 0 24px rgba(251, 191, 36, 0.15); }
+  50% { box-shadow: 0 0 18px rgba(251, 191, 36, 0.6), 0 0 32px rgba(251, 191, 36, 0.25); }
+}
+.role-super_admin .role-crown {
+  display: inline-block;
+  animation: crown-bounce 2s ease-in-out infinite;
+}
+@keyframes crown-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+.role-admin {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+  color: #fff !important;
+  font-weight: 600 !important;
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.3);
+}
+.role-finance {
+  background: linear-gradient(135deg, #f59e0b, #d97706) !important;
+  color: #fff !important;
+  font-weight: 600 !important;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.3);
+}
+.role-finance .role-coin {
+  display: inline-block;
+  animation: coin-spin 3s ease-in-out infinite;
+}
+@keyframes coin-spin {
+  0%, 100% { transform: rotateY(0deg); }
+  25% { transform: rotateY(15deg); }
+  75% { transform: rotateY(-15deg); }
 }
 
 .header-btn {
