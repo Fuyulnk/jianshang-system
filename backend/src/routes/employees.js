@@ -1,5 +1,6 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { requireModuleAccess } from '../utils/permissions.js'
+import { generateEmployeeCode } from '../utils/employeeCode.js'
 
 export default function employeeRoutes(server, db) {
   // 获取员工列表
@@ -16,6 +17,24 @@ export default function employeeRoutes(server, db) {
     return { success: true, data: employees }
   })
 
+  // 已注册但还没生成员工档案的账号
+  server.get('/api/employees/pending-users', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'employees', 'can_view', '无权限查看待建档账号')) return
+
+    const users = db.prepare(`
+      SELECT u.id, u.username, u.role, u.real_name, u.phone, u.department, u.created_at,
+             r.label as role_label
+      FROM users u
+      LEFT JOIN roles r ON r.name = u.role
+      WHERE COALESCE(u.employee_id, 0) = 0
+        AND u.username != 'ai'
+        AND u.role != 'super_admin'
+      ORDER BY u.id ASC
+    `).all()
+    return { success: true, data: users }
+  })
+
   // 新增员工
   server.post('/api/employees', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
@@ -26,24 +45,56 @@ export default function employeeRoutes(server, db) {
       return { success: false, message: '员工姓名不能为空' }
     }
 
-    // 自动生成随机员工编号 JS-XX999999
-    function genCode() {
-      const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
-      let l = ''
-      for (let i = 0; i < 2; i++) l += letters[Math.floor(Math.random() * letters.length)]
-      const d = String(Math.floor(Math.random() * 1000000)).padStart(6, '0')
-      return `JS-${l}${d}`
-    }
-    let employeeCode = genCode()
-    while (db.prepare('SELECT 1 FROM employees WHERE employee_code = ?').get(employeeCode)) {
-      employeeCode = genCode()
-    }
+    const employeeCode = generateEmployeeCode(db)
 
     const result = db.prepare(
       'INSERT INTO employees (name, department, position, phone, employee_code) VALUES (?, ?, ?, ?, ?)'
     ).run(name, department || null, position || null, phone || null, employeeCode)
 
     return { success: true, id: result.lastInsertRowid, employee_code: employeeCode }
+  })
+
+  // 从待建档账号生成员工档案，并立即绑定该账号
+  server.post('/api/employees/from-user/:userId', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'employees', 'can_create', '无权限生成员工档案')) return
+
+    const userId = Number(request.params.userId || 0)
+    const user = db.prepare(`
+      SELECT id, username, role, real_name, phone, department, employee_id
+      FROM users
+      WHERE id = ?
+    `).get(userId)
+    if (!user) {
+      reply.code(404).send({ success: false, message: '账号不存在' })
+      return
+    }
+    if (Number(user.employee_id || 0) > 0) {
+      return { success: false, message: '该账号已经绑定员工档案' }
+    }
+
+    const employeeCode = generateEmployeeCode(db)
+    const employeeName = String(user.real_name || user.username || '').trim()
+    const result = db.transaction(() => {
+      const employeeResult = db.prepare(`
+        INSERT INTO employees (name, department, position, phone, employee_code)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        employeeName,
+        user.department || null,
+        roleToPosition(user.role),
+        user.phone || null,
+        employeeCode
+      )
+      db.prepare(`
+        UPDATE users
+        SET employee_id = ?, role_version = COALESCE(role_version, 1) + 1
+        WHERE id = ?
+      `).run(employeeResult.lastInsertRowid, user.id)
+      return { id: employeeResult.lastInsertRowid }
+    })()
+
+    return { success: true, id: result.id, employee_code: employeeCode }
   })
 
   // 更新员工
@@ -71,4 +122,16 @@ export default function employeeRoutes(server, db) {
     db.prepare('DELETE FROM employees WHERE id = ?').run(request.params.id)
     return { success: true }
   })
+}
+
+function roleToPosition(role) {
+  const labels = {
+    super_admin: '超级管理员',
+    admin: '管理员',
+    finance: '财务',
+    warehouse: '仓管',
+    engineering: '工程部',
+    employee: '普通员工'
+  }
+  return labels[role] || '未设置职位'
 }

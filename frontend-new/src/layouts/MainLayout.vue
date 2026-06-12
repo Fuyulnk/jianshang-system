@@ -61,11 +61,11 @@
               <el-icon><Operation /></el-icon>
               <span>角色权限</span>
             </el-menu-item>
-            <el-menu-item index="/main/system/settings">
-              <el-icon><Tools /></el-icon>
-              <span>系统设置</span>
-            </el-menu-item>
           </template>
+          <el-menu-item index="/main/system/settings">
+            <el-icon><Tools /></el-icon>
+            <span>系统设置</span>
+          </el-menu-item>
         </el-menu>
 
         <!-- 折叠按钮 -->
@@ -84,9 +84,11 @@
           <span class="page-title">{{ route.meta?.title || route.name }}</span>
         </div>
         <div class="header-right">
-          <UserAvatar :username="userInfo.username" :avatar-url="userInfo.avatar_url" :size="30" />
-          <span class="user-name">{{ userInfo.username }}</span>
-          <span class="user-role">{{ userInfo.role_label }}</span>
+          <div class="user-info" @click="router.push('/main/system/settings')">
+            <UserAvatar :username="userInfo.username" :avatar-url="userInfo.avatar_url" :size="30" />
+            <span class="user-name">{{ userInfo.username }}</span>
+            <span class="user-role">{{ userInfo.role_label }}</span>
+          </div>
           <el-button text size="small" class="header-btn" @click="toggleTheme" :title="themeTitle">
             <el-icon><Moon v-if="isDark" /><Sunny v-else /></el-icon>
           </el-button>
@@ -394,6 +396,8 @@ onUnmounted(() => {
   gap: 10px;
 }
 
+.user-info { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 8px; border-radius: var(--radius-sm); transition: background 0.15s; }
+.user-info:hover { background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
 .user-name { font-size: 14px; color: var(--text-primary); font-weight: 500; }
 .user-role {
   font-size: 12px; color: var(--text-tertiary);

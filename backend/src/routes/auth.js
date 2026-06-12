@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { getJwtSecret } from '../config.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { generateEmployeeCode } from '../utils/employeeCode.js'
 
 // 登录失败计数（内存），IP → { count, lockUntil }
 const loginAttempts = new Map()
@@ -128,13 +129,29 @@ export default function authRoutes(server, db) {
     }
 
     const hashed = bcrypt.hashSync(password, 10)
-    const result = db.prepare(
-      'INSERT INTO users (username, password, role, real_name, phone, department) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(username, hashed, 'employee', name || '', phone || '', department || '')
+    const displayName = String(name || username).trim()
+    const safePhone = String(phone || '').trim()
+    const safeDepartment = String(department || '').trim()
+    const createAccount = db.transaction(() => {
+      const userResult = db.prepare(
+        'INSERT INTO users (username, password, role, real_name, phone, department) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(username, hashed, 'employee', displayName, safePhone, safeDepartment)
+      const employeeCode = generateEmployeeCode(db)
+      const employeeResult = db.prepare(
+        'INSERT INTO employees (name, department, position, phone, employee_code) VALUES (?, ?, ?, ?, ?)'
+      ).run(displayName, safeDepartment || null, '新注册账号', safePhone || null, employeeCode)
+      db.prepare('UPDATE users SET employee_id = ? WHERE id = ?').run(employeeResult.lastInsertRowid, userResult.lastInsertRowid)
+      return {
+        userId: userResult.lastInsertRowid,
+        employeeId: employeeResult.lastInsertRowid,
+        employeeCode
+      }
+    })
+    const result = createAccount()
 
     const secret = getJwtSecret()
     const token = jwt.sign(
-      { userId: result.lastInsertRowid, username, role: 'employee', roleVersion: 1, employeeId: 0 },
+      { userId: result.userId, username, role: 'employee', roleVersion: 1, employeeId: result.employeeId },
       secret,
       { expiresIn: '1d' }
     )
@@ -143,15 +160,16 @@ export default function authRoutes(server, db) {
       success: true,
       token,
       user: {
-        id: result.lastInsertRowid,
+        id: result.userId,
         username,
         role: 'employee',
         onboarding_done: 0,
-        real_name: name || '',
-        phone: phone || '',
-        department: department || '',
-        employee_id: 0,
-        role_version: 1
+        real_name: displayName,
+        phone: safePhone,
+        department: safeDepartment,
+        employee_id: result.employeeId,
+        role_version: 1,
+        employee_code: result.employeeCode
       }
     }
   })

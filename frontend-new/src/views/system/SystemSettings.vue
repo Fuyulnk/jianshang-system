@@ -7,7 +7,7 @@
           <h3>系统设置</h3>
         </div>
         <div class="settings-nav">
-          <div v-for="item in navItems" :key="item.key"
+          <div v-for="item in filteredNav" :key="item.key"
             :class="['nav-item', { active: activeTab === item.key }]"
             @click="switchSettingsTab(item.key)">
             <el-icon :size="18"><component :is="item.icon" /></el-icon>
@@ -436,7 +436,20 @@ const navItems = [
   { key: 'about', label: '关于', icon: InfoFilled },
 ]
 
-const activeTab = ref('basic')
+const currentRole = computed(() => {
+  try {
+    const token = localStorage.getItem('token') || ''
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return payload.role || ''
+  } catch { return '' }
+})
+const isAdmin = computed(() => ['super_admin', 'admin'].includes(currentRole.value))
+const filteredNav = computed(() => {
+  if (isAdmin.value) return navItems
+  return navItems.filter(item => ['profile', 'appearance', 'about'].includes(item.key))
+})
+
+const activeTab = ref('profile')
 const saving = ref(false)
 const saved = ref(false)
 const testingAI = ref(false)
@@ -1046,9 +1059,11 @@ onMounted(() => {
   fetchSettings()
   fetchKB()
   fetchUserInfo()
-  fetchAiData()
-  fetchAiAudit()
-  fetchUsers()
+  if (isAdmin.value) {
+    fetchAiData()
+    fetchAiAudit()
+    fetchUsers()
+  }
 })
 </script>
 
