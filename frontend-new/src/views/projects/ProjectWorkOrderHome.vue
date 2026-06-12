@@ -34,7 +34,7 @@
           <span>到位发货</span>
           <span>完结</span>
         </div>
-        <el-button class="supply-entry-button">进入项目供货</el-button>
+        <el-button type="primary">进入项目供货</el-button>
       </article>
     </div>
   </div>
@@ -142,17 +142,23 @@ const router = useRouter()
   margin-top: auto;
 }
 
-.supply-entry-button {
-  border: none !important;
+.branch-card.supply .el-button {
   background: #10b981 !important;
+  border-color: #10b981 !important;
   color: #fff !important;
+  --el-button-box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
 }
 
-.supply-entry-button:hover {
+.branch-card.supply .el-button:hover {
   background: #059669 !important;
+  border-color: #059669 !important;
   box-shadow: 0 4px 14px rgba(16, 185, 129, 0.28) !important;
-  transform: translateY(-1px);
 }
+
+.branch-card.supply .el-button:focus-visible {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.5) !important;
+}
+
 
 @media (max-width: 860px) {
   .branch-grid {

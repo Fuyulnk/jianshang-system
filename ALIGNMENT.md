@@ -192,6 +192,28 @@
   - 线上首页、本地 `backend/public/index.html`、服务器 `backend/public/index.html` 均引用 `assets/index-BWkTzsvi.js` / `assets/index-BZMRYArt.css`。
 - 注意事项：本轮未完成线上登录冒烟检查；原因是当前任务只排查部署产物差异，未临时创建或索取线上测试账号。
 
+### 2026-06-12 Codex：工勘 PPT 可视图图片持久化与命名修复（本地）
+
+- 背景：用户在项目 #4 的“首次工勘表”里发现，关闭弹窗后重新打开，PPT 可视图图片不再显示，只剩 UUID/乱码文件名。
+- 结论：这不是浏览器缓存问题。根因是历史/部分路径下图片只保存在单据 JSON 的 base64 `data` 中，没有落成项目附件 `attachment_id`；前端预览又只按 `attachment_id` 拉 `/api/files/:id/download`，所以重开后只能显示机器名/占位文字。
+- 本轮局部修复：
+  - `backend/src/routes/project-imports.js`
+    - 生成工勘 PPT 前，先通过 `saveSurveyImageAttachments` 把现场图片持久化为项目附件，再用附件数据生成 PPT。
+    - 新保存图片统一命名为“项目名-首次工勘表-现场图片 01.png”这类业务名，不再把 UUID 原样暴露给员工。
+    - `normalizeSurveyImage` 兼容字符串形式 `attachment_id`，并保留 `original_name`。
+  - `frontend-new/src/components/projects/ProjectDocumentSummary.vue`
+    - `loadSurveyPreviews` 同时支持附件图片和历史 base64 图片。
+    - PPT 可视图/现场图片表格改为统一走 `surveyImagePreviewUrl()`，不再只认 `attachment_id`。
+    - 图片标题显示“现场图片 01/02”或人工说明，副标题显示友好文件名；UUID 机器名不再作为主显示。
+- 对其他 agent 的注意：
+  - 后续不要再把“重开看不到图片”判定为缓存问题，优先查 `project_documents.confirmed_data.survey.images` 是否有 `attachment_id`。
+  - 工勘图片的正确闭环是：上传图片 -> 保存为附件 -> 单据 JSON 只保留附件引用和说明 -> PPT 生成时从附件/当前 data 读取 -> 弹窗重开可预览。
+  - 历史数据如果只有 base64，前端会兼容显示；但再次生成 PPT 后应转为附件引用。
+- 验证：
+  - `node --check backend/src/routes/project-imports.js` 通过。
+  - `npm run build`（frontend-new/）通过，仍只有既有 Vite 大 chunk 警告。
+- 部署状态：本轮未上传服务器，未提交。
+
 ### 2026-06-11 Codex：路线图边界更新，手机水印/PPT 模板暂缓
 
 - 背景：用户确认当前阶段目标是“把项目工单板块搞定”，不要把手机拍照水印、外部水印相机 MCP、完整 PPT 模板库提前并入本阶段。
