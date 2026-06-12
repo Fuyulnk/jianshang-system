@@ -168,6 +168,16 @@
 
 ## 对接记录
 
+### 2026-06-12 Claude：Hermes 审计修复 — bodyLimit + 回库并发 + 损耗默认值
+
+- 任务：Hermes 审计 Codex 下午仓库出库/回库重构（15 文件 +922 行），发现 P1 2 个、P2 3 个。
+- P1-1 bodyLimit 膨胀：全局 120MB → 30MB，file upload 路由单独设 80MB，generate-ppt 已有路由级限制。
+- P2-1 回库并发：material-return/confirm 的 UPDATE 加 `WHERE status = 'inspection_done'` + `changes === 0` 原子检查。
+- P2-2 损耗默认值：tool_loss_total 用 null 判断替代 falsy 判断，前端传 0 不会自动算 10%。
+- P1-2（无 product_id 项入库）和 P2-3（engineering 权限放宽）留作设计决策待确认。
+- 验证：`node --check backend/src/index.js`、`backend/src/routes/material-requests.js`、`backend/src/routes/files.js` 通过。
+- 提交：`3a5a7e8`
+
 ### 2026-06-12 Claude：系统设置权限修正 + 员工自动建档
 
 - 任务：用户发现财务账号可管理员工/删除超级管理员、非管理员改不了密码。
