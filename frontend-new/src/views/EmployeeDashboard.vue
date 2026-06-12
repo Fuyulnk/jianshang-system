@@ -37,7 +37,7 @@
 
     <!-- 待办分组 -->
     <div class="task-section" v-for="g in groups" :key="g.key">
-      <div class="section-head">
+      <div class="section-head" :class="{ urgent: isUrgentGroup(g) }">
         <h3>{{ g.label }}</h3>
         <span class="section-count">{{ g.count }} 项</span>
       </div>
@@ -135,6 +135,13 @@ function copyCode(code) {
     navigator.clipboard.writeText(code)
     ElMessage.success('已复制：' + code)
   } catch {}
+}
+
+function isUrgentGroup(group) {
+  if (!group?.count) return false
+  if (user.value.role === 'warehouse') return ['out', 'return'].includes(group.key)
+  if (['engineering', 'employee'].includes(user.value.role)) return ['onsite', 'prepare', 'active'].includes(group.key)
+  return false
 }
 
 onMounted(fetchDashboard)
@@ -237,6 +244,23 @@ onMounted(fetchDashboard)
 .section-count {
   font-size: 13px;
   color: var(--text-tertiary);
+}
+.section-head.urgent .section-count {
+  color: #fff;
+  background: #f56c6c;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-weight: 700;
+}
+.section-head.urgent h3::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #f56c6c;
+  vertical-align: 1px;
 }
 
 .task-card {

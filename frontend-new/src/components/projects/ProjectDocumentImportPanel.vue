@@ -153,8 +153,8 @@ function onFileChange(event) {
     event.target.value = ''
     return
   }
-  if (file.size > 10 * 1024 * 1024) {
-    ElMessage.warning('单个文件不能超过 10MB')
+  if (file.size > 50 * 1024 * 1024) {
+    ElMessage.warning('单个文件不能超过 50MB')
     event.target.value = ''
     return
   }
@@ -577,23 +577,31 @@ async function readJson(res) {
 }
 
 .items-table {
+  max-width: 100%;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
 }
 
 .quote-table {
   margin-top: 8px;
+  max-width: 100%;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
 }
 
 .item-row {
   display: grid;
-  grid-template-columns: 1fr 1.1fr 1fr 1fr 82px 82px 1.2fr 44px;
+  grid-template-columns: 190px 190px 140px 160px 112px 112px 220px 44px;
   gap: 8px;
   align-items: center;
+  width: max-content;
+  min-width: 100%;
   padding: 8px;
   border-top: 1px solid var(--border-light);
 }
@@ -607,13 +615,16 @@ async function readJson(res) {
   color: var(--text-tertiary);
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .quote-row {
   display: grid;
-  grid-template-columns: .8fr .9fr 1.2fr .9fr .9fr 80px 100px 100px;
+  grid-template-columns: 150px 170px 190px 150px 140px 112px 132px 132px;
   gap: 8px;
   align-items: center;
+  width: max-content;
+  min-width: 100%;
   padding: 8px;
   border-top: 1px solid var(--border-light);
 }
@@ -627,6 +638,12 @@ async function readJson(res) {
   color: var(--text-tertiary);
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.item-row :deep(.el-input),
+.quote-row :deep(.el-input) {
+  width: 100%;
 }
 
 .image-note {
@@ -658,12 +675,9 @@ async function readJson(res) {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .item-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .quote-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .items-table,
+  .quote-table {
+    margin-right: -4px;
   }
 }
 

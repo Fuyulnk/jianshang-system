@@ -19,8 +19,8 @@ const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const UPLOAD_DIR = join(__dirname, '../../data/uploads')
-const MAX_FILE_SIZE = 10 * 1024 * 1024
-const LARGE_DELIVERY_BODY_LIMIT = 80 * 1024 * 1024
+const MAX_FILE_SIZE = 50 * 1024 * 1024
+const LARGE_DELIVERY_BODY_LIMIT = 160 * 1024 * 1024
 const MAX_MONEY_VALUE = 100000000
 const ALLOWED_BRIEFING_ATTACHMENT_EXTS = new Set(['.csv', '.xls', '.xlsx', '.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.ppt', '.pptx'])
 const DELIVERY_DOCUMENT_TYPES = new Set(['survey_initial', 'survey_recheck', 'briefing', 'material_io', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'])
@@ -891,7 +891,7 @@ function validateDeliveryStepConfirmation(db, project, documentType, doc) {
   if (documentType === 'material_io') {
     const summary = data.summary || {}
     if (String(project.status || '') === 'briefing_done') {
-      return { ok: false, message: '出库阶段请走“材料出库联动”申请，由仓库确认后推进' }
+      return { ok: false, message: '出库阶段请走“材料出库单”，由仓库确认后推进' }
     }
     if (summary.material_return_status && summary.material_return_status !== 'done') {
       return { ok: false, message: '材料回库状态未完成，不能确认回库节点' }
@@ -983,8 +983,8 @@ const DELIVERY_NODE_RULES = [
   {
     key: 'material_io',
     stage: '仓库',
-    label: '材料出库/回库表',
-    desc: '记录材料、辅材、工具、运输和回库，金额自动进入成本草稿。',
+    label: '材料出库单',
+    desc: '记录材料、辅材、工具和运输，金额自动进入成本草稿。',
     rx: /出库|回库|材料单|材料出库|涂料进场/i,
     required: true,
     actions: ['view', 'import', 'sync']
@@ -1458,7 +1458,7 @@ function saveProjectAttachment(db, user, projectId, file) {
   }
   const buffer = decodeData(file.data)
   if (!buffer.length) throw new Error('交底单文件内容为空')
-  if (buffer.length > MAX_FILE_SIZE || Number(file.size || 0) > MAX_FILE_SIZE) throw new Error('单个文件不能超过 10MB')
+  if (buffer.length > MAX_FILE_SIZE || Number(file.size || 0) > MAX_FILE_SIZE) throw new Error('单个文件不能超过 50MB')
 
   mkdirSync(UPLOAD_DIR, { recursive: true })
   const checksum = crypto.createHash('sha256').update(buffer).digest('hex')
@@ -1474,7 +1474,7 @@ function saveProjectAttachment(db, user, projectId, file) {
 
 function saveGeneratedProjectAttachment(db, user, projectId, originalName, mimeType, buffer) {
   if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error('生成文件内容为空')
-  if (buffer.length > MAX_FILE_SIZE) throw new Error('生成文件超过 10MB')
+  if (buffer.length > MAX_FILE_SIZE) throw new Error('生成文件超过 50MB')
   const safeName = safeFileName(originalName)
   const ext = extname(safeName).toLowerCase()
   mkdirSync(UPLOAD_DIR, { recursive: true })
@@ -1520,7 +1520,7 @@ function saveSurveyImageAttachments(db, user, project, documentType, images) {
     }
     const buffer = decodeData(image.data)
     if (!buffer.length) throw new Error(`第 ${index + 1} 张现场图片内容为空`)
-    if (buffer.length > MAX_FILE_SIZE) throw new Error(`第 ${index + 1} 张现场图片超过 10MB`)
+    if (buffer.length > MAX_FILE_SIZE) throw new Error(`第 ${index + 1} 张现场图片超过 50MB`)
     const ext = imageExtension(image)
     const originalName = `${projectName}-${label}-${displayName}${ext}`
     const attachmentId = saveGeneratedProjectAttachment(db, user, project.id, originalName, image.mime_type || 'image/png', buffer)
@@ -1833,7 +1833,7 @@ function isUserFixableCreateError(err) {
   const message = String(err?.message || '')
   return message.includes('文件类型')
     || message.includes('文件内容为空')
-    || message.includes('超过 10MB')
+    || message.includes('超过 50MB')
     || message.includes('金额')
 }
 

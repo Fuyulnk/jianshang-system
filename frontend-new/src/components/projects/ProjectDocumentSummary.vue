@@ -100,7 +100,7 @@ const materialColumns = [
   { key: 'material_name', label: '材料名', width: 160 },
   { key: 'unit', label: '单位', width: 80 },
   { key: 'out_quantity', label: '出库', type: 'number', width: 90 },
-  { key: 'return_quantity', label: '回库', type: 'number', width: 90 },
+  { key: 'usage_quantity', label: '用量', type: 'number', width: 90 },
   { key: 'unit_price', label: '单价', type: 'number', width: 100 },
   { key: 'amount', label: '金额', type: 'number', width: 110 },
   { key: 'remark', label: '备注', width: 180 }
@@ -216,8 +216,8 @@ async function onImportFile(event) {
     ElMessage.warning('暂只支持 CSV / XLS / XLSX / PPT / PPTX')
     return
   }
-  if (file.size > 10 * 1024 * 1024) {
-    ElMessage.warning('单个文件不能超过 10MB')
+  if (file.size > 50 * 1024 * 1024) {
+    ElMessage.warning('单个文件不能超过 50MB')
     return
   }
   saving.value = true
@@ -287,8 +287,8 @@ async function onSurveyImages(event) {
   try {
     const newImages = []
     for (const file of files) {
-      if (file.size > 10 * 1024 * 1024) {
-        ElMessage.warning(`"${file.name}" 超过 10MB，已跳过`)
+      if (file.size > 50 * 1024 * 1024) {
+        ElMessage.warning(`"${file.name}" 超过 50MB，已跳过`)
         continue
       }
       newImages.push({
@@ -1164,18 +1164,18 @@ function roundMoneyValue(value) {
         </div>
 
         <div v-if="activeNode.key === 'material_io'" class="sheet-block">
-          <div class="sheet-title">材料出库/回库</div>
+          <div class="sheet-title">{{ project.status === 'inspection_done' ? '材料回库' : '材料出库单' }}</div>
           <el-tabs v-model="activeSheet" class="sheet-tabs">
-            <el-tab-pane label="总览" name="overview">
+            <el-tab-pane label="出库总览" name="overview">
               <SystemSheetTable :columns="materialColumns" :rows="activeData.items" :storage-key="`${activeNode.key}:overview`" empty-text="暂无材料明细，可导入材料出库表生成。" @cell-change="onMaterialCellChange" />
             </el-tab-pane>
             <el-tab-pane label="出库明细" name="out">
               <SystemSheetTable :columns="materialOutColumns" :rows="activeData.items" :storage-key="`${activeNode.key}:out`" empty-text="暂无出库明细。" @cell-change="onMaterialCellChange" />
             </el-tab-pane>
-            <el-tab-pane label="回库明细" name="return">
+            <el-tab-pane v-if="project.status === 'inspection_done'" label="回库明细" name="return">
               <SystemSheetTable :columns="materialReturnColumns" :rows="activeData.items" :storage-key="`${activeNode.key}:return`" empty-text="暂无回库明细。" @cell-change="onMaterialCellChange" />
             </el-tab-pane>
-            <el-tab-pane label="剩余/差异" name="balance">
+            <el-tab-pane v-if="project.status === 'inspection_done'" label="剩余/差异" name="balance">
               <SystemSheetTable :columns="materialBalanceColumns" :rows="activeData.items" :storage-key="`${activeNode.key}:balance`" empty-text="暂无剩余差异。" @cell-change="onMaterialCellChange" />
             </el-tab-pane>
           </el-tabs>

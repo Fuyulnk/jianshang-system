@@ -33,8 +33,8 @@ function openPicker() {
 function addFiles(fileList) {
   const files = Array.from(fileList || [])
   for (const file of files) {
-    if (file.size > 10 * 1024 * 1024) {
-      ElMessage.warning(`${file.name} 超过 10MB，暂不上传`)
+    if (file.size > 50 * 1024 * 1024) {
+      ElMessage.warning(`${file.name} 超过 50MB，暂不上传`)
       continue
     }
     pendingFiles.value.push({

@@ -38,7 +38,7 @@
     <MaterialRequestPanel
       v-if="canHandleMaterialRequests"
       mode="warehouse"
-      title="待处理出库申请"
+      title="待确认材料出库"
       @updated="fetchList"
     />
 

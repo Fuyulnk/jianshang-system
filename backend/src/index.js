@@ -94,6 +94,20 @@ try { db.exec("ALTER TABLE projects ADD COLUMN material_out_status TEXT DEFAULT 
 try { db.exec("ALTER TABLE projects ADD COLUMN material_out_note TEXT DEFAULT ''") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN material_return_status TEXT DEFAULT 'pending'") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN material_return_note TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE material_requests ADD COLUMN material_total REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_requests ADD COLUMN auxiliary_total REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_requests ADD COLUMN tool_total REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_requests ADD COLUMN tool_loss_total REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_requests ADD COLUMN transport_fee REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_requests ADD COLUMN total_amount REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_request_items ADD COLUMN item_group TEXT DEFAULT 'material'") } catch {}
+try { db.exec("ALTER TABLE material_request_items ADD COLUMN out_date TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE material_request_items ADD COLUMN out_quantity REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_request_items ADD COLUMN return_quantity REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_request_items ADD COLUMN usage_quantity REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_request_items ADD COLUMN unit_price REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_request_items ADD COLUMN amount REAL DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE material_request_items ADD COLUMN remark TEXT DEFAULT ''") } catch {}
 try { db.exec("UPDATE projects SET address_detail = address WHERE COALESCE(address_detail, '') = '' AND COALESCE(address, '') != ''") } catch {}
 try {
   const owner = db.prepare("SELECT id FROM users WHERE username = 'fuyulnk'").get()
@@ -660,6 +674,12 @@ function ensureCoreTables(db) {
       project_id INTEGER NOT NULL,
       status TEXT DEFAULT 'requested',
       note TEXT DEFAULT '',
+      material_total REAL DEFAULT 0,
+      auxiliary_total REAL DEFAULT 0,
+      tool_total REAL DEFAULT 0,
+      tool_loss_total REAL DEFAULT 0,
+      transport_fee REAL DEFAULT 0,
+      total_amount REAL DEFAULT 0,
       requested_by INTEGER DEFAULT 0,
       confirmed_by INTEGER DEFAULT 0,
       confirmed_at TEXT DEFAULT '',
@@ -671,12 +691,20 @@ function ensureCoreTables(db) {
     CREATE TABLE IF NOT EXISTS material_request_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       request_id INTEGER NOT NULL,
-      product_id INTEGER NOT NULL,
+      product_id INTEGER DEFAULT 0,
       product_name TEXT NOT NULL,
+      item_group TEXT DEFAULT 'material',
       category TEXT DEFAULT '',
       unit TEXT DEFAULT '',
       quantity REAL DEFAULT 0,
+      out_date TEXT DEFAULT '',
+      out_quantity REAL DEFAULT 0,
+      return_quantity REAL DEFAULT 0,
+      usage_quantity REAL DEFAULT 0,
+      unit_price REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
       note TEXT DEFAULT '',
+      remark TEXT DEFAULT '',
       created_at DATETIME DEFAULT (datetime('now', 'localtime'))
     );
 

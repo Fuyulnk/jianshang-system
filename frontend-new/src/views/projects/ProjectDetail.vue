@@ -216,8 +216,8 @@
 
           <template v-else-if="project.status === 'briefing_done'">
             <div class="stage-hint">
-              <strong>交底已完成，可以发起材料出库。</strong>
-              <span>请在下方“材料出库联动”里创建出库申请；仓库确认后，工单自动进入已出库待进场。</span>
+              <strong>交底已完成，等待仓库处理材料出库。</strong>
+              <span>仓管在“材料出库单”里录入材料、辅材、工具和运输费，确认后工单自动进入已出库待进场。</span>
             </div>
           </template>
 
@@ -230,7 +230,7 @@
 
           <template v-else-if="project.status === 'material_out'">
             <el-row :gutter="16">
-              <el-col :span="8"><el-form-item label="开工日期"><el-input v-model="editForm.start_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="实际进场/开工日期"><el-input v-model="editForm.start_date" placeholder="2026-01-01" /></el-form-item></el-col>
               <el-col :span="8">
                 <el-form-item label="人员状态">
                   <el-select v-model="editForm.crew_status" style="width:100%">
@@ -244,31 +244,48 @@
               </el-col>
               <el-col :span="8"><el-form-item label="预计完工"><el-input v-model="editForm.expected_end_date" placeholder="2026-01-01" /></el-form-item></el-col>
             </el-row>
-          </template>
-
-          <template v-else-if="project.status === 'in_progress'">
-            <el-form-item label="施工记录"><el-input v-model="editForm.construction_note" type="textarea" :rows="2" placeholder="施工进度、现场问题、需协调事项" /></el-form-item>
-          </template>
-
-          <template v-else-if="project.status === 'inspection_done'">
             <el-row :gutter="16">
-              <el-col :span="12"><el-form-item label="完工日期"><el-input v-model="editForm.end_date" placeholder="2026-01-01" /></el-form-item></el-col>
-              <el-col :span="12"><el-form-item label="验收日期"><el-input v-model="editForm.acceptance_date" placeholder="2026-01-01" /></el-form-item></el-col>
-            </el-row>
-            <el-row :gutter="16">
+              <el-col :span="8"><el-form-item label="班组长"><el-input v-model="editForm.team_leader" placeholder="班组长姓名" /></el-form-item></el-col>
               <el-col :span="8">
-                <el-form-item label="材料回库状态">
-                  <el-select v-model="editForm.material_return_status" style="width:100%">
-                    <el-option label="待回库" value="pending" />
-                    <el-option label="已申请" value="requested" />
-                    <el-option label="已回库" value="done" />
+                <el-form-item label="施工负责人">
+                  <el-select v-model="editForm.assignee_user_id" clearable filterable style="width:100%" placeholder="选择施工负责人">
+                    <el-option v-for="u in assignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
                   </el-select>
                 </el-form-item>
               </el-col>
-              <el-col :span="16">
-                <el-form-item label="回库备注"><el-input v-model="editForm.material_return_note" placeholder="后续将联动仓库回库单，当前先记录余料/损耗说明" /></el-form-item>
+              <el-col :span="8">
+                <el-form-item label="施工成员">
+                  <el-select v-model="editForm.crew_member_user_ids" multiple clearable filterable style="width:100%" placeholder="选择施工人员">
+                    <el-option v-for="u in assignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+                  </el-select>
+                </el-form-item>
               </el-col>
             </el-row>
+            <el-form-item label="开工备注"><el-input v-model="editForm.construction_note" type="textarea" :rows="2" placeholder="材料是否到位、保护是否完成、现场是否允许进场" /></el-form-item>
+          </template>
+
+          <template v-else-if="project.status === 'in_progress'">
+            <el-alert class="stage-alert" type="info" :closable="false" show-icon title="施工过程记录 V1 先做轻量备注；照片打卡、水印相机和每日记录放到后续 V2。" />
+            <el-row :gutter="16">
+              <el-col :span="8"><el-form-item label="完工日期"><el-input v-model="editForm.end_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="验收日期"><el-input v-model="editForm.acceptance_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8">
+                <el-form-item label="验收结论">
+                  <el-select v-model="inspectionResult" style="width:100%">
+                    <el-option label="验收通过，允许进入回库" value="pass" />
+                    <el-option label="需要整改，暂不回库" value="repair" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-form-item label="施工/验收记录"><el-input v-model="editForm.construction_note" type="textarea" :rows="3" placeholder="施工进度、现场问题、整改说明、验收结论" /></el-form-item>
+          </template>
+
+          <template v-else-if="project.status === 'inspection_done'">
+            <div class="stage-hint">
+              <strong>验收已完成，等待仓库材料回库。</strong>
+              <span>仓管在下方“材料回库单”里核对出库明细、实际用量、回库数量和差异，确认后进入工费结算。</span>
+            </div>
           </template>
 
           <template v-else-if="project.status === 'material_returned'">
@@ -352,8 +369,9 @@
       <MaterialRequestPanel
         :project-id="project.id"
         mode="project"
-        title="材料出库联动"
+        :title="project.status === 'inspection_done' ? '材料回库单' : '材料出库单'"
         :can-request="project.status === 'briefing_done'"
+        :can-return="project.status === 'inspection_done'"
         :disabled-reason="materialRequestDisabledReason"
         @updated="fetchDetail"
       />
@@ -649,6 +667,7 @@ const loading = ref(true)
 const showEdit = ref(false)
 const saving = ref(false)
 const editForm = ref({})
+const inspectionResult = ref('pass')
 const assignees = ref([])
 const documentSummaryRef = ref(null)
 const documentRefreshKey = ref(0)
@@ -743,7 +762,7 @@ const TASKS = {
   },
   briefing_done: {
     title: '发起材料出库',
-    desc: '请在材料出库联动中创建申请。仓库确认后系统自动进入已出库待进场。',
+    desc: '请在材料出库单中创建申请。仓库确认后系统自动进入已出库待进场。',
     action: '',
     next: '',
     roles: []
@@ -757,29 +776,28 @@ const TASKS = {
   },
   material_out: {
     title: '确认进场开工',
-    desc: '填写开工日期并更新人员进场状态，施工成员会被视为占用。',
+    desc: '确认材料到位、人员安排和实际进场时间，确认后进入施工中。',
     action: '确认进场，开始施工',
     next: 'in_progress',
     roles: ['super_admin', 'admin', 'engineering', 'employee'],
     assignedOnly: true,
-    required: ['start_date']
+    required: ['start_date', 'expected_end_date', 'onsite_team']
   },
   in_progress: {
-    title: '记录施工过程',
-    desc: '记录施工进度、现场问题或协调事项，完成后进入检查。',
-    action: '施工记录完成，进入验收',
+    title: '完工验收/撤场确认',
+    desc: '确认完工、验收和是否需要整改；通过后才派发给仓库处理材料回库。',
+    action: '验收通过，进入材料回库',
     next: 'inspection_done',
     roles: ['super_admin', 'admin', 'engineering', 'employee'],
     assignedOnly: true,
-    required: ['construction_note']
+    required: ['end_date', 'acceptance_date', 'construction_note', 'inspection_pass']
   },
   inspection_done: {
-    title: '验收完成，处理材料回库',
-    desc: '填写完工/验收日期并确认余料回库，后续会联动仓库回库单和项目成本。',
-    action: '回库完成，转工费结算',
-    next: 'material_returned',
-    roles: ['super_admin', 'admin', 'warehouse', 'engineering'],
-    required: ['end_date', 'material_return']
+    title: '材料回库',
+    desc: '仓库核对出库明细、实际用量、回库数量和差异，确认后进入工费结算。',
+    action: '',
+    next: '',
+    roles: []
   },
   material_returned: {
     title: '工费结算',
@@ -872,7 +890,7 @@ const currentDocumentLabel = computed(() => {
     survey_initial: '首次工勘表',
     survey_recheck: '二次勘察表',
     briefing: '施工交底单',
-    material_io: '材料出库/回库表',
+    material_io: '材料出库单',
     completion_inspection: '完工验收质检表',
     labor_settlement: '施工班组工费结算单',
     cost_check: '完工成本核算表',
@@ -891,8 +909,10 @@ const currentStepNote = computed(() => {
   if (project.value?.status === 'survey_pending') return '先上传现场图片、补充说明，再生成 PPT 并确认工勘结果。'
   if (project.value?.status === 'survey_done') return needRecheck.value ? '该项目需要复尺，处理二次勘察后再交底。' : '该项目可跳过复尺，下一步进入施工交底。'
   if (project.value?.status === 'recheck_done') return '核对施工交底单，确认班组、面积、工艺和进场注意事项。'
-  if (project.value?.status === 'briefing_done') return '交底完成后从材料出库联动发起申请。'
-  if (project.value?.status === 'inspection_done') return '验收完成后重点处理材料回库和余料说明。'
+  if (project.value?.status === 'briefing_done') return '交底完成后由仓管填写材料出库单并确认出库。'
+  if (project.value?.status === 'material_out') return '工程部确认进场时间、人员和班组安排。'
+  if (project.value?.status === 'in_progress') return '施工中先做轻量记录；确认验收通过后交给仓库回库。'
+  if (project.value?.status === 'inspection_done') return '验收完成后由仓管填写材料回库单。'
   if (project.value?.status === 'archived') return '工单已归档，可查看财务归档、成本和收付款口径。'
   return '当前步骤相关资料会在下方资料链中高亮。'
 })
@@ -977,8 +997,12 @@ function missingForTask(required) {
     if (key === 'assignee' && !merged.assignee_user_id && !merged.team_leader && !parseCrewMemberIds(merged.crew_member_user_ids).length) missing.push('施工负责人、班组长或施工成员')
     if (key === 'briefing_date' && !merged.briefing_date) missing.push('交底日期')
     if (key === 'start_date' && !merged.start_date) missing.push('开工日期')
-    if (key === 'construction_note' && !String(merged.construction_note || '').trim()) missing.push('施工/维修备注')
+    if (key === 'expected_end_date' && !merged.expected_end_date) missing.push('预计完工日期')
+    if (key === 'onsite_team' && !merged.assignee_user_id && !merged.team_leader && !parseCrewMemberIds(merged.crew_member_user_ids).length) missing.push('施工负责人、班组长或施工成员')
+    if (key === 'construction_note' && !String(merged.construction_note || '').trim()) missing.push('施工/验收记录')
     if (key === 'end_date' && !merged.end_date) missing.push('完工日期')
+    if (key === 'acceptance_date' && !merged.acceptance_date) missing.push('验收日期')
+    if (key === 'inspection_pass' && inspectionResult.value !== 'pass') missing.push('验收通过结论')
     if (key === 'material_return' && merged.material_return_status !== 'done') missing.push('材料回库状态')
     if (key === 'settlement_amount' && !Number(merged.settlement_amount)) missing.push('结算金额')
   }
@@ -1062,12 +1086,30 @@ async function advanceStatus(statusKey, throwOnError = false) {
 async function saveAndAdvance(statusKey) {
   saving.value = true
   try {
+    prepareCurrentStepPayload(statusKey)
     await saveProjectFields()
     await advanceStatus(statusKey, true)
   } catch (err) {
     ElMessage.error(err.message || '操作失败，请稍后重试')
   } finally {
     saving.value = false
+  }
+}
+
+function prepareCurrentStepPayload(statusKey) {
+  if (project.value?.status === 'material_out' && statusKey === 'in_progress') {
+    editForm.value.crew_status = 'working'
+    if (!String(editForm.value.construction_note || '').trim()) {
+      editForm.value.construction_note = '材料已出库，人员已安排，确认进场开工。'
+    }
+  }
+  if (project.value?.status === 'in_progress' && statusKey === 'inspection_done') {
+    if (inspectionResult.value !== 'pass') return
+    editForm.value.crew_status = 'released'
+    const note = String(editForm.value.construction_note || '').trim()
+    if (!/验收通过/.test(note)) {
+      editForm.value.construction_note = note ? `${note}\n验收通过，允许进入材料回库。` : '验收通过，允许进入材料回库。'
+    }
   }
 }
 

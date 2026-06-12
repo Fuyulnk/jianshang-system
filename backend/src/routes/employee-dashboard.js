@@ -44,7 +44,6 @@ const ROLE_FOCUS = {
       { key: 'handover', label: '待交接/工勘', statuses: ['handover_received', 'survey_pending', 'survey_done'] },
       { key: 'briefing', label: '待交底', statuses: ['recheck_done'] },
       { key: 'onsite', label: '待进场/施工', statuses: ['material_out', 'in_progress'] },
-      { key: 'inspection', label: '待验收', statuses: ['inspection_done'] },
     ]
   },
   employee: {

@@ -202,7 +202,7 @@ function parseMaterialIoDocument(fileName = '', fileData = '') {
   return {
     ...parsed,
     document_type: 'material_io',
-    document_label: '材料出库/回库表',
+    document_label: '材料出库单',
     confirmed_data: {
       project: { project_name: summary.project_name || '' },
       items: parsed.items || [],
@@ -751,7 +751,7 @@ function deliveryDocumentLabel(documentType) {
     survey_initial: '首次工勘表',
     survey_recheck: '二次勘察表',
     briefing: '施工交底单',
-    material_io: '材料出库/回库表',
+    material_io: '材料出库单',
     completion_inspection: '完工验收质检表',
     labor_settlement: '施工班组工费结算单',
     cost_check: '完工成本核算表',

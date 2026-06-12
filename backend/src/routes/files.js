@@ -8,7 +8,8 @@ import crypto from 'crypto'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const UPLOAD_DIR = join(__dirname, '../../data/uploads')
-const MAX_FILE_SIZE = 10 * 1024 * 1024
+const MAX_FILE_SIZE = 50 * 1024 * 1024
+const LARGE_UPLOAD_LIMIT = 80 * 1024 * 1024
 const BLOCKED_EXTS = new Set(['.exe', '.sh', '.bat', '.cmd', '.app', '.dmg', '.pkg'])
 const ENTITY_MODULES = {
   project: 'projects',
@@ -88,7 +89,7 @@ export default function fileRoutes(server, db) {
     return { success: true, data: rows }
   })
 
-  server.post('/api/files/upload', async (request, reply) => {
+  server.post('/api/files/upload', { bodyLimit: LARGE_UPLOAD_LIMIT }, async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
     const entityType = normalizeEntityType(request.body?.entity_type)
     const entityId = toInt(request.body?.entity_id)
@@ -109,7 +110,7 @@ export default function fileRoutes(server, db) {
     const buffer = Buffer.from(base64, 'base64')
     if (!buffer.length) return { success: false, message: '文件内容为空' }
     if (buffer.length > MAX_FILE_SIZE || Number(size || 0) > MAX_FILE_SIZE) {
-      return { success: false, message: '单个文件不能超过 10MB' }
+      return { success: false, message: '单个文件不能超过 50MB' }
     }
 
     ensureUploadDir()

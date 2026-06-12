@@ -36,8 +36,8 @@ const PROJECT_TRANSITIONS = {
   survey_pending: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], required: ['survey'] },
   survey_done: { next: 'recheck_done', roles: ['super_admin', 'admin', 'engineering'], required: ['condition_note'] },
   recheck_done: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee', 'briefing_date'] },
-  material_out: { next: 'in_progress', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['start_date'] },
-  in_progress: { next: 'inspection_done', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['construction_note'] },
+  material_out: { next: 'in_progress', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['start_date', 'expected_end_date', 'onsite_team'] },
+  in_progress: { next: 'inspection_done', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['end_date', 'acceptance_date', 'construction_note', 'inspection_pass'] },
   inspection_done: { next: 'material_returned', roles: ['super_admin', 'admin', 'warehouse', 'engineering'], required: ['end_date', 'material_return'] },
   material_returned: { next: 'labor_settled', roles: ['super_admin', 'admin', 'finance', 'engineering'] },
   labor_settled: { next: 'cost_checked', roles: ['super_admin', 'admin', 'finance'] },
@@ -429,7 +429,7 @@ function canAdvanceProject(user, project, targetStatus) {
 
   const roleAllowed = transition.roles.includes(user.role)
   if (!roleAllowed) return { ok: false, message: '当前角色不能执行这一步' }
-  if (transition.assignedOnly && ['employee', 'engineering'].includes(user.role) && !isUserInProjectCrew(user.userId, project)) {
+  if (transition.assignedOnly && user.role === 'employee' && !isUserInProjectCrew(user.userId, project)) {
     return { ok: false, message: '只有该项目施工人员才能执行这一步' }
   }
 
@@ -449,8 +449,12 @@ function missingRequired(project, required) {
     if (key === 'briefing_date' && !project.briefing_date) missing.push('交底日期')
     if (key === 'condition_note' && !project.condition_note) missing.push('复尺/开工条件复核记录')
     if (key === 'start_date' && !project.start_date) missing.push('开工日期')
-    if (key === 'construction_note' && !project.construction_note) missing.push('施工/维修备注')
+    if (key === 'expected_end_date' && !project.expected_end_date) missing.push('预计完工日期')
+    if (key === 'onsite_team' && !project.assignee_user_id && !project.team_leader && !hasCrewMembers(project)) missing.push('施工负责人、班组长或施工成员')
+    if (key === 'construction_note' && !project.construction_note) missing.push('施工/验收记录')
     if (key === 'end_date' && !project.end_date) missing.push('完工日期')
+    if (key === 'acceptance_date' && !project.acceptance_date) missing.push('验收日期')
+    if (key === 'inspection_pass' && /需要整改|不允许进入回库|整改未完成/.test(String(project.construction_note || ''))) missing.push('验收通过结论')
     if (key === 'material_return' && project.material_return_status !== 'done') missing.push('材料回库状态')
     if (key === 'settlement_amount' && !Number(project.settlement_amount)) missing.push('结算金额')
   }
