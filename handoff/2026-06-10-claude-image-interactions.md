@@ -54,6 +54,7 @@ Codex 额度用完，用户要求增强 PPT 和勘察图片的交互体验。
 ## 验证
 - `node --check backend/src/routes/project-imports.js` ✅
 - `npm run build`（frontend-new/）✅，仅既有 Vite chunk 警告
+- 构建产物已同步 `dist/` → `backend/public/` ✅
 - 本轮未上传服务器
 
 ## 注意事项

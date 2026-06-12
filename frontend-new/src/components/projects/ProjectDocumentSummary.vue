@@ -194,6 +194,15 @@ function openNode(node) {
   }
 }
 
+function openDocument(key) {
+  const node = nodes.value.find(item => item.key === key)
+  if (!node) return false
+  openNode(node)
+  return true
+}
+
+defineExpose({ openDocument })
+
 function openImport(node) {
   importingType.value = node.key
   importInput.value?.click()
@@ -441,7 +450,41 @@ function hasSurveyImages(node = activeNode.value) {
 }
 
 function surveyImageLabel(image, index) {
-  return image?.note || image?.original_name || image?.name || `现场图片 ${index + 1}`
+  const fallback = `现场图片 ${String(index + 1).padStart(2, '0')}`
+  const note = String(image?.note || '').trim()
+  if (note && !looksLikeMachineImageName(note)) return note
+  const original = String(image?.original_name || image?.name || '').trim()
+  if (original && !looksLikeMachineImageName(original)) return original.replace(/\.[^.]+$/, '')
+  return fallback
+}
+
+function surveyImageFileName(image, index) {
+  const original = String(image?.original_name || image?.name || '').trim()
+  if (original && !looksLikeMachineImageName(original)) return original
+  return `现场图片 ${String(index + 1).padStart(2, '0')}${imageExtensionFromMeta(image)}`
+}
+
+function surveyImagePreviewUrl(image) {
+  if (image?.preview_url) return image.preview_url
+  if (image?.data) return image.data
+  if (image?.attachment_id) return surveyPreviewUrls.value[image.attachment_id] || ''
+  return ''
+}
+
+function looksLikeMachineImageName(value) {
+  const text = String(value || '').trim()
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.(png|jpe?g|webp|gif))?$/i.test(text)
+}
+
+function imageExtensionFromMeta(image) {
+  const name = String(image?.original_name || image?.name || '').trim()
+  const matched = name.match(/\.(png|jpe?g|webp|gif)$/i)
+  if (matched) return matched[0].toLowerCase()
+  const mime = String(image?.mime_type || '').toLowerCase()
+  if (mime.includes('jpeg') || mime.includes('jpg')) return '.jpg'
+  if (mime.includes('webp')) return '.webp'
+  if (mime.includes('gif')) return '.gif'
+  return '.png'
 }
 
 function onImageDragStart(index, event) {
@@ -557,17 +600,24 @@ function revokeSurveyPreviewUrls() {
 
 async function loadSurveyPreviews(data = activeData.value) {
   revokeSurveyPreviewUrls()
-  const images = surveyImages(data).filter(image => image.attachment_id)
+  const images = surveyImages(data)
   if (!images.length) return
   const next = {}
   await Promise.all(images.map(async image => {
+    if (image.data) {
+      image.preview_url = image.data
+      return
+    }
+    if (!image.attachment_id) return
     try {
       const res = await fetch(`/api/files/${image.attachment_id}/download`, {
         headers: { Authorization: `Bearer ${token()}` }
       })
       if (!res.ok) throw new Error('图片读取失败')
       const blob = await res.blob()
-      next[image.attachment_id] = URL.createObjectURL(blob)
+      const url = URL.createObjectURL(blob)
+      next[image.attachment_id] = url
+      image.preview_url = url
     } catch (err) {
       console.warn('现场图片预览加载失败', image, err)
     }
@@ -992,7 +1042,7 @@ function roundMoneyValue(value) {
                 @drop="onImageDrop(index, $event)"
                 @dragend="dragIndex = -1"
               >
-                <img v-if="surveyPreviewUrls[image.attachment_id]" :src="surveyPreviewUrls[image.attachment_id]" :alt="surveyImageLabel(image, index)" />
+                <img v-if="surveyImagePreviewUrl(image)" :src="surveyImagePreviewUrl(image)" :alt="surveyImageLabel(image, index)" />
                 <div v-else class="survey-image-missing">图片预览加载中</div>
                 <div class="image-overlay">
                   <el-popover placement="top" :width="180" trigger="click" :hide-after="0">
@@ -1013,7 +1063,7 @@ function roundMoneyValue(value) {
                 </div>
                 <figcaption>
                   <strong>{{ surveyImageLabel(image, index) }}</strong>
-                  <span v-if="image.original_name">{{ image.original_name }}</span>
+                  <span>{{ surveyImageFileName(image, index) }}</span>
                 </figcaption>
                 <el-input
                   v-model="image.note"
@@ -1073,11 +1123,11 @@ function roundMoneyValue(value) {
                           @dragend="dragIndex = -1"
                         >
                           <img
-                            v-if="surveyPreviewUrls[image.attachment_id]"
-                            :src="surveyPreviewUrls[image.attachment_id]"
+                            v-if="surveyImagePreviewUrl(image)"
+                            :src="surveyImagePreviewUrl(image)"
                             :alt="surveyImageLabel(image, index)"
                             class="ppt-photo-img"
-                            @click.stop="openPreview(surveyPreviewUrls[image.attachment_id])"
+                            @click.stop="openPreview(surveyImagePreviewUrl(image))"
                           />
                           <span v-else>{{ surveyImageLabel(image, index) }}</span>
                           <el-input

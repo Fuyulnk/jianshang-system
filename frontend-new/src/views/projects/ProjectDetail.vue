@@ -54,15 +54,16 @@
             <div class="work-actions compact">
               <el-button
                 v-if="currentTask.next && canRunCurrentTask"
-                type="primary"
+                :type="currentMissingFields.length ? 'info' : 'primary'"
                 size="large"
+                :plain="currentMissingFields.length > 0"
                 :loading="saving"
                 :disabled="currentMissingFields.length > 0"
                 @click="saveAndAdvance(currentTask.next)"
               >
-                {{ currentTask.action }}
+                {{ currentMissingFields.length ? '补齐资料后可推进' : currentTask.action }}
               </el-button>
-              <el-button v-if="currentDocumentKey" plain @click="scrollToWorkflowSection({ target: 'documents' })">
+              <el-button v-if="currentDocumentKey" plain @click="openCurrentDocument">
                 打开当前单据
               </el-button>
               <el-button v-if="project.status === 'archived' && canStartRepair && !warrantyInfo.expired" type="warning" plain @click="advanceStatus('repair_requested')">
@@ -319,8 +320,16 @@
         </div>
 
         <div class="work-actions">
-          <el-button v-if="currentTask.next && canRunCurrentTask" type="primary" size="large" :loading="saving" :disabled="currentMissingFields.length > 0" @click="saveAndAdvance(currentTask.next)">
-            {{ currentTask.action }}
+          <el-button
+            v-if="currentTask.next && canRunCurrentTask"
+            :type="currentMissingFields.length ? 'info' : 'primary'"
+            :plain="currentMissingFields.length > 0"
+            size="large"
+            :loading="saving"
+            :disabled="currentMissingFields.length > 0"
+            @click="saveAndAdvance(currentTask.next)"
+          >
+            {{ currentMissingFields.length ? '补齐资料后可推进' : currentTask.action }}
           </el-button>
           <el-button v-if="project.status === 'archived' && canStartRepair && !warrantyInfo.expired" type="warning" plain @click="advanceStatus('repair_requested')">
             发起售后单
@@ -330,6 +339,7 @@
       </el-card>
 
       <ProjectDocumentSummary
+        ref="documentSummaryRef"
         id="project-documents"
         :project="project"
         :refresh-key="documentRefreshKey"
@@ -640,6 +650,7 @@ const showEdit = ref(false)
 const saving = ref(false)
 const editForm = ref({})
 const assignees = ref([])
+const documentSummaryRef = ref(null)
 const documentRefreshKey = ref(0)
 const deliveryChain = ref(null)
 
@@ -852,7 +863,7 @@ const currentDocumentKey = computed(() => {
   if (status === 'inspection_done') return 'material_io'
   if (status === 'material_returned') return 'labor_settlement'
   if (status === 'labor_settled') return 'cost_check'
-  if (['cost_checked', 'finance_settled'].includes(status)) return 'finance_settlement'
+  if (['cost_checked', 'finance_settled', 'archived'].includes(status)) return 'finance_settlement'
   return ''
 })
 const currentDocumentLabel = computed(() => {
@@ -872,6 +883,7 @@ const currentWorkflowStep = computed(() => workflowSteps.value.find(step => step
 const currentActionHint = computed(() => {
   if (currentMissingFields.value.length) return `还差 ${currentMissingFields.value.join('、')}，补齐后才能推进。`
   if (currentTask.value.action) return `资料齐后点击「${currentTask.value.action}」。`
+  if (project.value?.status === 'archived') return '主流程已结束，可查看归档资料或发起独立售后。'
   if (currentDocumentKey.value) return `请处理「${currentDocumentLabel.value}」相关动作。`
   return '当前阶段暂无需要推进的动作。'
 })
@@ -881,6 +893,7 @@ const currentStepNote = computed(() => {
   if (project.value?.status === 'recheck_done') return '核对施工交底单，确认班组、面积、工艺和进场注意事项。'
   if (project.value?.status === 'briefing_done') return '交底完成后从材料出库联动发起申请。'
   if (project.value?.status === 'inspection_done') return '验收完成后重点处理材料回库和余料说明。'
+  if (project.value?.status === 'archived') return '工单已归档，可查看财务归档、成本和收付款口径。'
   return '当前步骤相关资料会在下方资料链中高亮。'
 })
 const workflowSteps = computed(() => {
@@ -1008,6 +1021,13 @@ function scrollToWorkflowSection(step = {}) {
   const id = target === 'documents' ? 'project-documents' : target === 'current-workbench' ? 'current-workbench' : ''
   if (!id) return
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function openCurrentDocument() {
+  if (!currentDocumentKey.value) return
+  const opened = documentSummaryRef.value?.openDocument?.(currentDocumentKey.value)
+  if (opened) return
+  scrollToWorkflowSection({ target: 'documents' })
 }
 
 async function fetchAssignees() {
@@ -1176,20 +1196,25 @@ onMounted(() => {
   content: ''; position: absolute; top: 16px; left: 60%; right: -40%;
   height: 2px; background: var(--border-light);
 }
-.phase-step.active:not(:last-child)::after { background: var(--color-primary); }
+.phase-step.active:not(:last-child)::after { background: color-mix(in srgb, #22c55e 52%, var(--border-light)); }
 .step-dot {
   width: 32px; height: 32px; line-height: 32px; border-radius: 50%;
   background: #f0f0f0; color: var(--text-tertiary); font-weight: bold; margin: 0 auto 8px;
   font-size: 13px;
 }
-.phase-step.active .step-dot { background: var(--color-primary); color: #fff; }
-.phase-step.current .step-dot { box-shadow: 0 0 0 4px rgba(79,109,245,0.25); }
+.phase-step.active:not(.current) .step-dot { background: #22c55e; color: #fff; }
+.phase-step.current .step-dot {
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 0 0 4px rgba(79,109,245,0.25);
+}
 .phase-step.skipped .step-dot {
   background: color-mix(in srgb, #64748b 18%, var(--bg-page));
   color: var(--text-tertiary);
 }
 .step-label { font-size: 13px; color: var(--text-tertiary); }
-.phase-step.active .step-label { color: var(--color-primary); font-weight: 500; }
+.phase-step.active:not(.current) .step-label { color: #16a34a; font-weight: 500; }
+.phase-step.current .step-label { color: var(--color-primary); font-weight: 600; }
 .phase-step small {
   display: block;
   margin-top: 2px;

@@ -295,8 +295,14 @@ export default function projectImportRoutes(server, db) {
         reply.code(400).send({ success: false, message: '请先上传现场图片，再生成 PPT' })
         return
       }
-      const buffer = buildSurveyPptx(db, project, draftData)
-      const imageAttachments = normalizeExistingSurveyImageAttachments(draftData.survey?.images || [])
+      const imageAttachments = saveSurveyImageAttachments(db, request.user, project, documentType, draftData.survey?.images || [])
+      const buffer = buildSurveyPptx(db, project, {
+        ...draftData,
+        survey: {
+          ...draftData.survey,
+          images: imageAttachments
+        }
+      })
       const confirmedData = stripSurveyImagePayloads(draftData, imageAttachments)
       const attachmentId = saveGeneratedProjectAttachment(
         db,
@@ -1501,29 +1507,30 @@ function saveSurveyImageAttachments(db, user, project, documentType, images) {
   const label = deliveryDocumentLabel(documentType)
   const projectName = safeFileName(project.name || project.customer || `项目${project.id}`)
   return images.map((image, index) => {
+    const displayName = `现场图片 ${String(index + 1).padStart(2, '0')}`
     if (image.attachment_id) {
       return {
         attachment_id: image.attachment_id,
-        name: safeFileName(image.name || ''),
-        original_name: safeFileName(image.name || ''),
+        name: displayName,
+        original_name: safeFileName(image.original_name || image.name || displayName),
         mime_type: image.mime_type || 'image/png',
         size: image.size || 0,
-        note: safeText(image.note || image.name || `现场图片 ${index + 1}`, 300)
+        note: safeText(image.note || displayName, 300)
       }
     }
     const buffer = decodeData(image.data)
     if (!buffer.length) throw new Error(`第 ${index + 1} 张现场图片内容为空`)
     if (buffer.length > MAX_FILE_SIZE) throw new Error(`第 ${index + 1} 张现场图片超过 10MB`)
     const ext = imageExtension(image)
-    const originalName = `${projectName}-${label}-现场图片-${String(index + 1).padStart(2, '0')}-${safeFileName(image.name || '现场图片')}${extname(image.name || '') ? '' : ext}`
+    const originalName = `${projectName}-${label}-${displayName}${ext}`
     const attachmentId = saveGeneratedProjectAttachment(db, user, project.id, originalName, image.mime_type || 'image/png', buffer)
     return {
       attachment_id: attachmentId,
-      name: safeFileName(image.name || originalName),
+      name: displayName,
       original_name: safeFileName(originalName),
       mime_type: image.mime_type || 'image/png',
       size: buffer.length,
-      note: safeText(image.note || image.name || `现场图片 ${index + 1}`, 300)
+      note: safeText(image.note || displayName, 300)
     }
   })
 }
@@ -1588,12 +1595,14 @@ function normalizeSurveyDraft(project, input, documentType) {
 }
 
 function normalizeSurveyImage(item = {}) {
+  const attachmentId = toInt(item.attachment_id)
   return {
     name: safeText(item.name || '现场图片', 120),
+    original_name: safeText(item.original_name || item.name || '', 160),
     mime_type: safeText(item.mime_type || item.type || 'image/png', 80),
     note: safeText(item.note || '', 300),
     data: typeof item.data === 'string' ? item.data : '',
-    attachment_id: typeof item.attachment_id === 'number' ? item.attachment_id : undefined,
+    attachment_id: attachmentId || undefined,
     size: typeof item.size === 'number' ? item.size : undefined,
   }
 }
