@@ -168,6 +168,24 @@
 
 ## 对接记录
 
+### 2026-06-12 Claude：系统设置权限修正 + 员工自动建档
+
+- 任务：用户发现财务账号可管理员工/删除超级管理员、非管理员改不了密码。
+- 问题点：
+  - 数据库 finance 角色对 employees 模块 `can_view=1`（应=0），已修正。
+  - SystemSettings 页 `onMounted` 无差别拉取所有 tab 数据，非管理员看到 403 弹"无权限"。
+  - 系统设置菜单藏在 `v-if="isAdmin"` 里，非管理员没入口改密码。
+  - 员工列表删除按钮对所有可见角色开放。
+- 修改文件：
+  - `frontend-new/src/views/system/SystemSettings.vue`：`filteredNav` 计算属性，非管理员只看到"个人资料/个性化/关于"；`onMounted` 仅 admin 拉取 ai/user 数据。
+  - `frontend-new/src/layouts/MainLayout.vue`：系统设置移出 `v-if="isAdmin"`，所有角色可见；头部点击头像/用户名跳转到系统设置。
+  - `frontend-new/src/views/employees/EmployeeList.vue`：删除按钮加 `v-if="canManage"`（仅 admin/super_admin）。
+  - `backend/src/routes/employees.js` + `auth.js` + `utils/employeeCode.js`：注册时自动创建员工档案并绑定，新增 `from-user` 接口补老账号。
+- 线上修复：`caiwu` 账号 `employee_id=0`，已通过 `from-user` 接口补绑员工档案（`JS-LN777628`）。
+- 验证：`npm run build` 通过；线上 `/health` 正常。
+- 注意事项：线上部署前未做完整登录冒烟，下不为例直接改线上。
+- 交接文件：无（改动已随提交记录）
+
 ### 2026-06-11 Codex：修复提交后本地/服务器界面不一致
 
 - 问题：Claude 已提交 `8f1abae`，但本地后端静态目录和线上页面仍不是最新界面。
