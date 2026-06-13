@@ -346,7 +346,13 @@ async function loadHistory() {
     const json = await res.json()
     if (json.success) {
       const sessions = Object.values(json.data)
-      if (sessions.length) messages.value = sessions[sessions.length - 1]
+      if (sessions.length) {
+        messages.value = sessions[sessions.length - 1]
+        const lastSession = sessions[sessions.length - 1]
+        if (lastSession.length && lastSession[0].session_id) {
+          sessionId.value = lastSession[0].session_id
+        }
+      }
     }
   } catch {}
 }
@@ -355,9 +361,14 @@ async function sendMessage() {
   const text = inputText.value.trim()
   if (!text || streaming.value) return
   const t = token()
-  if (!t) return
+  if (!t) {
+    messages.value.push({ role: 'assistant', content: '请先登录后再使用简尚小助手。' })
+    return
+  }
 
   messages.value.push({ role: 'user', content: text })
+  const idx = messages.value.length
+  messages.value.push({ role: 'assistant', content: '' })
   inputText.value = ''
   streaming.value = true
 
@@ -373,14 +384,22 @@ async function sendMessage() {
         context_key: 'ai-pet'
       })
     })
-    if (!res.ok) { streaming.value = false; return }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      messages.value[idx] = { role: 'assistant', content: err.message || 'AI 请求失败，请稍后重试。' }
+      messages.value = [...messages.value]
+      return
+    }
+    if (!res.body) {
+      messages.value[idx] = { role: 'assistant', content: 'AI 没有返回内容，请稍后重试。' }
+      messages.value = [...messages.value]
+      return
+    }
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buf = ''
     let content = ''
-    const idx = messages.value.length
-    messages.value.push({ role: 'assistant', content: '' })
 
     while (true) {
       const { done, value } = await reader.read()
@@ -399,14 +418,23 @@ async function sendMessage() {
             content += p.content
             messages.value[idx] = { role: 'assistant', content }
             messages.value = [...messages.value]
+          } else if (p.type === 'error') {
+            messages.value[idx] = { role: 'assistant', content: p.content || 'AI 返回错误，请稍后重试。' }
+            messages.value = [...messages.value]
           }
         } catch {}
       }
     }
+    if (!content && !messages.value[idx]?.content) {
+      messages.value[idx] = { role: 'assistant', content: 'AI 暂时没有返回内容，请稍后再试。' }
+      messages.value = [...messages.value]
+    }
   } catch {
-    if (messages.value.length) messages.value.push({ role: 'assistant', content: '网络错误' })
+    messages.value[idx] = { role: 'assistant', content: '网络错误，请检查服务器连接。' }
+    messages.value = [...messages.value]
+  } finally {
+    streaming.value = false
   }
-  streaming.value = false
 }
 
 // ====== 右键菜单 ======

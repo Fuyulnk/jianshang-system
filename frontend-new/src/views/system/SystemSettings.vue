@@ -319,9 +319,20 @@
           <el-card shadow="never" class="settings-card-wide">
             <div class="users-toolbar">
               <el-button type="primary" size="small" @click="showAddUser = true">+ 新增用户</el-button>
+              <el-alert
+                v-if="pendingUserCount"
+                class="pending-user-alert"
+                type="error"
+                :closable="false"
+                show-icon
+              >
+                <template #title>
+                  有 {{ pendingUserCount }} 个注册账号等待分配人员
+                </template>
+              </el-alert>
             </div>
             <div class="stable-table-wrap users-table">
-              <el-table :data="userList" stripe v-loading="userLoading" style="width: 100%">
+              <el-table :data="userList" stripe v-loading="userLoading" style="width: 100%" :row-class-name="userRowClassName">
                 <el-table-column prop="id" label="ID" width="60" />
                 <el-table-column prop="username" label="账号" min-width="120" show-overflow-tooltip />
                 <el-table-column label="员工档案" min-width="160">
@@ -340,11 +351,42 @@
                     </el-tag>
                   </template>
                 </el-table-column>
+                <el-table-column label="账号状态" width="120">
+                  <template #default="{ row }">
+                    <el-tag :type="userStatusType(row.status)" size="small">{{ userStatusLabel(row.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="AI 偏好" min-width="150">
+                  <template #default="{ row }">
+                    <span class="ai-pref-text">{{ row.ai_pet_enabled === 0 ? '未启用' : (row.ai_name || '简尚小助手') }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="last_login_at" label="最后登录" width="145">
+                  <template #default="{ row }">{{ row.last_login_at || '未登录' }}</template>
+                </el-table-column>
                 <el-table-column prop="created_at" label="创建时间" width="145" />
-                <el-table-column label="操作" width="220" fixed="right">
+                <el-table-column label="操作" width="330" fixed="right">
                   <template #default="{ row }">
                     <el-button link size="small" @click="editUserEmployee(row)">{{ row.employee_id ? '改绑档案' : '绑定档案' }}</el-button>
                     <el-button v-if="row.username !== 'fuyulnk'" link size="small" @click="editUserRole(row)">分配角色</el-button>
+                    <el-button
+                      v-if="row.username !== 'fuyulnk' && row.status !== 'active'"
+                      type="success"
+                      link
+                      size="small"
+                      @click="handleUserStatus(row, 'active')"
+                    >
+                      激活
+                    </el-button>
+                    <el-button
+                      v-if="row.username !== 'fuyulnk' && row.status === 'active'"
+                      type="warning"
+                      link
+                      size="small"
+                      @click="handleUserStatus(row, 'disabled')"
+                    >
+                      停用
+                    </el-button>
                     <el-button v-if="row.username !== 'fuyulnk'" type="danger" link size="small" @click="deleteUser(row)">删除</el-button>
                   </template>
                 </el-table-column>
@@ -644,11 +686,32 @@ const selectedUserRole = ref('')
 const selectedEmployeeId = ref(null)
 const addUserForm = ref({ username: '', password: '', role: 'employee' })
 const employeeList = ref([])
+const pendingUserCount = computed(() => userList.value.filter(user => user.status === 'pending_activation').length)
 
 const employeeOptions = computed(() => {
   const editingId = editingUser.value?.id
   return employeeList.value.filter(employee => !employee.bound_user_id || employee.bound_user_id === editingId)
 })
+
+function userStatusLabel(status) {
+  return {
+    pending_activation: '待分配',
+    active: '已启用',
+    disabled: '已停用'
+  }[status || 'active'] || status || '已启用'
+}
+
+function userStatusType(status) {
+  return {
+    pending_activation: 'danger',
+    active: 'success',
+    disabled: 'info'
+  }[status || 'active'] || 'info'
+}
+
+function userRowClassName({ row }) {
+  return row.status === 'pending_activation' ? 'pending-user-row' : ''
+}
 
 async function fetchUsers() {
   userLoading.value = true
@@ -711,6 +774,38 @@ function employeeOptionLabel(employee) {
   const code = employee.employee_code || `#${employee.id}`
   const position = employee.position ? ` / ${employee.position}` : ''
   return `${employee.name}（${code}${position}）`
+}
+
+async function handleUserStatus(row, status) {
+  if (status === 'active' && !row.employee_id) {
+    ElMessage.warning('请先绑定或生成员工档案，再激活账号')
+    editUserEmployee(row)
+    return
+  }
+  if (status === 'disabled') {
+    try {
+      await ElMessageBox.confirm(`确定停用账号「${row.username}」？停用后该账号不能登录。`, '停用账号')
+    } catch {
+      return
+    }
+  }
+  userSaving.value = true
+  try {
+    const res = await fetch(`/api/users/${row.id}/status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ status })
+    })
+    const json = await res.json()
+    if (json.success) {
+      ElMessage.success(status === 'active' ? '账号已激活' : '账号已停用')
+      fetchUsers()
+    } else {
+      ElMessage.error(json.message || '操作失败')
+    }
+  } finally {
+    userSaving.value = false
+  }
 }
 
 async function handleAssignRole() {
@@ -1384,7 +1479,27 @@ onMounted(() => {
   color: var(--color-primary);
 }
 .users-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
+}
+.pending-user-alert {
+  flex: 1;
+  min-width: 260px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+}
+.ai-pref-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.users-table :deep(.pending-user-row td) {
+  background: #fff7f7 !important;
+}
+.users-table :deep(.pending-user-row:hover td) {
+  background: #fef2f2 !important;
 }
 .employee-binding {
   display: flex;

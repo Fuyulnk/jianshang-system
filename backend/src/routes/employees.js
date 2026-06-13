@@ -23,7 +23,7 @@ export default function employeeRoutes(server, db) {
     if (!requireModuleAccess(db, request, reply, 'employees', 'can_view', '无权限查看待建档账号')) return
 
     const users = db.prepare(`
-      SELECT u.id, u.username, u.role, u.real_name, u.phone, u.department, u.created_at,
+      SELECT u.id, u.username, u.role, u.real_name, u.phone, u.department, u.status, u.created_at,
              r.label as role_label
       FROM users u
       LEFT JOIN roles r ON r.name = u.role

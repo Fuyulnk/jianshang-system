@@ -479,6 +479,7 @@ function upsertMaterialOutDocument(db, project, requestRow, items, userId) {
 }
 
 function updateMaterialReturnDocument(db, project, requestRow, items, note, userId) {
+  const confirmedAt = new Date().toISOString()
   const summary = {
     material_fee: roundMoney(items.filter(item => item.item_group === 'material').reduce((sum, item) => sum + item.amount, 0)),
     auxiliary_fee: roundMoney(items.filter(item => item.item_group === 'auxiliary').reduce((sum, item) => sum + item.amount, 0)),
@@ -508,7 +509,10 @@ function updateMaterialReturnDocument(db, project, requestRow, items, note, user
       remark: item.remark || ''
     })),
     summary,
-    return_note: note || ''
+    return_note: note || '',
+    step_confirmed: true,
+    step_confirmed_at: confirmedAt,
+    step_confirmed_by: userId || 0
   }
   const parsed = JSON.stringify({ source: 'material_return', request_id: requestRow.id })
   const confirmed = JSON.stringify(confirmedData)

@@ -2,7 +2,6 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { getJwtSecret } from '../config.js'
 import { authMiddleware } from '../middleware/auth.js'
-import { generateEmployeeCode } from '../utils/employeeCode.js'
 
 // 登录失败计数（内存），IP → { count, lockUntil }
 const loginAttempts = new Map()
@@ -58,6 +57,14 @@ export default function authRoutes(server, db) {
       return { success: false, message: '用户名或密码错误' }
     }
 
+    const accountStatus = user.status || 'active'
+    if (accountStatus === 'pending_activation') {
+      return { success: false, code: 'pending_activation', message: '账号已提交，正在等待管理员分配人员和权限' }
+    }
+    if (accountStatus === 'disabled') {
+      return { success: false, code: 'disabled', message: '账号已停用，请联系管理员' }
+    }
+
     const valid = bcrypt.compareSync(password, user.password)
     if (!valid) {
       recordFailedLogin(limit.ip)
@@ -66,6 +73,7 @@ export default function authRoutes(server, db) {
 
     // 登录成功，清除失败记录
     loginAttempts.delete(limit.ip)
+    db.prepare("UPDATE users SET last_login_at = datetime('now', 'localtime') WHERE id = ?").run(user.id)
 
     const secret = getJwtSecret()
     const expiresIn = remember_me ? '7d' : '1d'
@@ -93,6 +101,7 @@ export default function authRoutes(server, db) {
         phone: user.phone || '',
         department: user.department || '',
         employee_id: user.employee_id || 0,
+        status: accountStatus,
         role_version: user.role_version || 1,
         ai_pet_enabled: user.ai_pet_enabled ?? 1,
         ai_auto_query: user.ai_auto_query ?? 1,
@@ -116,7 +125,7 @@ export default function authRoutes(server, db) {
     if (regRecord.count > 10) {
       return { success: false, message: '注册过于频繁，请明天再试' }
     }
-    const { username, password, name, phone, department } = request.body
+    const { username, password, name, phone, department, ai_pet_enabled, ai_auto_query, ai_name } = request.body
     if (!username || !password) {
       return { success: false, message: '账号和密码不能为空' }
     }
@@ -132,44 +141,34 @@ export default function authRoutes(server, db) {
     const displayName = String(name || username).trim()
     const safePhone = String(phone || '').trim()
     const safeDepartment = String(department || '').trim()
-    const createAccount = db.transaction(() => {
-      const userResult = db.prepare(
-        'INSERT INTO users (username, password, role, real_name, phone, department) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(username, hashed, 'employee', displayName, safePhone, safeDepartment)
-      const employeeCode = generateEmployeeCode(db)
-      const employeeResult = db.prepare(
-        'INSERT INTO employees (name, department, position, phone, employee_code) VALUES (?, ?, ?, ?, ?)'
-      ).run(displayName, safeDepartment || null, '新注册账号', safePhone || null, employeeCode)
-      db.prepare('UPDATE users SET employee_id = ? WHERE id = ?').run(employeeResult.lastInsertRowid, userResult.lastInsertRowid)
-      return {
-        userId: userResult.lastInsertRowid,
-        employeeId: employeeResult.lastInsertRowid,
-        employeeCode
-      }
-    })
-    const result = createAccount()
-
-    const secret = getJwtSecret()
-    const token = jwt.sign(
-      { userId: result.userId, username, role: 'employee', roleVersion: 1, employeeId: result.employeeId },
-      secret,
-      { expiresIn: '1d' }
-    )
+    const safeAiName = String(ai_name || '简尚小助手').trim().slice(0, 20) || '简尚小助手'
+    const petEnabled = ai_pet_enabled === false ? 0 : 1
+    const autoQuery = ai_auto_query === false ? 0 : 1
+    const result = db.prepare(`
+      INSERT INTO users (
+        username, password, role, real_name, phone, department,
+        ai_pet_enabled, ai_auto_query, ai_name, status, onboarding_done
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_activation', 0)
+    `).run(username, hashed, 'employee', displayName, safePhone, safeDepartment, petEnabled, autoQuery, safeAiName)
 
     return {
       success: true,
-      token,
+      pending_activation: true,
+      message: '注册信息已提交，等待管理员分配人员和权限',
       user: {
-        id: result.userId,
+        id: result.lastInsertRowid,
         username,
         role: 'employee',
         onboarding_done: 0,
         real_name: displayName,
         phone: safePhone,
         department: safeDepartment,
-        employee_id: result.employeeId,
+        employee_id: 0,
+        status: 'pending_activation',
         role_version: 1,
-        employee_code: result.employeeCode
+        ai_pet_enabled: petEnabled,
+        ai_auto_query: autoQuery,
+        ai_name: safeAiName
       }
     }
   })
@@ -180,7 +179,7 @@ export default function authRoutes(server, db) {
     try {
       const user = db.prepare(`
         SELECT id, username, role, role_version, employee_id, avatar_url, onboarding_done,
-               real_name, phone, department, ai_pet_enabled, ai_auto_query, ai_name, created_at
+               real_name, phone, department, ai_pet_enabled, ai_auto_query, ai_name, status, created_at
         FROM users WHERE id = ?
       `).get(request.user.userId)
       if (!user) {

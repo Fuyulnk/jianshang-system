@@ -27,6 +27,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS users (
   role TEXT DEFAULT 'user',
   role_version INTEGER DEFAULT 1,
   employee_id INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'active',
+  activated_at TEXT DEFAULT '',
+  activated_by INTEGER DEFAULT 0,
+  disabled_at TEXT DEFAULT '',
+  disabled_by INTEGER DEFAULT 0,
+  last_login_at TEXT DEFAULT '',
   created_at DATETIME DEFAULT (datetime('now', 'localtime'))
 )`)
 

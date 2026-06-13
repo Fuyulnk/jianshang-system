@@ -4,23 +4,29 @@
       <div class="page-header">
         <div>
           <h2>产品库存</h2>
-          <p class="page-desc">管理产品信息和库存数量</p>
+          <p class="page-desc">按“产品｜规格/包装｜库存单位｜当前库存”管理仓库物料</p>
         </div>
         <el-button type="primary" @click="showAdd = true">+ 新增产品</el-button>
       </div>
 
       <el-table :data="list" stripe v-loading="loading" style="width: 100%">
         <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="name" label="产品名称" min-width="140" />
+        <el-table-column label="产品名称" min-width="160">
+          <template #default="{ row }">{{ productDisplayName(row) }}</template>
+        </el-table-column>
         <el-table-column prop="category" label="分类" width="120" />
-        <el-table-column prop="spec" label="规格" width="110" />
-        <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column prop="spec" label="规格/包装" width="120" />
+        <el-table-column prop="unit" label="库存单位" width="90" />
         <el-table-column label="单价" width="110">
           <template #default="{ row }">￥{{ Number(row.unit_price || 0).toFixed(2) }}</template>
         </el-table-column>
         <el-table-column prop="price_unit" label="计价单位" width="90" />
-        <el-table-column prop="stock" label="库存" width="100" />
-        <el-table-column prop="min_stock" label="最低库存" width="100" />
+        <el-table-column label="当前库存" width="120">
+          <template #default="{ row }">{{ formatQty(row.stock) }} {{ row.unit || '' }}</template>
+        </el-table-column>
+        <el-table-column label="最低库存" width="120">
+          <template #default="{ row }">{{ formatQty(row.min_stock) }} {{ row.unit || '' }}</template>
+        </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag v-if="row.stock <= row.min_stock" type="danger" size="small">库存不足</el-tag>
@@ -42,8 +48,8 @@
       @updated="fetchList"
     />
 
-    <el-dialog v-model="showAdd" title="新增产品" width="400px">
-      <el-form :model="addForm" label-width="80px">
+    <el-dialog v-model="showAdd" title="新增产品" width="460px">
+      <el-form :model="addForm" label-width="96px">
         <el-form-item label="产品名称">
           <el-autocomplete
             v-model="addForm.name"
@@ -67,20 +73,20 @@
             <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
           </el-select>
         </el-form-item>
-        <el-form-item label="单位">
+        <el-form-item label="库存单位">
           <el-select
             v-model="addForm.unit"
             filterable
             allow-create
             default-first-option
             style="width: 100%"
-            placeholder="选择或输入单位"
+            placeholder="如 桶、箱、支"
           >
             <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
           </el-select>
         </el-form-item>
-        <el-form-item label="规格">
-          <el-input v-model="addForm.spec" placeholder="如 1kg/桶、500ml" />
+        <el-form-item label="规格/包装">
+          <el-input v-model="addForm.spec" placeholder="如 5L、20kg/袋、1kg/桶" />
         </el-form-item>
         <el-form-item label="单价">
           <el-input-number v-model="addForm.unit_price" :min="0" :precision="2" style="width: 100%" />
@@ -92,12 +98,12 @@
             allow-create
             default-first-option
             style="width: 100%"
-            placeholder="如 kg、L、个"
+            placeholder="如 桶、L、kg"
           >
             <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
           </el-select>
         </el-form-item>
-        <el-form-item label="库存">
+        <el-form-item label="当前库存">
           <el-input-number v-model="addForm.stock" :min="0" style="width: 100%" />
         </el-form-item>
         <el-form-item label="最低库存">
@@ -121,7 +127,7 @@ const list = ref([])
 const loading = ref(false)
 const showAdd = ref(false)
 const saving = ref(false)
-const addForm = ref({ name: '', category: '', spec: '', unit: 'kg', unit_price: 0, price_unit: 'kg', stock: 0, min_stock: 0 })
+const addForm = ref(defaultProductForm())
 const presetCategories = ['诺瓦艺术漆', '本杰明艺术漆', '艺术漆辅料', '基层材料', '工具耗材', '施工工具', '劳保用品', '设备配件', '其他']
 const presetUnits = ['kg', 'g', 'ml', 'L', '桶', '罐', '支', '把', '套', '份', '个', '颗', '箱', '卷', '米', '平方']
 
@@ -134,24 +140,18 @@ const userRole = computed(() => {
 const canHandleMaterialRequests = computed(() => ['super_admin', 'admin', 'warehouse'].includes(userRole.value))
 
 const productMemory = computed(() => {
-  const map = new Map()
-  for (const item of list.value) {
-    const name = String(item.name || '').trim()
-    if (!name) continue
-    if (!map.has(name)) map.set(name, { value: name, categories: new Set(), units: new Set() })
-    const memory = map.get(name)
-    if (item.category) memory.categories.add(item.category)
-    if (item.unit) memory.units.add(item.unit)
-    if (item.spec) memory.spec = item.spec
-    if (item.unit_price) memory.unit_price = item.unit_price
-    if (item.price_unit) memory.price_unit = item.price_unit
-  }
-  return [...map.values()].map(item => ({
-    value: item.value,
-    categories: [...item.categories],
-    units: [...item.units],
-    categoryText: [...item.categories].join(' / '),
-  }))
+  return list.value
+    .map(item => ({
+      value: productDisplayName(item),
+      name: String(item.name || '').trim(),
+      category: item.category || '',
+      unit: item.unit || '',
+      spec: item.spec || '',
+      unit_price: item.unit_price || 0,
+      price_unit: item.price_unit || '',
+      searchText: productSearchText(item)
+    }))
+    .filter(item => item.name)
 })
 
 const categoryOptions = computed(() => {
@@ -165,6 +165,29 @@ const unitOptions = computed(() => {
 })
 
 function token() { return localStorage.getItem('token') }
+
+function productDisplayName(item) {
+  const name = String(item?.name || '').trim()
+  const spec = String(item?.spec || '').trim()
+  if (!spec || name.includes(spec)) return name
+  return `${name}${spec}`
+}
+
+function productSearchText(item) {
+  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function defaultProductForm() {
+  return { name: '', category: '', spec: '', unit: '桶', unit_price: 0, price_unit: '桶', stock: 0, min_stock: 0 }
+}
+
+function formatQty(value) {
+  const n = Number(value || 0)
+  return Number.isInteger(n) ? String(n) : n.toFixed(2)
+}
 
 async function fetchList() {
   loading.value = true
@@ -192,7 +215,7 @@ async function handleAdd() {
     if (json.success) {
       ElMessage.success('新增成功')
       showAdd.value = false
-      addForm.value = { name: '', category: '', spec: '', unit: 'kg', unit_price: 0, price_unit: 'kg', stock: 0, min_stock: 0 }
+      addForm.value = defaultProductForm()
       fetchList()
     }
   } finally {
@@ -203,25 +226,25 @@ async function handleAdd() {
 function queryProductSuggestions(query, cb) {
   const keyword = String(query || '').trim().toLowerCase()
   const result = productMemory.value
-    .filter(item => !keyword || item.value.toLowerCase().includes(keyword))
+    .filter(item => !keyword || item.searchText.includes(keyword))
     .slice(0, 10)
   cb(result)
 }
 
 function applyProductSuggestion(item) {
-  addForm.value.name = item.value
-  if (item.categories.length === 1) addForm.value.category = item.categories[0]
-  if (item.units.length === 1) addForm.value.unit = item.units[0]
+  addForm.value.name = item.name || item.value
+  if (item.category) addForm.value.category = item.category
+  if (item.unit) addForm.value.unit = item.unit
   if (item.spec && !addForm.value.spec) addForm.value.spec = item.spec
   if (item.unit_price && !addForm.value.unit_price) addForm.value.unit_price = Number(item.unit_price)
   if (item.price_unit && !addForm.value.price_unit) addForm.value.price_unit = item.price_unit
 }
 
 watch(() => addForm.value.name, (name) => {
-  const exact = productMemory.value.find(item => item.value === name)
+  const exact = productMemory.value.find(item => item.value === name || item.name === name)
   if (!exact) return
-  if (exact.categories.length === 1 && !addForm.value.category) addForm.value.category = exact.categories[0]
-  if (exact.units.length === 1 && !addForm.value.unit) addForm.value.unit = exact.units[0]
+  if (exact.category && !addForm.value.category) addForm.value.category = exact.category
+  if (exact.unit && !addForm.value.unit) addForm.value.unit = exact.unit
   if (exact.spec && !addForm.value.spec) addForm.value.spec = exact.spec
   if (exact.unit_price && !addForm.value.unit_price) addForm.value.unit_price = Number(exact.unit_price)
   if (exact.price_unit && !addForm.value.price_unit) addForm.value.price_unit = exact.price_unit

@@ -665,36 +665,52 @@ async function handleAiChat(request, reply, db) {
   let finalContent = ''
   const currentMessages = messages
 
-  for (let round = 0; round < 10; round++) {
-    const result = await callDeepSeek(currentMessages, config, round === 0 ? allowedTools : undefined)
-    totalInputTokens += result.usage?.prompt_tokens || 0
-    totalOutputTokens += result.usage?.completion_tokens || 0
-    const choice = result.choices?.[0]
-    if (choice?.finish_reason === 'stop' || !choice?.message?.tool_calls) {
-      finalContent = choice?.message?.content || ''
-      break
-    }
+  try {
+    for (let round = 0; round < 10; round++) {
+      const result = await callDeepSeek(currentMessages, config, round === 0 ? allowedTools : undefined)
+      totalInputTokens += result.usage?.prompt_tokens || 0
+      totalOutputTokens += result.usage?.completion_tokens || 0
+      const choice = result.choices?.[0]
+      if (choice?.finish_reason === 'stop' || !choice?.message?.tool_calls) {
+        finalContent = choice?.message?.content || ''
+        break
+      }
 
-    const toolCalls = choice.message.tool_calls
-    currentMessages.push({ role: 'assistant', content: choice.message.content || null, tool_calls: toolCalls })
-    for (const tc of toolCalls) {
-      let args = {}
-      try { args = JSON.parse(tc.function.arguments) } catch {}
-      const meta = toolMeta(tc.function.name)
-      const resultData = executeTool(tc.function.name, args, db, user)
-      logAiAudit(db, user, {
-        actionType: meta.action_type || 'tool_read',
-        toolName: tc.function.name,
-        requestSummary: args,
-        resultSummary: resultData,
-        model: config.model,
-        agentId: agent.id,
-        contextKey: ctxKey,
-        riskLevel: meta.risk_level,
-        confirmationRequired: meta.requires_confirmation
-      })
-      currentMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultData })
+      const toolCalls = choice.message.tool_calls
+      currentMessages.push({ role: 'assistant', content: choice.message.content || null, tool_calls: toolCalls })
+      for (const tc of toolCalls) {
+        let args = {}
+        try { args = JSON.parse(tc.function.arguments) } catch {}
+        const meta = toolMeta(tc.function.name)
+        const resultData = executeTool(tc.function.name, args, db, user)
+        logAiAudit(db, user, {
+          actionType: meta.action_type || 'tool_read',
+          toolName: tc.function.name,
+          requestSummary: args,
+          resultSummary: resultData,
+          model: config.model,
+          agentId: agent.id,
+          contextKey: ctxKey,
+          riskLevel: meta.risk_level,
+          confirmationRequired: meta.requires_confirmation
+        })
+        currentMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultData })
+      }
     }
+  } catch (err) {
+    const errorMessage = humanizeAiError(err)
+    request.log?.error({ err }, 'AI chat failed')
+    logAiAudit(db, user, {
+      actionType: 'chat_failed',
+      requestSummary: message,
+      resultSummary: errorMessage,
+      model: config.model,
+      durationMs: Date.now() - startedAt,
+      agentId: agent.id,
+      contextKey: ctxKey
+    })
+    reply.code(502).send({ success: false, message: errorMessage })
+    return
   }
 
   if (!finalContent) finalContent = '抱歉，我暂时无法回答这个问题。'
@@ -847,6 +863,27 @@ function parseJsonSafe(value, fallback) {
   } catch {
     return fallback
   }
+}
+
+function humanizeAiError(err) {
+  const text = String(err?.message || err || '')
+  const lower = text.toLowerCase()
+  if (lower.includes('insufficient') || lower.includes('balance') || lower.includes('quota') || text.includes('402')) {
+    return 'AI 服务余额或额度不足，请检查 DeepSeek 账户余额后再试。'
+  }
+  if (lower.includes('unauthorized') || lower.includes('invalid api') || lower.includes('api key') || text.includes('401')) {
+    return 'AI 密钥无效或已过期，请在系统设置或服务器环境变量里检查 AI_API_KEY。'
+  }
+  if (lower.includes('rate') || text.includes('429')) {
+    return 'AI 请求太频繁，请稍等一会儿再试。'
+  }
+  if (lower.includes('timeout') || lower.includes('fetch failed') || lower.includes('econn') || lower.includes('enotfound')) {
+    return 'AI 服务连接失败，请检查服务器网络或稍后再试。'
+  }
+  if (text.includes('400')) {
+    return 'AI 请求格式被模型拒绝，请稍后重试；如果持续出现，需要检查工具参数或模型配置。'
+  }
+  return 'AI 服务暂时异常，请稍后重试。'
 }
 
 function canManageAi(user) {

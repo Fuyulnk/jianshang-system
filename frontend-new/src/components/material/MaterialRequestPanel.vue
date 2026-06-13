@@ -73,7 +73,21 @@ function emptyRow(group) {
 }
 
 function productLabel(item) {
-  return `${item.name}${item.category ? ` / ${item.category}` : ''}（库存 ${formatQty(item.stock)} ${item.unit || ''}）`
+  return `${productDisplayName(item)}${item.category ? ` / ${item.category}` : ''}（库存 ${formatQty(item.stock)} ${item.unit || ''}）`
+}
+
+function productDisplayName(item) {
+  const name = String(item?.name || '').trim()
+  const spec = String(item?.spec || '').trim()
+  if (!spec || name.includes(spec)) return name
+  return `${name}${spec}`
+}
+
+function productSearchText(item) {
+  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
 }
 
 function formatQty(value) {
@@ -134,7 +148,7 @@ function applyProduct(row, productId) {
   const product = products.value.find(item => Number(item.id) === Number(productId))
   if (!product) return
   row.product_id = product.id
-  row.product_name = product.name || ''
+  row.product_name = productDisplayName(product)
   row.category = product.category || row.category || ''
   row.unit = product.unit || row.unit || ''
   if (Number(product.unit_price || 0) > 0) row.unit_price = Number(product.unit_price)
@@ -144,7 +158,9 @@ function applyProduct(row, productId) {
 function applyManualName(row) {
   const name = String(row.product_name || '').trim()
   if (!name) return
-  const product = products.value.find(item => String(item.name || '').trim() === name)
+  const keyword = name.toLowerCase()
+  const product = products.value.find(item => productSearchText(item) === keyword)
+    || products.value.find(item => productSearchText(item).includes(keyword))
   if (product) applyProduct(row, product.id)
   else recalcRow(row)
 }

@@ -23,11 +23,12 @@ export default function userRoutes(server, db) {
     const users = db.prepare(`
       SELECT u.id, u.username, u.role, u.avatar_url, u.real_name, u.phone, u.department,
              u.employee_id, e.employee_code, e.name as employee_name, e.position as employee_position,
-             r.label as role_label, u.created_at
+             r.label as role_label, u.status, u.ai_pet_enabled, u.ai_auto_query, u.ai_name,
+             u.activated_at, u.disabled_at, u.last_login_at, u.created_at
       FROM users u
       LEFT JOIN roles r ON u.role = r.name
       LEFT JOIN employees e ON u.employee_id = e.id
-      ORDER BY u.id ASC
+      ORDER BY CASE WHEN u.status = 'pending_activation' THEN 0 ELSE 1 END, u.id ASC
     `).all()
     return { success: true, data: users }
   })
@@ -49,11 +50,75 @@ export default function userRoutes(server, db) {
     }
     const hashed = bcrypt.hashSync(password, 10)
     try {
-      const result = db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run(username, hashed, targetRole)
+      const result = db.prepare(`
+        INSERT INTO users (username, password, role, status, activated_at, activated_by)
+        VALUES (?, ?, ?, 'active', datetime('now', 'localtime'), ?)
+      `).run(username, hashed, targetRole, request.user.userId)
       return { success: true, id: result.lastInsertRowid }
     } catch {
       return { success: false, message: '账号已存在' }
     }
+  })
+
+  // 激活/停用账号
+  server.put('/api/users/:id/status', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (request.user.role !== 'super_admin') {
+      reply.code(403).send({ success: false, message: '无权限' })
+      return
+    }
+
+    const userId = Number(request.params.id || 0)
+    const status = String(request.body?.status || '').trim()
+    if (!['pending_activation', 'active', 'disabled'].includes(status)) {
+      return { success: false, message: '账号状态不正确' }
+    }
+
+    const target = db.prepare('SELECT id, username, employee_id, status FROM users WHERE id = ?').get(userId)
+    if (!target) {
+      reply.code(404).send({ success: false, message: '用户不存在' })
+      return
+    }
+    if (target.username === 'fuyulnk' && status !== 'active') {
+      reply.code(403).send({ success: false, message: '系统所有者账号不能停用' })
+      return
+    }
+    if (status === 'active' && Number(target.employee_id || 0) <= 0) {
+      return { success: false, message: '请先绑定或生成员工档案，再激活账号' }
+    }
+
+    if (status === 'active') {
+      db.prepare(`
+        UPDATE users
+        SET status = 'active',
+            activated_at = datetime('now', 'localtime'),
+            activated_by = ?,
+            disabled_at = '',
+            disabled_by = 0,
+            role_version = COALESCE(role_version, 1) + 1
+        WHERE id = ?
+      `).run(request.user.userId, userId)
+    } else if (status === 'disabled') {
+      db.prepare(`
+        UPDATE users
+        SET status = 'disabled',
+            disabled_at = datetime('now', 'localtime'),
+            disabled_by = ?,
+            role_version = COALESCE(role_version, 1) + 1
+        WHERE id = ?
+      `).run(request.user.userId, userId)
+    } else {
+      db.prepare(`
+        UPDATE users
+        SET status = 'pending_activation',
+            activated_at = '',
+            activated_by = 0,
+            role_version = COALESCE(role_version, 1) + 1
+        WHERE id = ?
+      `).run(userId)
+    }
+
+    return { success: true }
   })
 
   // 更新用户角色

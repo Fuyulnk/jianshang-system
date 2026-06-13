@@ -65,6 +65,13 @@ try { db.exec('ALTER TABLE users ADD COLUMN ai_auto_query INTEGER DEFAULT 1') } 
 try { db.exec("ALTER TABLE users ADD COLUMN ai_name TEXT DEFAULT '简尚小助手'") } catch {}
 try { db.exec('ALTER TABLE users ADD COLUMN role_version INTEGER DEFAULT 1') } catch {}
 try { db.exec('ALTER TABLE users ADD COLUMN employee_id INTEGER DEFAULT 0') } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'") } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN activated_at TEXT DEFAULT ''") } catch {}
+try { db.exec('ALTER TABLE users ADD COLUMN activated_by INTEGER DEFAULT 0') } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN disabled_at TEXT DEFAULT ''") } catch {}
+try { db.exec('ALTER TABLE users ADD COLUMN disabled_by INTEGER DEFAULT 0') } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN last_login_at TEXT DEFAULT ''") } catch {}
+try { db.prepare("UPDATE users SET status = 'active' WHERE status IS NULL OR status = ''").run() } catch {}
 try { db.prepare("UPDATE users SET role = 'super_admin' WHERE username = 'fuyulnk'").run() } catch {}
 try { db.exec('ALTER TABLE employees ADD COLUMN employee_code TEXT') } catch {}
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_employee_id_unique ON users(employee_id) WHERE employee_id > 0') } catch {}
@@ -682,6 +689,12 @@ function ensureCoreTables(db) {
       ai_name TEXT DEFAULT '简尚小助手',
       role_version INTEGER DEFAULT 1,
       employee_id INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      activated_at TEXT DEFAULT '',
+      activated_by INTEGER DEFAULT 0,
+      disabled_at TEXT DEFAULT '',
+      disabled_by INTEGER DEFAULT 0,
+      last_login_at TEXT DEFAULT '',
       created_at DATETIME DEFAULT (datetime('now', 'localtime'))
     );
 
