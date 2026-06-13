@@ -172,6 +172,19 @@
 
 ## 对接记录
 
+### 2026-06-13 Claude：修复 ai_agents 表缺少 agent_key 列导致 AI 全不可用
+
+- **问题：** 本地 AI 发任何消息都返回"无权限使用该 AI 分身"。线上正常。
+- **根因：** 两层问题叠加：
+  1. 本地 LaunchAgent 跑的是旧进程，Codex 新代码中创建 `ai_agents` 表的迁移未执行，数据库无此表。
+  2. 手动重启后端后表被创建，但 Codex 的建表逻辑使用 `key TEXT` 作为列名，而 `ai.js` 的 `resolveAiAgent` 函数同时通过 `agent_key` 和 `key` 两个字段名查找；`agent_key` 列未被早期建表语句包含，后续的 `ALTER TABLE ADD COLUMN agent_key` 被 `try { } catch { }` 静默吞掉。
+- **修复：** `ALTER TABLE ai_agents ADD COLUMN agent_key TEXT` + 从 `key` 列同步值到 `agent_key`。
+- **教训：**
+  - 启动迁移中的 `ALTER TABLE` 如果因列已存在/不存在而失败，外层 `try catch` 会静默吞掉，导致字段缺失不易察觉。后续改表结构的迁移应加日志或单独脚本验证。
+  - 新 AI 表上线后应直接测试 `/api/ai/chat` 通断，而不是只看 `/health`。
+- **验证：** 本地 `/api/ai/chat` 返回正常 SSE 流式回复。
+- **未提交。**
+
 ### 2026-06-13 Codex：线上真实项目闭环试跑 V1
 
 - 任务：按路线图下一步，用一条线上测试项目从门店交接跑到归档，验证真实项目闭环。
