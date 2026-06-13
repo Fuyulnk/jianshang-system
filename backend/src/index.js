@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'url'
 import { dirname, join, resolve } from 'path'
+import { homedir } from 'os'
 import { spawn } from 'child_process'
 import dotenv from 'dotenv'
 import fastify from 'fastify'
@@ -29,6 +30,7 @@ import financeRoutes from './routes/finance.js'
 import employeeDashboardRoutes from './routes/employee-dashboard.js'
 import fileRoutes from './routes/files.js'
 import { setAuthDb, resolveFreshUser } from './middleware/auth.js'
+import { AI_TOOL_REGISTRY, DEFAULT_AI_AGENTS } from './ai/toolRegistry.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -39,7 +41,7 @@ import { initJwtConfig, verifyToken } from './config.js'
 dotenv.config({ path: resolve(__dirname, '../.env') })
 
 // 确保数据库目录存在
-const dbPath = join(process.env.HOME, 'fuyulnk', 'jianshang.db')
+const dbPath = join(process.env.HOME || homedir(), 'fuyulnk', 'jianshang.db')
 const dbDir = dirname(dbPath)
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true })
@@ -80,6 +82,9 @@ try {
 // 项目工单分配字段：先以系统用户为责任主体，后续可再和员工档案强绑定。
 try { db.exec('ALTER TABLE projects ADD COLUMN manager_user_id INTEGER DEFAULT 0') } catch {}
 try { db.exec('ALTER TABLE projects ADD COLUMN assignee_user_id INTEGER DEFAULT 0') } catch {}
+try { db.exec('ALTER TABLE projects ADD COLUMN survey_user_id INTEGER DEFAULT 0') } catch {}
+try { db.exec('ALTER TABLE projects ADD COLUMN recheck_user_id INTEGER DEFAULT 0') } catch {}
+try { db.exec('ALTER TABLE projects ADD COLUMN final_inspection_user_id INTEGER DEFAULT 0') } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN address_province TEXT DEFAULT ''") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN address_city TEXT DEFAULT ''") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN address_detail TEXT DEFAULT ''") } catch {}
@@ -119,9 +124,12 @@ try {
   if (owner) db.prepare('UPDATE chat_history SET user_id = ? WHERE COALESCE(user_id, 0) = 0').run(owner.id)
 } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_chat_history_user_session ON chat_history(user_id, session_id, id)') } catch {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_assignee ON projects(assignee_user_id)') } catch {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_manager ON projects(manager_user_id)') } catch {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_created_by ON projects(created_by)') } catch {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_assignee ON projects(assignee_user_id)') } catch {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_manager ON projects(manager_user_id)') } catch {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_survey_user ON projects(survey_user_id)') } catch {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_recheck_user ON projects(recheck_user_id)') } catch {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_final_inspection_user ON projects(final_inspection_user_id)') } catch {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_projects_created_by ON projects(created_by)') } catch {}
 try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS project_import_batches (
@@ -217,22 +225,109 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ai_audit_action_time ON ai_audit_logs(action_type, created_at)
 `)
 
+try { db.exec('ALTER TABLE ai_audit_logs ADD COLUMN agent_id INTEGER DEFAULT 0') } catch {}
+try { db.exec("ALTER TABLE ai_audit_logs ADD COLUMN context_key TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE ai_audit_logs ADD COLUMN risk_level TEXT DEFAULT ''") } catch {}
+try { db.exec('ALTER TABLE ai_audit_logs ADD COLUMN confirmation_required INTEGER DEFAULT 0') } catch {}
+try { db.exec('ALTER TABLE chat_history ADD COLUMN agent_id INTEGER DEFAULT 0') } catch {}
+try { db.exec("ALTER TABLE chat_history ADD COLUMN context_type TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE chat_history ADD COLUMN context_key TEXT DEFAULT ''") } catch {}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ai_tool_registry (
+    tool_name TEXT PRIMARY KEY,
+    label TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    tier TEXT DEFAULT 'L1',
+    risk_level TEXT DEFAULT 'medium',
+    action_type TEXT DEFAULT 'tool_read',
+    requires_confirmation INTEGER DEFAULT 0,
+    parameter_schema TEXT DEFAULT '{}',
+    enabled INTEGER DEFAULT 1,
+    updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+  );
+  CREATE TABLE IF NOT EXISTS ai_agents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    purpose TEXT DEFAULT '',
+    scenario_type TEXT DEFAULT 'general',
+    base_prompt TEXT DEFAULT '',
+    allowed_roles TEXT DEFAULT '[]',
+    memory_enabled INTEGER DEFAULT 0,
+    memory_retention_days INTEGER DEFAULT 7,
+    enabled INTEGER DEFAULT 1,
+    is_default INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+    updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+  );
+  CREATE TABLE IF NOT EXISTS ai_agent_tools (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id INTEGER NOT NULL REFERENCES ai_agents(id),
+    tool_name TEXT NOT NULL,
+    allowed INTEGER DEFAULT 0,
+    UNIQUE(agent_id, tool_name)
+  );
+  CREATE TABLE IF NOT EXISTS ai_contexts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    context_type TEXT DEFAULT 'direct',
+    context_key TEXT NOT NULL,
+    agent_id INTEGER DEFAULT 0,
+    user_id INTEGER DEFAULT 0,
+    title TEXT DEFAULT '',
+    created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+    updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(context_type, context_key, user_id)
+  );
+  CREATE TABLE IF NOT EXISTS ai_memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id INTEGER DEFAULT 0,
+    context_type TEXT DEFAULT 'direct',
+    context_key TEXT NOT NULL,
+    user_id INTEGER DEFAULT 0,
+    summary TEXT DEFAULT '',
+    source TEXT DEFAULT 'auto',
+    expires_at DATETIME DEFAULT '',
+    created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+    updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(agent_id, context_type, context_key, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_agent_tools_agent ON ai_agent_tools(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_ai_memories_context ON ai_memories(agent_id, context_type, context_key, user_id);
+  CREATE INDEX IF NOT EXISTS idx_chat_history_agent_context ON chat_history(user_id, agent_id, context_key, session_id, id)
+`)
+try { db.exec("ALTER TABLE ai_agents ADD COLUMN allowed_roles TEXT DEFAULT '[]'") } catch {}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS finance_account_aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alias TEXT NOT NULL UNIQUE,
+    account_name TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    source TEXT DEFAULT 'system',
+    created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+    updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_finance_account_aliases_enabled ON finance_account_aliases(enabled, alias)
+`)
+ensureAiToolRegistry(db)
+ensureDefaultAiAgents(db)
+ensureFinanceAccountAliases(db)
+
 // 种子 AI 工具权限（仅首次）
 const toolCount = db.prepare('SELECT COUNT(*) as c FROM ai_role_tools').get().c
 if (toolCount === 0) {
-  const allTools = [
-    'get_accounts', 'get_transactions', 'get_today_summary', 'get_products',
-    'get_employees', 'get_projects', 'get_system_stats', 'create_transaction', 'create_account',
-    'parse_project_handover', 'create_project_workorder'
-  ]
+  const allTools = AI_TOOL_REGISTRY.map(tool => tool.name)
   const roles = db.prepare('SELECT id, name FROM roles').all()
   const stmt = db.prepare('INSERT OR IGNORE INTO ai_role_tools (role_id, tool_name, allowed) VALUES (?, ?, ?)')
 
   for (const role of roles) {
     if (role.name === 'super_admin') {
       for (const t of allTools) stmt.run(role.id, t, 1)
+    } else if (role.name === 'admin') {
+      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_products','get_employees','get_projects','get_system_stats','parse_finance_transaction','parse_project_handover','create_project_workorder'].includes(t) ? 1 : 0)
     } else if (role.name === 'finance') {
-      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_system_stats'].includes(t) ? 1 : 0)
+      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_system_stats','parse_finance_transaction','create_transaction'].includes(t) ? 1 : 0)
     } else if (role.name === 'warehouse') {
       for (const t of allTools) stmt.run(role.id, t, ['get_products','get_system_stats'].includes(t) ? 1 : 0)
     } else {
@@ -526,6 +621,9 @@ function ensureProjectTables(db) {
       status TEXT DEFAULT 'handover_received',
       manager_user_id INTEGER DEFAULT 0,
       assignee_user_id INTEGER DEFAULT 0,
+      survey_user_id INTEGER DEFAULT 0,
+      recheck_user_id INTEGER DEFAULT 0,
+      final_inspection_user_id INTEGER DEFAULT 0,
       crew_member_user_ids TEXT DEFAULT '[]',
       crew_status TEXT DEFAULT 'pending',
       material_out_status TEXT DEFAULT 'pending',
@@ -895,6 +993,7 @@ function ensureCoreTables(db) {
   }
   try { db.prepare("DELETE FROM role_permissions WHERE module = 'orders'").run() } catch {}
   migrateRolePermissionScopes(db)
+  ensureOperationalProjectScopes(db)
 }
 
 function migrateRolePermissionScopes(db) {
@@ -922,7 +1021,7 @@ function defaultPermission(role, module) {
       create: ['transactions', 'chat'].includes(module) ? 1 : 0,
       edit: ['transactions', 'projects', 'chat'].includes(module) ? 1 : 0,
       delete: 0,
-      scope: ['accounts', 'transactions', 'finance'].includes(module) ? 'all' : 'project_related'
+      scope: ['accounts', 'transactions', 'finance', 'projects'].includes(module) ? 'all' : 'project_related'
     }
   }
   if (role === 'warehouse') {
@@ -931,7 +1030,7 @@ function defaultPermission(role, module) {
       create: ['products', 'chat'].includes(module) ? 1 : 0,
       edit: ['products', 'projects', 'chat'].includes(module) ? 1 : 0,
       delete: 0,
-      scope: ['products'].includes(module) ? 'all' : 'project_related'
+      scope: ['products', 'projects'].includes(module) ? 'all' : 'project_related'
     }
   }
   if (role === 'engineering') {
@@ -952,12 +1051,24 @@ function defaultPermission(role, module) {
   }
 }
 
+function ensureOperationalProjectScopes(db) {
+  const key = 'ensure_operational_project_scopes_20260613'
+  if (db.prepare('SELECT value FROM app_config WHERE key = ?').get(key)) return
+  db.prepare(`
+    UPDATE role_permissions
+    SET data_scope = 'all'
+    WHERE module = 'projects'
+      AND role_id IN (
+        SELECT id FROM roles
+        WHERE name IN ('super_admin', 'admin', 'finance', 'warehouse', 'engineering')
+      )
+  `).run()
+  db.prepare('INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(key, '1', String(Date.now()))
+}
+
 function ensureAiToolPermissionRows(db) {
-  const allTools = [
-    'get_accounts', 'get_transactions', 'get_today_summary', 'get_products',
-    'get_employees', 'get_projects', 'get_system_stats', 'create_transaction', 'create_account',
-    'parse_project_handover', 'create_project_workorder'
-  ]
+  const allTools = AI_TOOL_REGISTRY.map(tool => tool.name)
   const roles = db.prepare('SELECT id, name FROM roles').all()
   const stmt = db.prepare('INSERT OR IGNORE INTO ai_role_tools (role_id, tool_name, allowed) VALUES (?, ?, ?)')
   for (const role of roles) {
@@ -970,9 +1081,93 @@ function ensureAiToolPermissionRows(db) {
 
 function defaultAiToolAllowed(role, tool) {
   if (role === 'super_admin') return 1
-  if (role === 'admin') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees', 'get_projects', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
-  if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats'].includes(tool) ? 1 : 0
+  if (role === 'admin') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees', 'get_projects', 'get_system_stats', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
+  if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats', 'parse_finance_transaction', 'create_transaction'].includes(tool) ? 1 : 0
   if (role === 'warehouse') return ['get_products', 'get_system_stats'].includes(tool) ? 1 : 0
   if (role === 'engineering') return ['get_projects', 'get_products', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
   return ['get_system_stats', 'get_projects'].includes(tool) ? 1 : 0
+}
+
+function ensureAiToolRegistry(db) {
+  const stmt = db.prepare(`
+    INSERT INTO ai_tool_registry (
+      tool_name, label, description, tier, risk_level, action_type, requires_confirmation, parameter_schema, enabled, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now', 'localtime'))
+    ON CONFLICT(tool_name) DO UPDATE SET
+      label = excluded.label,
+      description = excluded.description,
+      tier = excluded.tier,
+      risk_level = excluded.risk_level,
+      action_type = excluded.action_type,
+      requires_confirmation = excluded.requires_confirmation,
+      parameter_schema = excluded.parameter_schema,
+      updated_at = datetime('now', 'localtime')
+  `)
+  for (const tool of AI_TOOL_REGISTRY) {
+    stmt.run(
+      tool.name,
+      tool.label,
+      tool.desc,
+      tool.tier || 'L1',
+      tool.risk_level || 'medium',
+      tool.action_type || 'tool_read',
+      tool.requires_confirmation ? 1 : 0,
+      JSON.stringify(tool.schema || {})
+    )
+  }
+}
+
+function ensureDefaultAiAgents(db) {
+  const insertAgent = db.prepare(`
+    INSERT INTO ai_agents (
+      key, name, purpose, scenario_type, base_prompt, allowed_roles, memory_enabled, memory_retention_days, enabled, is_default
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      name = excluded.name,
+      purpose = excluded.purpose,
+      scenario_type = excluded.scenario_type,
+      allowed_roles = excluded.allowed_roles,
+      updated_at = datetime('now', 'localtime')
+  `)
+  const toolStmt = db.prepare('INSERT OR IGNORE INTO ai_agent_tools (agent_id, tool_name, allowed) VALUES (?, ?, ?)')
+  for (const agent of DEFAULT_AI_AGENTS) {
+    insertAgent.run(
+      agent.key,
+      agent.name,
+      agent.purpose,
+      agent.scenario_type,
+      agent.base_prompt,
+      JSON.stringify(agent.allowed_roles || []),
+      agent.memory_enabled ? 1 : 0,
+      agent.memory_retention_days || 7,
+      agent.is_default ? 1 : 0
+    )
+    const row = db.prepare('SELECT id FROM ai_agents WHERE key = ?').get(agent.key)
+    if (!row) continue
+    for (const tool of AI_TOOL_REGISTRY) {
+      toolStmt.run(row.id, tool.name, agent.tools.includes(tool.name) ? 1 : 0)
+    }
+  }
+}
+
+function ensureFinanceAccountAliases(db) {
+  const aliases = [
+    ['晓婉中行', '王晓婉·中国银行'],
+    ['王晓琬中国银行', '王晓婉·中国银行'],
+    ['简尚建设公账', '简尚·建设公账'],
+    ['简尚建设', '简尚·建设公账'],
+    ['建设公账', '简尚·建设公账'],
+    ['简尚招商', '简尚·招商公账'],
+    ['招商公账', '简尚·招商公账'],
+    ['赖总微信', '赖总·微信'],
+    ['赖总建设', '赖总·建设银行'],
+    ['明鸿平安', '明鸿·平安银行公账'],
+    ['明鸿招商', '明鸿·招商银行公账'],
+    ['晓婉微信', '王晓婉·微信']
+  ]
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO finance_account_aliases (alias, account_name, source)
+    VALUES (?, ?, 'system')
+  `)
+  for (const [alias, accountName] of aliases) stmt.run(alias, accountName)
 }

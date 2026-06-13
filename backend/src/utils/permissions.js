@@ -64,7 +64,14 @@ export function canAccessProjectRecord(db, user, project) {
 
 export function isUserLinkedToProject(userId, project) {
   const id = Number(userId || 0)
-  return [project.created_by, project.manager_user_id, project.assignee_user_id].includes(id)
+  return [
+    project.created_by,
+    project.manager_user_id,
+    project.assignee_user_id,
+    project.survey_user_id,
+    project.recheck_user_id,
+    project.final_inspection_user_id
+  ].includes(id)
     || parseIdList(project.crew_member_user_ids).includes(id)
 }
 

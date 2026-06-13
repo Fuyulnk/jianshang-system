@@ -19,6 +19,9 @@ db.exec(`
     status TEXT DEFAULT 'info_confirmed',
     manager_user_id INTEGER DEFAULT 0,
     assignee_user_id INTEGER DEFAULT 0,
+    survey_user_id INTEGER DEFAULT 0,
+    recheck_user_id INTEGER DEFAULT 0,
+    final_inspection_user_id INTEGER DEFAULT 0,
     crew_member_user_ids TEXT DEFAULT '[]',
     crew_status TEXT DEFAULT 'pending',
     material_out_status TEXT DEFAULT 'pending',
@@ -57,6 +60,9 @@ try { db.exec("ALTER TABLE projects ADD COLUMN address_province TEXT DEFAULT ''"
 try { db.exec("ALTER TABLE projects ADD COLUMN address_city TEXT DEFAULT ''") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN address_detail TEXT DEFAULT ''") } catch {}
 try { db.exec('ALTER TABLE projects ADD COLUMN created_by INTEGER DEFAULT 0') } catch {}
+try { db.exec('ALTER TABLE projects ADD COLUMN survey_user_id INTEGER DEFAULT 0') } catch {}
+try { db.exec('ALTER TABLE projects ADD COLUMN recheck_user_id INTEGER DEFAULT 0') } catch {}
+try { db.exec('ALTER TABLE projects ADD COLUMN final_inspection_user_id INTEGER DEFAULT 0') } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN crew_member_user_ids TEXT DEFAULT '[]'") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN crew_status TEXT DEFAULT 'pending'") } catch {}
 try { db.exec("ALTER TABLE projects ADD COLUMN material_out_status TEXT DEFAULT 'pending'") } catch {}

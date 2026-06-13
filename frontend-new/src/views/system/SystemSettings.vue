@@ -146,6 +146,15 @@
           </el-form>
         </div>
 
+        <!-- AI 分身 -->
+        <div v-show="activeTab === 'ai-agents'" class="settings-section">
+          <div class="section-header">
+            <h3>AI 分身</h3>
+            <p class="section-desc">配置不同场景的提示词、轻记忆和内部工具权限</p>
+          </div>
+          <AiAgentsPanel v-if="isAdmin" />
+        </div>
+
         <!-- 知识库 -->
         <div v-show="activeTab === 'kb'" class="settings-section">
           <div class="section-header">
@@ -423,12 +432,14 @@ import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting, Aim, Collection, InfoFilled, User, Operation } from '@element-plus/icons-vue'
 import UserAvatar from '../../components/UserAvatar.vue'
+import AiAgentsPanel from '../../components/system/AiAgentsPanel.vue'
 
 const navItems = [
   { key: 'profile', label: '个人资料', icon: User },
   { key: 'appearance', label: '个性化', icon: Setting },
   { key: 'basic', label: '基本设置', icon: Setting },
   { key: 'ai', label: 'AI 配置', icon: Aim },
+  { key: 'ai-agents', label: 'AI 分身', icon: Aim },
   { key: 'kb', label: '知识库', icon: Collection },
   { key: 'ai-perm', label: 'AI 权限', icon: Operation },
   { key: 'ai-audit', label: 'API统计', icon: Operation },

@@ -98,6 +98,9 @@
 - `handoff/简尚系统路线图进度看板.html`：可交互路线图进度看板。用于把 P0/P1/P2、基建修复、暂停功能分开统计；勾选和备注保存在浏览器本地。
 - `handoff/简尚系统路线图V1-老板版.txt`：给老板/管理层看的汇报版路线图，语气更偏工期、难点和阶段成果说明；不要把它当开发规范直接照做。
 - `handoff/门店交接到施工承接流程V1.md`：业务主线 SOP，描述门店/渠道交接到简尚施工承接、仓库、财务、归档的流程基准。
+- `handoff/2026-06-13-project-document-field-mapping-v1.md`：8 类项目单据字段映射，区分结构化入库字段和先作为附件保留的内容。
+- `handoff/2026-06-13-project-library-from-folder-v1.md`：从桌面“施工项目管理总表”文件夹生成的简尚 AI 项目库 V1 说明，包含目录级索引、字段口径和导入边界。
+- `outputs/project-library-v1/`：项目库 V1 生成物，含 `project_library_seed.csv`、`project_library_seed.json`、`project_document_inventory.json`。
 - `handoff/animation-tasks.md`：历史遗留的动画任务记录，目前不是主线，除非用户明确要求再处理。
 - `CLAUDE.md`：项目协作规则和 Claude 侧约定。
 - `ALIGNMENT.md`：当前交接流水和阶段记录。每轮较大开发结束后要追加记录。
@@ -167,6 +170,167 @@
 注意：这些改动可能是用户或其他 Agent 的已有成果。除非用户明确要求，不要清理或回滚。
 
 ## 对接记录
+
+### 2026-06-13 Codex：Hermes 修复后直接上传服务器
+
+- 任务：用户要求“修完直接上传”，按对接流程将本轮 Hermes 审计修复后的后端源码和前端静态产物上传到服务器。
+- 本地验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/ai/toolRegistry.js`
+  - `git diff --check`
+  - `npm run build`（在 `frontend-new/`，通过；仅既有 Vite 大 chunk 警告）
+  - `rsync -a --delete frontend-new/dist/ backend/public/`
+- 服务器备份：
+  - `/root/jianshang-system-backup-20260613-141706.tgz`
+- 上传范围：
+  - `backend/src/ -> /root/jianshang-system/backend/src/`
+  - `backend/public/ -> /root/jianshang-system/backend/public/`
+  - 未同步服务器 `backend/data/`、数据库、上传文件、头像、`node_modules/`。
+- 线上重启与核对：
+  - `pm2 restart jianshang-web --update-env` 成功。
+  - PM2 状态：`online`；脚本路径 `/root/jianshang-system/backend/src/index.js`；执行目录 `/root/jianshang-system`。
+  - `/health` 返回 `{"status":"ok","message":"简尚系统运行中"}`。
+  - 线上首页引用资源：`/assets/index-1cmeSL6I.js`、`/assets/index-Bw8gySPJ.css`。
+  - 登录冒烟完成：`/api/login` 返回 `success=true`，账号 `fuyulnk`，角色 `super_admin`。
+  - AI 工具接口冒烟完成：`/api/ai/tools` 返回 `success=true`，12 个工具；包含 `parse_finance_transaction`、`create_transaction`、`create_project_workorder`。
+- 注意事项：
+  - 本轮是直接上传工作区内容，不等同于已提交 Git；后续如要固化版本，应再做提交。
+  - 第一次 `/api/ai/tools` 冒烟因命令里 token 未正确传入返回 401，随后带正确 token 重试返回 200；该 401 不是线上接口故障。
+
+### 2026-06-13 Codex：Hermes 审计 P1/P2 修复
+
+- 任务：根据 Hermes 2026-06-13 安全审计报告，修复 AI Agent V1 和项目状态机里的 1 个 P1、3 个 P2 问题。
+- 修改文件：
+  - `backend/src/index.js`：新增 `finance_account_aliases` 表并写入系统默认账户别名；`ai_agents` 新增 `allowed_roles`；补迁移把 super_admin/admin/finance/warehouse/engineering 的 `projects` 数据范围修正为 `all`，普通员工仍保持项目相关范围。
+  - `backend/src/routes/ai.js`：`parse_finance_transaction` 不再硬编码账户别名，改从 `finance_account_aliases` 读取；指定 `agent_id/agent_key` 时校验当前角色是否允许使用该分身；旧自定义分身若未配置角色，默认只允许管理员/超级管理员使用。
+  - `backend/src/ai/toolRegistry.js`：默认四个 AI 分身补 `allowed_roles`，财务分身仅限 super_admin/admin/finance，仓库分身限 super_admin/admin/warehouse/engineering。
+  - `backend/src/routes/projects.js`：`material_returned -> labor_settled -> cost_checked -> finance_settled` 保留超级管理员应急推进通道，但必须显式传 `emergency_confirmed=true`，并写入“超级管理员应急推进”日志；普通推进仍必须走对应单据确认。
+  - `frontend-new/src/components/system/AiAgentsPanel.vue`：AI 分身控制台新增“可用角色”配置。
+- 审计点处理：
+  - P1-1：账户别名硬编码，已迁移到数据库表。
+  - P2-1：结算链无手动兜底，已补超级管理员应急通道，但不恢复普通按钮空跳。
+  - P2-2：项目数据范围可能导致财务/仓库看不到池子，已补迁移修正运营角色项目范围。
+  - P2-3：AI 分身未校验归属，已补角色限制。
+- 验证：
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/ai/toolRegistry.js`
+  - `npm run build`（在 `frontend-new/`，通过；仅既有 Vite 大 chunk 警告）
+  - `git diff --check`（通过）
+- 注意事项：
+  - `finance_account_aliases` 目前只有后端默认种子，后续如财务常改别名，应在 AI 控制台或财务设置里补一个小管理界面。
+  - 超级管理员应急推进是故障兜底，不是日常流程；正常工费/成本/财务仍必须通过单据确认推进。
+  - 本轮未上传服务器，未提交；登录冒烟未完成，原因同上一轮：不强行改本地 SQLite 权限。
+
+### 2026-06-13 Claude：SQLite readonly 修复 — HOME fallback
+
+- 任务：Codex 本地测试时因 `process.env.HOME` 未设置导致数据库路径 `undefined/fuyulnk/jianshang.db`，后端启动报错 `attempt to write a readonly database`，无法完成登录冒烟。
+- 修改：`backend/src/index.js` — 数据库路径从 `process.env.HOME` 改为 `process.env.HOME || homedir()`，引入 `os.homedir()` 兜底，不再依赖环境变量。
+- 影响：仅路径解析逻辑，不影响数据库结构或业务数据。
+- 未提交（待审计）。
+
+### 2026-06-13 Codex：简尚 AI 内部业务 Agent V1
+
+- 任务：按用户给出的“弱聊天升级为内部业务 Agent”计划，先做可控内核、工具注册、轻记忆、分身配置和 AI 控制台 V1；不开放外部 Agent，不开放任意 CLI/Shell。
+- 修改文件：
+  - `backend/src/ai/toolRegistry.js`：新增 AI 工具注册表和默认分身配置；工具按 L1 查询、L2 草稿、L3 确认写入分层，记录风险等级和是否需要确认。
+  - `backend/src/index.js`：新增/迁移 `ai_tool_registry`、`ai_agents`、`ai_agent_tools`、`ai_contexts`、`ai_memories`，并增强 `ai_audit_logs`、`chat_history` 的 agent/context 字段；启动时写入默认工具和默认分身。
+  - `backend/src/routes/ai.js`：把 `/api/ai/chat` 和旧 `/api/chat` 接入统一 runtime；支持 agent/context 隔离、轻记忆、工具权限交集、工具调用审计；新增 AI 分身/工具/审计管理接口。
+  - `backend/src/routes/ai-permissions.js`：AI 权限页工具清单改为复用工具注册表。
+  - `frontend-new/src/components/system/AiAgentsPanel.vue`：新增 AI 分身控制台 V1，可管理分身名称、用途、提示词、启用状态、场景记忆开关和工具权限。
+  - `frontend-new/src/views/system/SystemSettings.vue`：系统设置新增“AI 分身”页签。
+  - `frontend-new/src/views/chat/ChatIndex.vue`、`frontend-new/src/components/AiChat.vue`、`frontend-new/src/components/AiPetWidget.vue`：聊天入口改走 `/api/ai/chat`，并传入默认 agent/context。
+- 当前能力：
+  - 默认分身：简尚总助手、财务助手、仓库助手、项目助手。
+  - 财务助手新增 `parse_finance_transaction`，只把自然语言解析成收支草稿，不直接写入。
+  - `create_transaction`、`create_account`、`create_project_workorder` 均有后端 `confirmed` 硬确认要求，不能只靠提示词约束。
+  - AI 审计可记录用户、分身、context、工具、风险等级、是否需确认、输入/输出摘要、成功/失败。
+- 验证：
+  - `node --check backend/src/ai/toolRegistry.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/ai-permissions.js`
+  - `node --check backend/src/index.js`
+  - `npm run build`（在 `frontend-new/`，通过；仅既有 Vite 大 chunk 警告）
+  - `git diff --check`（通过）
+  - 登录冒烟未完成：本轮未启动真实后端做数据库迁移和登录测试；上一轮本地启动曾因 SQLite `attempt to write a readonly database` 失败，本轮未强行改真实数据库权限。
+- 注意事项：
+  - AI 控制台 V1 先做内部配置，不等于已经完成“飞书内嵌 Agent”式全量控制。
+  - L4 管理工具和 L5 CLI 工具仍未开放；后续若做 CLI，必须是白名单命令，不允许任意 shell。
+  - 写入类动作目前靠 `confirmed` 参数做硬拦截，后续建议补 `ai_action_confirmations` 待确认表，把“草稿 -> 用户确认 -> 写入”的状态保存下来。
+  - `backend/src/db/init.js`、`backend/src/db/seed.js` 仍是旧初始化脚本；完整 AI 新表以 `backend/src/index.js` 启动迁移为准。
+
+### 2026-06-13 Codex：从施工项目管理总表整理 AI 项目库 V1
+
+- 任务：用户提供桌面目录 `/Users/fuyulnk./Desktop/3.4.5.6施工项目管理总表/`，要求根据文件夹整理一个给简尚 AI 使用的项目库。
+- 输出文件：
+  - `handoff/2026-06-13-project-library-from-folder-v1.md`：项目库字段、AI 口径、导入边界和项目清单。
+  - `outputs/project-library-v1/project_library_seed.csv`：33 个项目文件夹的一行一项目索引。
+  - `outputs/project-library-v1/project_library_seed.json`：项目索引 JSON，便于后续 AI/导入器读取。
+  - `outputs/project-library-v1/project_document_inventory.json`：320 个文件的单据类型清单。
+- 识别结果：33 个项目文件夹、320 个文件；按首勘、二勘/复尺、施工交底、材料出入库、完工验收/质检、工费、完工成本、财务结算、销售报价、图纸、现场媒体等类型做了目录级分类。
+- 边界：
+  - 本轮只读文件夹名和文件名，不抽取 Excel/PPT/PDF 正文里的手机号、金额等敏感单元格。
+  - “发现某类文件”不等于“业务已确认”；只能作为 AI 的缺资料初筛和资料定位索引。
+  - `.xls` 老格式正文暂未解析；下一步需要选 3 到 5 个典型项目做表格正文解析样本。
+- 验证：抽查 CSV 前 8 个项目和 JSON 单据清单，分类能覆盖主单据；已记录已知误差边界，如“成本交底单”单独归为 `cost_briefing`，不混同于“完工成本核算表”。
+
+### 2026-06-13 Codex：路线图未完成重点推进第一轮
+
+- 任务：按“真实项目从交接跑到归档”的路线图，先补财务闭环、岗位工作台 V2、AI 口径和字段映射，不做服务器部署。
+- 修改文件：
+  - `backend/src/routes/projects.js`：禁止 `cost_checked -> finance_settled` 普通按钮空跳；归档前检查首勘、交底、材料回库、完工验收、工费、成本、财务结算等关键单据已确认。
+  - `backend/src/routes/employee-dashboard.js`：工作台分组改成工程/仓库/财务/管理 V2；财务池拆为待工费、待成本、待财务结算、待归档；管理池新增缺资料、超期、卡住；仓库池新增低库存/待盘点。
+  - `backend/src/routes/ai.js`：AI 项目查询复用项目权限过滤；状态工具说明更新到新状态名；返回下一步说明；提示词明确 AI 只能检查/生成草稿，不能绕过人工确认。
+  - `frontend-new/src/views/projects/ProjectDetail.vue`：回库后工费/成本/财务节点改为资料链确认提示，移除财务结算普通按钮入口。
+  - `frontend-new/src/views/EmployeeDashboard.vue`：支持低库存卡片和管理卡点提示展示。
+  - `handoff/2026-06-13-project-document-field-mapping-v1.md`：新增 8 类总监表格字段映射和附件保留口径。
+- 验证：
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/routes/employee-dashboard.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/index.js`
+  - `node --check backend/src/migrate_projects.js`
+  - `node --check backend/src/utils/permissions.js`
+  - `node --check backend/src/routes/material-requests.js`
+  - `npm run build`（在 `frontend-new/`，通过；仅既有 Vite 大 chunk 警告）
+  - 登录冒烟未完成：尝试 `npm run start`（backend/）时，启动迁移写入 SQLite 失败，报 `SqliteError: attempt to write a readonly database`；本轮未强行修改真实数据库权限。
+- 注意事项：
+  - 没有创建真实/测试项目数据；真实样板单试跑仍需用账号在页面完整跑一遍。
+  - 消息通知、水印相机、移动端、总监工作区导入器仍不在本轮范围。
+  - 本次不上传服务器，等 Hermes 审计后再决定提交/部署。
+
+### 2026-06-13 Codex：勘察/验收步骤下发到具体人，财务仍按部门池
+
+- 任务：用户明确消息通知后续再探索；当前具体下发到人只做首勘、二勘/复尺、收尾验收，财务不指定个人，派到财务部门两人共同可见即可。
+- 修改文件：
+  - `backend/src/index.js`、`backend/src/migrate_projects.js`：项目表新增 `survey_user_id`、`recheck_user_id`、`final_inspection_user_id`，并补索引。
+  - `backend/src/routes/projects.js`：项目列表/详情返回三类指派人姓名；首勘、二勘/复尺、收尾验收纳入完成前置条件；被指派人员算项目相关人员；工程角色在 assignedOnly 步骤需要是被安排人员才能推进。
+  - `backend/src/routes/employee-dashboard.js`、`backend/src/utils/permissions.js`：工作台和项目数据范围把三类指派人纳入可见范围。
+  - `frontend-new/src/views/projects/ProjectDetail.vue`：当前步骤和编辑弹窗增加首勘人员、二勘/复尺人员、收尾验收人员选择；顶部执行信息展示三类人员。
+- 设计口径：这不是审批，仍是“完成后自动转交”；财务按 `finance` 角色池处理，不做财务个人派单。
+- 通知状态：未做站内/飞书/短信通知，后续单独探索开源通知方案。
+- 验证：`node --check backend/src/index.js`、`backend/src/routes/projects.js`、`backend/src/routes/employee-dashboard.js`、`backend/src/migrate_projects.js`、`backend/src/utils/permissions.js`、`backend/src/routes/material-requests.js` 通过；`npm run build`（frontend-new/）通过，仅既有 Vite chunk warning。
+- 部署状态：本轮未上传服务器。
+
+### 2026-06-13 Codex：项目工单改成非审批式自动交接 V1
+
+- 任务：用户明确不要审批系统，而是“一个人完成后自动抄送给下一个人”；同时当前限制太宽松，不能随便填一句就跳下一阶段。
+- 修改文件：
+  - `backend/src/routes/projects.js`：新增状态岗位交接口径，项目详情返回当前处理岗位/下一岗位；状态推进日志从“状态变更”改为“自动交接”；工勘、复尺、施工/验收记录、验收结论改为更明确的完成凭证校验；未接入结构化单据的工费结算/成本核算节点先关闭一键推进。
+  - `frontend-new/src/views/projects/ProjectDetail.vue`：当前步骤工作台显示“当前处理/完成后自动抄送”；前端缺项提示同步为工勘日期+不少于 8 字记录、复尺不少于 8 字、施工/验收不少于 10 字、验收通过/允许回库结论；工费/成本占位节点不再显示完成按钮。
+- 设计口径：这不是审核流，不新增审批按钮；完成本岗位动作后，系统按状态自动进入下一岗位待办。
+- 验证：`node --check backend/src/routes/projects.js`、`node --check backend/src/routes/material-requests.js`、`npm run build`（frontend-new/，通过，仅既有 Vite chunk warning）。
+- 部署状态：本轮未上传服务器。
+
+### 2026-06-13 Codex：补修工具损耗 0 元被误判的单据链边角
+
+- 任务：复核 Claude Hermes 审计修复后，发现出库主汇总已保留 `tool_loss_total=0`，但同步项目单据链时仍用 `||`，会把 0 元工具损耗误判为空并回退成工具总额 10%。
+- 修改文件：`backend/src/routes/material-requests.js`，`upsertMaterialOutDocument()` 改为显式判断 `undefined/null/空字符串`，保留真实 0 值。
+- 验证：`node --check backend/src/routes/material-requests.js` 通过。
+- 部署状态：本轮未上传服务器。
 
 ### 2026-06-12 Claude：Hermes 审计修复 — bodyLimit + 回库并发 + 损耗默认值
 

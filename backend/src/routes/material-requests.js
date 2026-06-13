@@ -420,10 +420,13 @@ function roundMoney(value) {
 }
 
 function upsertMaterialOutDocument(db, project, requestRow, items, userId) {
+  const toolFee = requestRow.tool_loss_total !== undefined && requestRow.tool_loss_total !== null && requestRow.tool_loss_total !== ''
+    ? requestRow.tool_loss_total
+    : Number(requestRow.tool_total || 0) * 0.1
   const summary = {
     material_fee: roundMoney(requestRow.material_total),
     auxiliary_fee: roundMoney(requestRow.auxiliary_total),
-    tool_fee: roundMoney(requestRow.tool_loss_total || Number(requestRow.tool_total || 0) * 0.1),
+    tool_fee: roundMoney(toolFee),
     transport_fee: roundMoney(requestRow.transport_fee),
     total_cost: roundMoney(requestRow.total_amount)
   }

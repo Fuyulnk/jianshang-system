@@ -282,10 +282,16 @@ async function sendAiMessage() {
   scrollBottomAi()
 
   try {
-    const response = await fetch('/api/chat', {
+    const response = await fetch('/api/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
-      body: JSON.stringify({ message: text, session_id: aiSessionId.value })
+      body: JSON.stringify({
+        message: text,
+        session_id: aiSessionId.value,
+        agent_key: 'general',
+        context_type: 'page',
+        context_key: 'chat'
+      })
     })
     if (!response.ok) {
       aiMessages.value.push({ role: 'assistant', content: '请求失败，请稍后重试' })

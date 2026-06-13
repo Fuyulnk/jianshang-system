@@ -119,10 +119,16 @@ async function sendMessage() {
   streaming.value = true
 
   try {
-    const response = await fetch('/api/chat', {
+    const response = await fetch('/api/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ message: text, session_id: sessionId.value })
+      body: JSON.stringify({
+        message: text,
+        session_id: sessionId.value,
+        agent_key: 'general',
+        context_type: 'page',
+        context_key: 'ai-chat'
+      })
     })
 
     if (!response.ok) {

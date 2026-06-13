@@ -1,18 +1,14 @@
 import { authMiddleware } from '../middleware/auth.js'
+import { AI_TOOL_REGISTRY } from '../ai/toolRegistry.js'
 
-const TOOL_LABELS = [
-  { name: 'get_accounts', label: '查看账户列表', desc: '获取所有账户名称、类型、余额' },
-  { name: 'get_transactions', label: '查看交易记录', desc: '按时间范围、类型筛选交易流水' },
-  { name: 'get_today_summary', label: '今日交易汇总', desc: '今日收入总额、支出总额、笔数' },
-  { name: 'get_products', label: '查看产品库存', desc: '产品名称、分类、库存数量' },
-  { name: 'get_employees', label: '查看员工信息', desc: '员工列表、部门、职位、状态' },
-  { name: 'get_projects', label: '查看项目工单', desc: '工单列表、阶段筛选' },
-  { name: 'get_system_stats', label: '系统概况统计', desc: '账户数、今日交易额、产品种类、员工数' },
-  { name: 'create_transaction', label: '新增交易记录', desc: '创建一笔收入或支出记录' },
-  { name: 'create_account', label: '新增账户', desc: '创建公司或个人账户' },
-  { name: 'parse_project_handover', label: '解析工单交接', desc: '把微信文字或交接内容拆成项目工单草稿' },
-  { name: 'create_project_workorder', label: '创建项目工单', desc: '在用户确认后创建项目工单' },
-]
+const TOOL_LABELS = AI_TOOL_REGISTRY.map(tool => ({
+  name: tool.name,
+  label: tool.label,
+  desc: tool.desc,
+  tier: tool.tier,
+  risk_level: tool.risk_level,
+  requires_confirmation: !!tool.requires_confirmation
+}))
 
 export default function aiPermissionsRoutes(server, db) {
   // 获取工具列表（含中文名）

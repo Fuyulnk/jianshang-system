@@ -32,21 +32,48 @@ const LEGACY_STATUS_ALIASES = {
 }
 
 const PROJECT_TRANSITIONS = {
-  handover_received: { next: 'survey_pending', roles: ['super_admin', 'admin', 'engineering'], required: ['handover'] },
-  survey_pending: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], required: ['survey'] },
-  survey_done: { next: 'recheck_done', roles: ['super_admin', 'admin', 'engineering'], required: ['condition_note'] },
+  handover_received: { next: 'survey_pending', roles: ['super_admin', 'admin', 'engineering'], required: ['handover', 'survey_assignee'] },
+  survey_pending: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], assignedOnly: true, required: ['survey'] },
+  survey_done: { next: 'recheck_done', roles: ['super_admin', 'admin', 'engineering'], assignedOnly: true, required: ['recheck_assignee', 'condition_note'] },
   recheck_done: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee', 'briefing_date'] },
   material_out: { next: 'in_progress', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['start_date', 'expected_end_date', 'onsite_team'] },
-  in_progress: { next: 'inspection_done', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['end_date', 'acceptance_date', 'construction_note', 'inspection_pass'] },
+  in_progress: { next: 'inspection_done', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['final_inspection_assignee', 'end_date', 'acceptance_date', 'construction_note', 'inspection_pass'] },
   inspection_done: { next: 'material_returned', roles: ['super_admin', 'admin', 'warehouse', 'engineering'], required: ['end_date', 'material_return'] },
-  material_returned: { next: 'labor_settled', roles: ['super_admin', 'admin', 'finance', 'engineering'] },
-  labor_settled: { next: 'cost_checked', roles: ['super_admin', 'admin', 'finance'] },
-  cost_checked: { next: 'finance_settled', roles: ['super_admin', 'admin', 'finance'], required: ['settlement_amount'] },
-  finance_settled: { next: 'archived', roles: ['super_admin', 'admin', 'finance'] },
+  material_returned: { next: 'labor_settled', roles: ['super_admin'], emergencyOnly: true },
+  labor_settled: { next: 'cost_checked', roles: ['super_admin'], emergencyOnly: true },
+  cost_checked: { next: 'finance_settled', roles: ['super_admin'], emergencyOnly: true },
+  finance_settled: { next: 'archived', roles: ['super_admin', 'admin', 'finance'], required: ['archive_documents'] },
   archived: { next: 'repair_requested', roles: ['super_admin', 'admin', 'engineering'] },
   repair_requested: { next: 'repair_assigned', roles: ['super_admin', 'admin', 'engineering'] },
   repair_assigned: { next: 'repair_done', roles: ['super_admin', 'admin', 'engineering'], required: ['construction_note'] },
 }
+
+const STATUS_HANDOFFS = {
+  handover_received: { current: '总监/工程部', next: '工程部/监理' },
+  survey_pending: { current: '工程部/监理', next: '总监/工程部' },
+  survey_done: { current: '总监/工程部', next: '总监/工程部' },
+  recheck_done: { current: '总监/工程部', next: '仓管' },
+  briefing_done: { current: '仓管', next: '仓管确认出库后转工程/监理' },
+  material_requested: { current: '仓管', next: '工程/监理' },
+  material_out: { current: '工程/监理/施工负责人', next: '工程/监理' },
+  in_progress: { current: '工程/监理/施工负责人', next: '仓管' },
+  inspection_done: { current: '仓管', next: '财务' },
+  material_returned: { current: '财务/工程', next: '财务' },
+  labor_settled: { current: '财务', next: '财务' },
+  cost_checked: { current: '财务', next: '财务/归档' },
+  finance_settled: { current: '财务/归档', next: '已完成' },
+  archived: { current: '已归档', next: '售后按需发起' }
+}
+
+const ARCHIVE_REQUIRED_DOCUMENTS = [
+  ['survey_initial', '首次工勘表'],
+  ['briefing', '施工交底单'],
+  ['material_io', '材料回库单'],
+  ['completion_inspection', '完工验收质检表'],
+  ['labor_settlement', '施工班组工费结算单'],
+  ['cost_check', '完工成本核算表'],
+  ['finance_settlement', '财务结算/归档凭证']
+]
 
 export default function projectRoutes(server, db) {
   // 可分配人员：项目负责人/施工负责人都先绑定系统用户，后续再和员工档案打通。
@@ -102,11 +129,17 @@ export default function projectRoutes(server, db) {
     let sql = `
       SELECT p.*, u.username as creator_name,
              mu.username as manager_username, mu.real_name as manager_real_name,
-             au.username as assignee_username, au.real_name as assignee_real_name
+             au.username as assignee_username, au.real_name as assignee_real_name,
+             su.username as survey_username, su.real_name as survey_real_name,
+             ru.username as recheck_username, ru.real_name as recheck_real_name,
+             fu.username as final_inspection_username, fu.real_name as final_inspection_real_name
       FROM projects p
       LEFT JOIN users u ON p.created_by = u.id
       LEFT JOIN users mu ON p.manager_user_id = mu.id
       LEFT JOIN users au ON p.assignee_user_id = au.id
+      LEFT JOIN users su ON p.survey_user_id = su.id
+      LEFT JOIN users ru ON p.recheck_user_id = ru.id
+      LEFT JOIN users fu ON p.final_inspection_user_id = fu.id
       WHERE 1=1
     `
     const params = []
@@ -117,13 +150,16 @@ export default function projectRoutes(server, db) {
           p.created_by = ?
           OR p.manager_user_id = ?
           OR p.assignee_user_id = ?
+          OR p.survey_user_id = ?
+          OR p.recheck_user_id = ?
+          OR p.final_inspection_user_id = ?
           OR EXISTS (
             SELECT 1 FROM json_each(COALESCE(p.crew_member_user_ids, '[]'))
             WHERE CAST(value AS INTEGER) = ?
           )
         )
       `
-      params.push(userId, userId, userId, userId)
+      params.push(userId, userId, userId, userId, userId, userId, userId)
     }
 
     if (keyword) {
@@ -170,7 +206,7 @@ export default function projectRoutes(server, db) {
     const userId = request.user.userId
     const {
       name, customer, phone, source, total_amount, deposit_amount,
-      manager_user_id, assignee_user_id,
+      manager_user_id, assignee_user_id, survey_user_id, recheck_user_id, final_inspection_user_id,
       order_taker, order_date, external_order_no, handover_note
     } = request.body
     if (!name || !customer) return { success: false, message: '项目名称和客户为必填' }
@@ -181,9 +217,9 @@ export default function projectRoutes(server, db) {
         name, customer, phone, address, address_province, address_city, address_detail,
         source, order_taker, order_date, external_order_no, handover_note,
         total_amount, deposit_amount,
-        manager_user_id, assignee_user_id, status, created_by
+        manager_user_id, assignee_user_id, survey_user_id, recheck_user_id, final_inspection_user_id, status, created_by
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       name,
       customer,
@@ -201,6 +237,9 @@ export default function projectRoutes(server, db) {
       toNumber(deposit_amount),
       toInt(manager_user_id),
       toInt(assignee_user_id),
+      toInt(survey_user_id),
+      toInt(recheck_user_id),
+      toInt(final_inspection_user_id),
       'handover_received',
       userId
     )
@@ -215,11 +254,17 @@ export default function projectRoutes(server, db) {
     const project = db.prepare(`
       SELECT p.*, u.username as creator_name,
              mu.username as manager_username, mu.real_name as manager_real_name,
-             au.username as assignee_username, au.real_name as assignee_real_name
+             au.username as assignee_username, au.real_name as assignee_real_name,
+             su.username as survey_username, su.real_name as survey_real_name,
+             ru.username as recheck_username, ru.real_name as recheck_real_name,
+             fu.username as final_inspection_username, fu.real_name as final_inspection_real_name
       FROM projects p
       LEFT JOIN users u ON p.created_by = u.id
       LEFT JOIN users mu ON p.manager_user_id = mu.id
       LEFT JOIN users au ON p.assignee_user_id = au.id
+      LEFT JOIN users su ON p.survey_user_id = su.id
+      LEFT JOIN users ru ON p.recheck_user_id = ru.id
+      LEFT JOIN users fu ON p.final_inspection_user_id = fu.id
       WHERE p.id = ?
     `).get(request.params.id)
     if (!project) return reply.code(404).send({ success: false, message: '项目不存在' })
@@ -251,7 +296,7 @@ export default function projectRoutes(server, db) {
       'material_out_status', 'material_out_note', 'material_return_status', 'material_return_note',
       'start_date', 'expected_end_date', 'construction_note',
       'end_date', 'acceptance_date', 'total_amount', 'deposit_amount', 'settlement_amount',
-      'manager_user_id', 'assignee_user_id']
+      'manager_user_id', 'assignee_user_id', 'survey_user_id', 'recheck_user_id', 'final_inspection_user_id']
     const fields = canProjectAccess(db, request.user, 'can_edit')
       ? baseFields
       : ['start_date', 'expected_end_date', 'construction_note', 'end_date', 'crew_status']
@@ -303,15 +348,25 @@ export default function projectRoutes(server, db) {
 
     const targetStatus = canonicalProjectStatus(request.body.status)
     if (!STATUS_LABELS[targetStatus]) return { success: false, message: '无效状态' }
-    const guard = canAdvanceProject(request.user, project, targetStatus)
+    const guard = canAdvanceProject(db, request.user, project, targetStatus, {
+      emergencyConfirmed: request.body?.emergency_confirmed,
+      emergencyReason: request.body?.emergency_reason
+    })
     if (!guard.ok) {
       reply.code(403).send({ success: false, message: guard.message })
       return
     }
 
     db.prepare("UPDATE projects SET status = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(targetStatus, project.id)
-    addLog(db, project.id, '状态变更', request.user.username,
-      `状态更新: ${statusMeta(project.status).label} → ${statusMeta(targetStatus).label}`)
+    addLog(
+      db,
+      project.id,
+      guard.emergency ? '超级管理员应急推进' : '自动交接',
+      request.user.username,
+      guard.emergency
+        ? emergencyTransitionLogContent(project.status, targetStatus, request.body?.emergency_reason)
+        : transitionLogContent(project.status, targetStatus)
+    )
 
     return { success: true }
   })
@@ -367,6 +422,7 @@ function decorateProjectStatus(project) {
   const rawStatus = project.status
   const canonicalStatus = canonicalProjectStatus(rawStatus)
   const meta = { ...statusMeta(rawStatus) }
+  const handoff = handoffForProject(project, canonicalStatus)
   if (canonicalStatus === 'recheck_done' && /无需复尺|跳过复尺/.test(String(project.condition_note || ''))) {
     meta.label = '无需复尺，待施工交底'
   }
@@ -376,7 +432,9 @@ function decorateProjectStatus(project) {
     status: canonicalStatus,
     status_label: meta.label,
     phase_label: meta.phaseLabel,
-    phase: meta.phase
+    phase: meta.phase,
+    current_owner_label: handoff.current || '',
+    next_owner_label: handoff.next || ''
   }
 }
 
@@ -420,7 +478,7 @@ function canUpdateProject(db, user, project) {
   return ['employee', 'engineering'].includes(user.role) && isUserInProjectCrew(user.userId, project)
 }
 
-function canAdvanceProject(user, project, targetStatus) {
+function canAdvanceProject(db, user, project, targetStatus, options = {}) {
   const currentStatus = canonicalProjectStatus(project.status)
   const transition = PROJECT_TRANSITIONS[currentStatus]
   if (!transition || transition.next !== targetStatus) {
@@ -429,36 +487,104 @@ function canAdvanceProject(user, project, targetStatus) {
 
   const roleAllowed = transition.roles.includes(user.role)
   if (!roleAllowed) return { ok: false, message: '当前角色不能执行这一步' }
-  if (transition.assignedOnly && user.role === 'employee' && !isUserInProjectCrew(user.userId, project)) {
-    return { ok: false, message: '只有该项目施工人员才能执行这一步' }
+  if (transition.emergencyOnly) {
+    if (user.role !== 'super_admin') return { ok: false, message: '该结算节点只能通过对应单据确认推进' }
+    if (!options.emergencyConfirmed) {
+      return { ok: false, message: '该结算节点默认必须通过单据确认；超级管理员应急推进需传入 emergency_confirmed=true' }
+    }
+    return { ok: true, emergency: true }
+  }
+  if (transition.assignedOnly && ['employee', 'engineering'].includes(user.role) && !isUserInProjectCrew(user.userId, project)) {
+    return { ok: false, message: '只有该步骤被安排人员才能执行这一步' }
   }
 
-  const missing = missingRequired(project, transition.required || [])
+  const missing = missingRequired(db, project, transition.required || [])
   if (missing.length) {
     return { ok: false, message: `请先补全：${missing.join('、')}` }
   }
   return { ok: true }
 }
 
-function missingRequired(project, required) {
+function missingRequired(db, project, required) {
   const missing = []
   for (const key of required) {
     if (key === 'handover') missing.push(...missingHandoverFields(project))
-    if (key === 'survey' && !project.survey_report && !project.survey_date) missing.push('工勘记录或工勘日期')
+    if (key === 'survey_assignee' && !project.survey_user_id) missing.push('首勘人员')
+    if (key === 'survey' && !project.survey_date) missing.push('工勘日期')
+    if (key === 'survey' && !hasMeaningfulText(project.survey_report, 8)) missing.push('不少于 8 字的工勘记录')
+    if (key === 'recheck_assignee' && !project.recheck_user_id) missing.push('二勘/复尺人员')
     if (key === 'assignee' && !project.assignee_user_id && !project.team_leader && !hasCrewMembers(project)) missing.push('施工负责人、班组长或施工成员')
     if (key === 'briefing_date' && !project.briefing_date) missing.push('交底日期')
-    if (key === 'condition_note' && !project.condition_note) missing.push('复尺/开工条件复核记录')
+    if (key === 'condition_note' && !hasMeaningfulText(project.condition_note, 8)) missing.push('不少于 8 字的复尺/开工条件复核记录')
     if (key === 'start_date' && !project.start_date) missing.push('开工日期')
     if (key === 'expected_end_date' && !project.expected_end_date) missing.push('预计完工日期')
     if (key === 'onsite_team' && !project.assignee_user_id && !project.team_leader && !hasCrewMembers(project)) missing.push('施工负责人、班组长或施工成员')
-    if (key === 'construction_note' && !project.construction_note) missing.push('施工/验收记录')
+    if (key === 'construction_note' && !hasMeaningfulText(project.construction_note, 10)) missing.push('不少于 10 字的施工/验收记录')
+    if (key === 'final_inspection_assignee' && !project.final_inspection_user_id) missing.push('收尾验收人员')
     if (key === 'end_date' && !project.end_date) missing.push('完工日期')
     if (key === 'acceptance_date' && !project.acceptance_date) missing.push('验收日期')
-    if (key === 'inspection_pass' && /需要整改|不允许进入回库|整改未完成/.test(String(project.construction_note || ''))) missing.push('验收通过结论')
+    if (key === 'inspection_pass' && !hasPassConclusion(project.construction_note)) missing.push('明确的验收通过/允许回库结论')
     if (key === 'material_return' && project.material_return_status !== 'done') missing.push('材料回库状态')
     if (key === 'settlement_amount' && !Number(project.settlement_amount)) missing.push('结算金额')
+    if (key === 'archive_documents') missing.push(...missingArchiveDocuments(db, project.id))
   }
   return missing
+}
+
+function missingArchiveDocuments(db, projectId) {
+  const rows = db.prepare(`
+    SELECT document_type, confirmed_data
+    FROM project_documents
+    WHERE project_id = ?
+    ORDER BY id DESC
+  `).all(projectId)
+  const latest = {}
+  for (const row of rows) {
+    if (!latest[row.document_type]) latest[row.document_type] = row
+  }
+  const missing = []
+  for (const [type, label] of ARCHIVE_REQUIRED_DOCUMENTS) {
+    const data = parseJsonSafe(latest[type]?.confirmed_data, {})
+    if (!data.step_confirmed) missing.push(label)
+  }
+  return missing
+}
+
+function handoffForProject(project, status) {
+  const handoff = { ...(STATUS_HANDOFFS[status] || {}) }
+  if (status === 'handover_received') handoff.next = `首勘：${displayAssigned(project.survey_real_name, project.survey_username)}`
+  if (status === 'survey_pending') handoff.current = `首勘：${displayAssigned(project.survey_real_name, project.survey_username)}`
+  if (status === 'survey_done') handoff.current = `二勘/复尺：${displayAssigned(project.recheck_real_name, project.recheck_username)}`
+  if (status === 'in_progress') handoff.next = `收尾验收：${displayAssigned(project.final_inspection_real_name, project.final_inspection_username)}`
+  return handoff
+}
+
+function displayAssigned(realName, username) {
+  return realName || username || '待安排'
+}
+
+function transitionLogContent(fromStatus, targetStatus) {
+  const from = statusMeta(fromStatus).label
+  const to = statusMeta(targetStatus).label
+  const nextOwner = STATUS_HANDOFFS[targetStatus]?.current || STATUS_HANDOFFS[canonicalProjectStatus(fromStatus)]?.next || '下一岗位'
+  return `已完成「${from}」，系统自动抄送并转交给「${nextOwner}」处理；下一步为「${to}」。`
+}
+
+function emergencyTransitionLogContent(fromStatus, targetStatus, reason) {
+  const from = statusMeta(fromStatus).label
+  const to = statusMeta(targetStatus).label
+  const text = String(reason || '').trim()
+  return `超级管理员应急将项目从「${from}」推进到「${to}」。此通道仅用于单据确认流程异常时兜底；${text ? `原因：${text}` : '未填写原因'}。`
+}
+
+function hasMeaningfulText(value, minLength = 1) {
+  return String(value || '').trim().length >= minLength
+}
+
+function hasPassConclusion(value) {
+  const text = String(value || '')
+  if (/需要整改|不允许进入回库|整改未完成|验收不通过/.test(text)) return false
+  return /验收通过|允许进入回库|客户确认|内部验收通过|合格/.test(text)
 }
 
 function missingHandoverFields(project) {
@@ -484,7 +610,7 @@ function toNumber(value) {
 }
 
 function formatFieldValue(field, value) {
-  if (['manager_user_id', 'assignee_user_id'].includes(field)) return toInt(value)
+  if (['manager_user_id', 'assignee_user_id', 'survey_user_id', 'recheck_user_id', 'final_inspection_user_id'].includes(field)) return toInt(value)
   if (['total_amount', 'deposit_amount', 'settlement_amount'].includes(field)) return toNumber(value)
   if (field === 'crew_member_user_ids') return normalizeCrewMemberIds(value)
   return value
@@ -506,7 +632,12 @@ function hasCrewMembers(project) {
 }
 
 function isUserInProjectCrew(userId, project) {
-  return project.assignee_user_id === userId || parseCrewMemberIds(project.crew_member_user_ids).includes(userId)
+  return [
+    project.assignee_user_id,
+    project.survey_user_id,
+    project.recheck_user_id,
+    project.final_inspection_user_id
+  ].includes(userId) || parseCrewMemberIds(project.crew_member_user_ids).includes(userId)
 }
 
 function parseCrewMemberIds(value) {
@@ -515,6 +646,14 @@ function parseCrewMemberIds(value) {
     return Array.isArray(parsed) ? parsed.map(toInt).filter(Boolean) : []
   } catch {
     return []
+  }
+}
+
+function parseJsonSafe(value, fallback) {
+  try {
+    return value ? JSON.parse(value) : fallback
+  } catch {
+    return fallback
   }
 }
 

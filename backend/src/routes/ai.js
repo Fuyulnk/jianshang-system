@@ -1,8 +1,9 @@
 // AI 聊天模块 - 调 DeepSeek API + 工具调用 + 流式返回
 import crypto from 'crypto'
 import { authMiddleware } from '../middleware/auth.js'
-import { canAccessModule } from '../utils/permissions.js'
+import { canAccessModule, canAccessProjectRecord } from '../utils/permissions.js'
 import { missingCoreFields, normalizeProjectDraft, parseProjectHandoverText } from '../utils/projectImport.js'
+import { AI_TOOL_REGISTRY, buildToolSchemas, toolMeta } from '../ai/toolRegistry.js'
 
 const KB_SERVER = 'http://127.0.0.1:18790'
 const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
@@ -86,153 +87,29 @@ function projectStatusesForFilter(status) {
   return [...statuses]
 }
 
-// ====== 工具定义 ======
-const TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'get_accounts',
-      description: '获取所有账户列表，包括名称、类型、初始余额和当前余额',
-      parameters: { type: 'object', properties: {}, required: [] }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_transactions',
-      description: '获取交易记录列表，可按时间范围、类型筛选',
-      parameters: {
-        type: 'object',
-        properties: {
-          days: { type: 'number', description: '近N天的交易，默认30' },
-          type: { type: 'string', enum: ['income', 'expense'], description: '交易类型' }
-        },
-        required: []
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_today_summary',
-      description: '获取今日交易汇总：收入总额、支出总额、交易笔数',
-      parameters: { type: 'object', properties: {}, required: [] }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_products',
-      description: '获取所有产品库存信息，包括名称、分类、库存数量',
-      parameters: { type: 'object', properties: {}, required: [] }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_employees',
-      description: '获取员工列表，包括姓名、部门、职位、状态',
-      parameters: { type: 'object', properties: {}, required: [] }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_projects',
-      description: '获取项目工单列表，可按阶段筛选',
-      parameters: {
-        type: 'object',
-        properties: {
-          phase: { type: 'number', description: '阶段编号 1=交接勘察 2=复尺出库 3=施工验收 4=回库核算 5=财务归档 6=售后处理' },
-          status: { type: 'string', description: '工单状态，如 handover_received、briefing_done、material_out、in_progress、archived' }
-        },
-        required: []
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_system_stats',
-      description: '获取系统概况统计：账户总数、今日交易额、产品种类数、员工人数',
-      parameters: { type: 'object', properties: {}, required: [] }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_transaction',
-      description: '新增一笔交易记录（收入或支出）',
-      parameters: {
-        type: 'object',
-        properties: {
-          account_id: { type: 'number', description: '账户ID，先调用 get_accounts 获取' },
-          type: { type: 'string', enum: ['income', 'expense'], description: '收入/支出' },
-          amount: { type: 'number', description: '金额，正数' },
-          category: { type: 'string', description: '分类，如材料费、工资、收入等' },
-          description: { type: 'string', description: '备注说明' },
-          party: { type: 'string', description: '交易对方' }
-        },
-        required: ['account_id', 'type', 'amount', 'category']
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_account',
-      description: '新增一个账户（公司或个人）',
-      parameters: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: '账户名称' },
-          type: { type: 'string', enum: ['company', 'personal'], description: '账户类型' }
-        },
-        required: ['name', 'type']
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'parse_project_handover',
-      description: '把门店/渠道交接文字拆分成一个或多个项目工单草稿，只解析不入库',
-      parameters: {
-        type: 'object',
-        properties: {
-          raw_text: { type: 'string', description: '微信、电话记录或交接单文字' }
-        },
-        required: ['raw_text']
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_project_workorder',
-      description: '在用户明确确认后创建项目工单；不允许替用户跳过确认',
-      parameters: {
-        type: 'object',
-        properties: {
-          confirmed: { type: 'boolean', description: '用户是否已明确确认创建' },
-          name: { type: 'string', description: '工单名称' },
-          customer: { type: 'string', description: '业主/客户' },
-          phone: { type: 'string', description: '业主联系方式，可为手机号、微信联系、现场联系等' },
-          source: { type: 'string', description: '来源门店/渠道' },
-          order_taker: { type: 'string', description: '门店接单人' },
-          order_date: { type: 'string', description: '接单日期 YYYY-MM-DD' },
-          external_order_no: { type: 'string', description: '门店单号/合同号' },
-          address_province: { type: 'string', description: '省份' },
-          address_city: { type: 'string', description: '城市' },
-          address_detail: { type: 'string', description: '详细地址' },
-          handover_note: { type: 'string', description: '交接备注' },
-          total_amount: { type: 'number', description: '合同金额' }
-        },
-        required: ['confirmed', 'name', 'customer']
-      }
-    }
-  }
-]
+function projectNextStep(status) {
+  return {
+    handover_received: '安排首勘人员，补齐门店交接资料后进入待现场勘察。',
+    survey_pending: '首勘人员补齐工勘日期和现场记录，确认首次工勘结论。',
+    survey_done: '安排二勘/复尺人员，补齐复尺或开工条件复核记录。',
+    recheck_done: '确认施工交底单，补齐班组、施工负责人和交底日期。',
+    briefing_done: '仓库处理材料出库申请并确认出库。',
+    material_requested: '仓库核对库存，确认材料出库。',
+    material_out: '工程/施工负责人确认开工日期、预计完工日期和进场人员。',
+    in_progress: '收尾验收人员确认完工日期、验收日期和验收通过结论。',
+    inspection_done: '仓管填写并确认材料回库单。',
+    material_returned: '财务/工程确认施工班组工费结算单。',
+    labor_settled: '财务确认完工成本核算表。',
+    cost_checked: '财务确认财务结算/归档凭证，收款状态需为已收齐。',
+    finance_settled: '检查关键单据链完整后归档。',
+    archived: '主工程已归档；后续售后单独发起。',
+    repair_requested: '安排售后维修负责人。',
+    repair_assigned: '记录售后处理结果并关闭售后。',
+    repair_done: '售后已完成。'
+  }[status] || '按项目工单当前状态补齐缺失资料。'
+}
+
+const TOOLS = buildToolSchemas()
 
 // ====== 工具执行器 ======
 function executeTool(name, args, db, user) {
@@ -280,7 +157,8 @@ function executeTool(name, args, db, user) {
       let sql = `
         SELECT p.id, p.name, p.customer, p.phone, p.address, p.status,
                p.total_amount, p.deposit_amount, p.settlement_amount,
-               p.manager_user_id, p.assignee_user_id, p.created_at, p.updated_at,
+               p.manager_user_id, p.assignee_user_id, p.survey_user_id, p.recheck_user_id, p.final_inspection_user_id,
+               p.crew_member_user_ids, p.created_by, p.created_at, p.updated_at,
                mu.username as manager_username, mu.real_name as manager_real_name,
                au.username as assignee_username, au.real_name as assignee_real_name
         FROM projects p
@@ -289,10 +167,6 @@ function executeTool(name, args, db, user) {
         WHERE 1=1
       `
       const params = []
-      if (!canSeeAllProjects(user.role)) {
-        sql += ' AND (p.created_by = ? OR p.manager_user_id = ? OR p.assignee_user_id = ?)'
-        params.push(user.userId, user.userId, user.userId)
-      }
       if (args.phase) {
         const statuses = projectStatusesForPhase(args.phase)
         if (statuses.length) {
@@ -308,14 +182,17 @@ function executeTool(name, args, db, user) {
         }
       }
       sql += ' ORDER BY p.created_at DESC LIMIT 100'
-      const data = db.prepare(sql).all(...params).map(p => ({
-        ...p,
-        raw_status: p.status,
-        status: canonicalProjectStatus(p.status),
-        status_label: projectStatusMeta(p.status).label,
-        phase: projectStatusMeta(p.status).phase,
-        phase_label: projectStatusMeta(p.status).phaseLabel
-      }))
+      const data = db.prepare(sql).all(...params)
+        .filter(project => canAccessProjectRecord(db, user, project))
+        .map(p => ({
+          ...p,
+          raw_status: p.status,
+          status: canonicalProjectStatus(p.status),
+          status_label: projectStatusMeta(p.status).label,
+          phase: projectStatusMeta(p.status).phase,
+          phase_label: projectStatusMeta(p.status).phaseLabel,
+          next_step: projectNextStep(canonicalProjectStatus(p.status))
+        }))
       return JSON.stringify({ success: true, count: data.length, data })
     }
 
@@ -327,12 +204,24 @@ function executeTool(name, args, db, user) {
       return JSON.stringify({ success: true, data: { accounts, today_transactions: todayTx, products, employees } })
     }
 
+    case 'parse_finance_transaction': {
+      const draft = parseFinanceTransactionDraft(String(args.raw_text || ''), db)
+      return JSON.stringify({
+        success: true,
+        message: '已生成收支草稿，写入前必须由用户确认',
+        data: draft
+      })
+    }
+
     default:
       return JSON.stringify({ success: false, message: `未知工具: ${name}` })
 
     case 'create_transaction': {
       if (!canAccessModule(db, user, 'transactions', 'can_create')) {
         return JSON.stringify({ success: false, message: '没有创建交易的权限' })
+      }
+      if (!args.confirmed) {
+        return JSON.stringify({ success: false, message: '写入流水前必须先让用户明确确认' })
       }
       if (!args.account_id || !args.amount || args.amount <= 0) {
         return JSON.stringify({ success: false, message: '参数无效：account_id 和 amount（正数）必填' })
@@ -354,6 +243,9 @@ function executeTool(name, args, db, user) {
     case 'create_account': {
       if (!canAccessModule(db, user, 'accounts', 'can_create')) {
         return JSON.stringify({ success: false, message: '没有创建账户的权限' })
+      }
+      if (!args.confirmed) {
+        return JSON.stringify({ success: false, message: '创建账户前必须先让用户明确确认' })
       }
       if (!args.name) return JSON.stringify({ success: false, message: '账户名称必填' })
       db.prepare('INSERT INTO accounts (name, type) VALUES (?, ?)').run(args.name, args.type || 'personal')
@@ -410,6 +302,109 @@ function executeTool(name, args, db, user) {
   }
 }
 
+function parseFinanceTransactionDraft(rawText, db) {
+  const text = rawText.trim()
+  const amountMatch = text.match(/(?:收入|收到|收|支付|支出|付|扣|退款|报销)?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
+  const amount = amountMatch ? Number(amountMatch[1]) : 0
+  const type = /收入|收到|收款|进账|回款/.test(text) && !/支付|支出|付|扣/.test(text) ? 'income' : 'expense'
+  const accounts = db.prepare('SELECT id, name FROM accounts ORDER BY id').all()
+  const accountAlias = loadFinanceAccountAliases(db)
+  let account = null
+  for (const item of accounts) {
+    if (text.includes(item.name)) {
+      account = item
+      break
+    }
+  }
+  if (!account) {
+    for (const { alias, account_name: standard } of accountAlias) {
+      if (!text.includes(alias)) continue
+      account = findAccountByName(accounts, standard)
+      if (account) break
+    }
+  }
+  const category = inferFinanceCategory(text, type)
+  const party = inferCounterparty(text)
+  return {
+    raw_text: text,
+    type,
+    type_label: type === 'income' ? '收入' : '支出',
+    amount,
+    account_id: account?.id || 0,
+    account_name: account?.name || '',
+    category,
+    party,
+    description: cleanFinanceDescription(text),
+    confidence: amount > 0 ? 'medium' : 'low',
+    needs_confirmation: true,
+    warnings: [
+      ...(!amount ? ['未识别到金额'] : []),
+      ...(!account ? ['未匹配到账户，请人工选择'] : [])
+    ]
+  }
+}
+
+function loadFinanceAccountAliases(db) {
+  try {
+    return db.prepare(`
+      SELECT alias, account_name
+      FROM finance_account_aliases
+      WHERE enabled = 1
+      ORDER BY length(alias) DESC, id ASC
+    `).all()
+  } catch {
+    return []
+  }
+}
+
+function findAccountByName(accounts, targetName) {
+  const target = normalizeAccountName(targetName)
+  return accounts.find(item => {
+    const current = normalizeAccountName(item.name)
+    return item.name === targetName || current === target || current.includes(target) || target.includes(current)
+  }) || null
+}
+
+function normalizeAccountName(value) {
+  return String(value || '').replace(/[·\s　]/g, '')
+}
+
+function inferFinanceCategory(text, type) {
+  if (/退款|退货退款/.test(text)) return '退款'
+  if (/工资|结算工资/.test(text)) return type === 'income' ? '工资款' : '工人工资'
+  if (/预支|借支/.test(text)) return /差旅|出差/.test(text) ? '差旅' : '借支'
+  if (/报销/.test(text)) return '报销'
+  if (/货拉拉|打车|加油|停车|高速/.test(text)) return '交通费'
+  if (/手续费|代发/.test(text)) return '手续费'
+  if (/个税|社保|税费/.test(text)) return '税费'
+  if (/茶叶|招待|应酬/.test(text)) return '应酬费'
+  if (/货款|材料|涂料|底漆|面漆|结算单/.test(text)) return type === 'income' ? '货款' : '材料采购'
+  if (/返点|渠道返款/.test(text)) return '返点支出'
+  if (/装修|电线|工地/.test(text)) return type === 'income' ? '项目收入' : '装修费'
+  if (/生活费/.test(text)) return '生活费'
+  return type === 'income' ? '项目收入' : '其他'
+}
+
+function inferCounterparty(text) {
+  const patterns = [
+    /(?:给|付给|支付给|收到|收)([^，,。；;\s]{2,12})/,
+    /对方[:：]\s*([^，,。；;\s]{2,12})/
+  ]
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (match?.[1]) return match[1].replace(/[0-9.]/g, '').trim()
+  }
+  return ''
+}
+
+function cleanFinanceDescription(text) {
+  return text
+    .replace(/[0-9]+(?:\.[0-9]{1,2})?/g, '')
+    .replace(/收入|收到|收款|支付|支出|付款|扣款/g, '')
+    .trim()
+    .slice(0, 120)
+}
+
 // ====== 知识库搜索 ======
 async function searchKnowledgeBase(query, topK = 3) {
   try {
@@ -425,7 +420,7 @@ async function searchKnowledgeBase(query, topK = 3) {
 }
 
 // ====== AI 工具权限过滤 ======
-function getAllowedTools(userId, roleName, db) {
+function getAllowedTools(userId, roleName, db, agent) {
   const role = db.prepare('SELECT id FROM roles WHERE name = ?').get(roleName)
   if (!role) return []
 
@@ -451,11 +446,11 @@ function getAllowedTools(userId, roleName, db) {
       if (rp.allowed) result.push(rp.tool_name)
     }
   }
-  return result
-}
-
-function canSeeAllProjects(role) {
-  return ['super_admin', 'admin', 'finance', 'warehouse'].includes(role)
+  if (!agent?.id) return result
+  const agentRows = db.prepare('SELECT tool_name, allowed FROM ai_agent_tools WHERE agent_id = ?').all(agent.id)
+  if (!agentRows.length) return result
+  const agentAllowed = new Set(agentRows.filter(row => row.allowed).map(row => row.tool_name))
+  return result.filter(tool => agentAllowed.has(tool))
 }
 
 function getRateLimits(role) {
@@ -488,8 +483,9 @@ function logAiAudit(db, user, data) {
   db.prepare(`
     INSERT INTO ai_audit_logs (
       user_id, employee_id, role, action_type, tool_name, request_summary,
-      result_summary, status, error_message, model, input_tokens, output_tokens, duration_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      result_summary, status, error_message, model, input_tokens, output_tokens, duration_ms,
+      agent_id, context_key, risk_level, confirmation_required
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     user.userId || 0,
     user.employeeId || 0,
@@ -503,7 +499,11 @@ function logAiAudit(db, user, data) {
     data.model || '',
     data.inputTokens || 0,
     data.outputTokens || 0,
-    data.durationMs || 0
+    data.durationMs || 0,
+    data.agentId || 0,
+    summarize(data.contextKey || '', 120),
+    data.riskLevel || '',
+    data.confirmationRequired ? 1 : 0
   )
 }
 
@@ -512,7 +512,7 @@ function summarize(value, limit = 500) {
   return text.length > limit ? `${text.slice(0, limit)}...` : text
 }
 
-function getSystemPrompt(username) {
+function getSystemPrompt(username, agent, memorySummary = '') {
   return `你是简尚系统的智能助手，名字叫"简尚小助手"。
 
 ## 简尚真实业务
@@ -527,6 +527,14 @@ function getSystemPrompt(username) {
 8. 售后是独立事件：repair_requested / repair_assigned / repair_done，不倒退主工程流程。
 
 你描述项目状态时必须使用以上口径，不要再说“项目前期、准备阶段、施工执行”这种旧阶段名称。
+你可以说明下一步缺什么、帮用户生成草稿或检查单据，但不能绕过人工确认。工费、成本、财务结算必须分别通过施工班组工费结算单、完工成本核算表、财务结算/归档凭证确认推进。
+普通员工只能查看和自己相关的项目；如果用户询问无关项目或工具没有返回数据，应明确说明“没有权限或没有查到可见数据”，不要猜测。
+
+## 当前分身
+名称：${agent?.name || '简尚总助手'}
+用途：${agent?.purpose || '系统助手'}
+分身提示词：${agent?.base_prompt || '优先查询系统事实，再简洁回答。'}
+${memorySummary ? `\n## 当前场景轻记忆\n${memorySummary}` : ''}
 
 ## 你的能力
 1. 回答关于公司财务、制度、流程、产品、合同等方面的问题
@@ -578,144 +586,394 @@ async function callDeepSeek(messages, config, tools) {
   return await response.json()
 }
 
-export default function aiRoutes(server, db) {
-  // AI 聊天（流式）
-  server.post('/api/chat', async (request, reply) => {
-    if (authMiddleware(request, reply) === false) return
-    const user = request.user
+async function handleAiChat(request, reply, db) {
+  if (authMiddleware(request, reply) === false) return
+  const user = request.user
+  const { message, session_id, agent_id, agent_key, context_type = 'direct', context_key = '' } = request.body || {}
+  if (!message) {
+    reply.code(400).send({ success: false, message: '消息不能为空' })
+    return
+  }
 
-    const { message, session_id } = request.body
-    if (!message) {
-      reply.code(400).send({ success: false, message: '消息不能为空' })
-      return
+  const rate = checkAiRateLimit(db, user)
+  if (!rate.ok) {
+    reply.code(429).send({ success: false, message: rate.message })
+    return
+  }
+
+  const config = getConfig(db)
+  if (!config.apiKey) {
+    reply.code(500).send({ success: false, message: 'AI 未配置' })
+    return
+  }
+
+  const agent = resolveAiAgent(db, { agentId: agent_id, agentKey: agent_key }, user)
+  if (!agent) {
+    reply.code(403).send({ success: false, message: '无权限使用该 AI 分身' })
+    return
+  }
+  const sid = session_id || crypto.randomUUID()
+  const ctxKey = cleanContextKey(context_key || sid)
+  const ctxType = cleanContextType(context_type)
+  const startedAt = Date.now()
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+
+  ensureAiContext(db, { userId: user.userId, agentId: agent.id, contextType: ctxType, contextKey: ctxKey, title: sid })
+  saveChatMessage(db, {
+    userId: user.userId,
+    agentId: agent.id,
+    contextType: ctxType,
+    contextKey: ctxKey,
+    sessionId: sid,
+    role: 'user',
+    content: message
+  })
+
+  const history = db.prepare(`
+    SELECT role, content
+    FROM chat_history
+    WHERE user_id = ? AND session_id = ? AND agent_id = ? AND context_key = ?
+    ORDER BY id ASC LIMIT 20
+  `).all(user.userId, sid, agent.id, ctxKey)
+
+  const memorySummary = agent.memory_enabled ? loadAiMemory(db, {
+    userId: user.userId,
+    agentId: agent.id,
+    contextType: ctxType,
+    contextKey: ctxKey
+  }) : ''
+
+  const messages = [
+    { role: 'system', content: getSystemPrompt(user.username, agent, memorySummary) },
+    ...history.map(h => ({ role: h.role, content: h.content }))
+  ]
+
+  const kbResults = await searchKnowledgeBase(message, 3)
+  if (kbResults.length > 0) {
+    const context = kbResults.map((r, i) =>
+      `[${i + 1}] 来源: ${r.source}\n内容: ${r.content}`
+    ).join('\n\n')
+    messages.splice(1, 0, {
+      role: 'system',
+      content: `以下是公司知识库中相关的参考资料，请据此回答用户问题：\n\n${context}`
+    })
+  }
+
+  const allowedToolNames = getAllowedTools(user.userId, user.role, db, agent)
+  const allowedTools = TOOLS.filter(t => allowedToolNames.includes(t.function.name))
+  let finalContent = ''
+  const currentMessages = messages
+
+  for (let round = 0; round < 10; round++) {
+    const result = await callDeepSeek(currentMessages, config, round === 0 ? allowedTools : undefined)
+    totalInputTokens += result.usage?.prompt_tokens || 0
+    totalOutputTokens += result.usage?.completion_tokens || 0
+    const choice = result.choices?.[0]
+    if (choice?.finish_reason === 'stop' || !choice?.message?.tool_calls) {
+      finalContent = choice?.message?.content || ''
+      break
     }
 
-    const rate = checkAiRateLimit(db, user)
-    if (!rate.ok) {
-      reply.code(429).send({ success: false, message: rate.message })
-      return
-    }
-
-    const config = getConfig(db)
-    if (!config.apiKey) {
-      reply.code(500).send({ success: false, message: 'AI 未配置' })
-      return
-    }
-
-    const sid = session_id || crypto.randomUUID()
-    const startedAt = Date.now()
-    let totalInputTokens = 0
-    let totalOutputTokens = 0
-
-    // 保存用户消息
-    db.prepare("INSERT INTO chat_history (user_id, role, content, session_id, created_at) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))").run(user.userId, 'user', message, sid)
-
-    // 获取历史上下文
-    const history = db.prepare(
-      'SELECT role, content FROM chat_history WHERE user_id = ? AND session_id = ? ORDER BY id ASC LIMIT 20'
-    ).all(user.userId, sid)
-
-    // 构建消息列表
-    const messages = [
-      { role: 'system', content: getSystemPrompt(user.username) },
-      ...history.map(h => ({ role: h.role, content: h.content }))
-    ]
-
-    // 搜索知识库
-    const kbResults = await searchKnowledgeBase(message, 3)
-    if (kbResults.length > 0) {
-      const context = kbResults.map((r, i) =>
-        `[${i + 1}] 来源: ${r.source}\n内容: ${r.content}`
-      ).join('\n\n')
-      messages.splice(1, 0, {
-        role: 'system',
-        content: `以下是公司知识库中相关的参考资料，请据此回答用户问题：\n\n${context}`
+    const toolCalls = choice.message.tool_calls
+    currentMessages.push({ role: 'assistant', content: choice.message.content || null, tool_calls: toolCalls })
+    for (const tc of toolCalls) {
+      let args = {}
+      try { args = JSON.parse(tc.function.arguments) } catch {}
+      const meta = toolMeta(tc.function.name)
+      const resultData = executeTool(tc.function.name, args, db, user)
+      logAiAudit(db, user, {
+        actionType: meta.action_type || 'tool_read',
+        toolName: tc.function.name,
+        requestSummary: args,
+        resultSummary: resultData,
+        model: config.model,
+        agentId: agent.id,
+        contextKey: ctxKey,
+        riskLevel: meta.risk_level,
+        confirmationRequired: meta.requires_confirmation
       })
+      currentMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultData })
     }
+  }
 
-    // ====== 按角色过滤可用工具 ======
-    const allowedToolNames = getAllowedTools(user.userId, user.role, db)
-    const allowedTools = TOOLS.filter(t => allowedToolNames.includes(t.function.name))
+  if (!finalContent) finalContent = '抱歉，我暂时无法回答这个问题。'
 
-    // ====== 工具循环：最多 10 轮 ======
-    let finalContent = ''
-    let currentMessages = messages
-    let maxRounds = 10
-
-    for (let round = 0; round < maxRounds; round++) {
-      const result = await callDeepSeek(currentMessages, config, round === 0 ? allowedTools : undefined)
-      totalInputTokens += result.usage?.prompt_tokens || 0
-      totalOutputTokens += result.usage?.completion_tokens || 0
-      const choice = result.choices?.[0]
-      const finishReason = choice?.finish_reason
-
-      // 如果是普通文本回复
-      if (finishReason === 'stop' || !choice?.message?.tool_calls) {
-        finalContent = choice?.message?.content || ''
-        break
-      }
-
-      // 处理工具调用
-      const toolCalls = choice.message.tool_calls
-      currentMessages.push({ role: 'assistant', content: choice.message.content || null, tool_calls: toolCalls })
-
-      for (const tc of toolCalls) {
-        let args = {}
-        try { args = JSON.parse(tc.function.arguments) } catch {}
-        const resultData = executeTool(tc.function.name, args, db, user)
-        logAiAudit(db, user, {
-          actionType: ['create_transaction', 'create_account', 'parse_project_handover', 'create_project_workorder'].includes(tc.function.name) ? 'tool_write' : 'tool_read',
-          toolName: tc.function.name,
-          requestSummary: args,
-          resultSummary: resultData,
-          model: config.model
-        })
-        currentMessages.push({
-          role: 'tool',
-          tool_call_id: tc.id,
-          content: resultData
-        })
-      }
-    }
-
-    // 没有生成内容 → 兜底
-    if (!finalContent) {
-      finalContent = '抱歉，我暂时无法回答这个问题。'
-    }
-
-    // 保存 AI 回复到历史（含工具调用上下文）
-    // 把所有工具调用记录打包成一条系统消息存进去，保证多轮对话有记忆
-    const toolLogs = currentMessages.filter(m => m.role === 'tool')
-    if (toolLogs.length > 0) {
-      const summary = toolLogs.map(m => {
-        const data = JSON.parse(m.content || '{}')
-        return `→ ${data.message || data.data || m.content}`
-      }).join('\n')
-      db.prepare("INSERT INTO chat_history (user_id, role, content, session_id, created_at) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))").run(user.userId, 'system', `【上一次操作结果】\n${summary}`, sid)
-    }
-    db.prepare("INSERT INTO chat_history (user_id, role, content, session_id, created_at) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))").run(user.userId, 'assistant', finalContent, sid)
-    logAiAudit(db, user, {
-      actionType: 'chat',
-      requestSummary: message,
-      resultSummary: finalContent,
-      model: config.model,
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
-      durationMs: Date.now() - startedAt
+  const toolLogs = currentMessages.filter(m => m.role === 'tool')
+  if (toolLogs.length > 0) {
+    const summary = toolLogs.map(m => {
+      const data = parseJsonSafe(m.content, {})
+      return `→ ${data.message || summarize(data.data || m.content, 180)}`
+    }).join('\n')
+    saveChatMessage(db, {
+      userId: user.userId,
+      agentId: agent.id,
+      contextType: ctxType,
+      contextKey: ctxKey,
+      sessionId: sid,
+      role: 'system',
+      content: `【上一次操作结果】\n${summary}`
     })
-
-    // 流式返回给前端
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no'
+  }
+  saveChatMessage(db, {
+    userId: user.userId,
+    agentId: agent.id,
+    contextType: ctxType,
+    contextKey: ctxKey,
+    sessionId: sid,
+    role: 'assistant',
+    content: finalContent
+  })
+  if (agent.memory_enabled) {
+    saveAiMemory(db, {
+      userId: user.userId,
+      agentId: agent.id,
+      contextType: ctxType,
+      contextKey: ctxKey,
+      summary: finalContent,
+      retentionDays: agent.memory_retention_days
     })
+  }
+  logAiAudit(db, user, {
+    actionType: 'chat',
+    requestSummary: message,
+    resultSummary: finalContent,
+    model: config.model,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    durationMs: Date.now() - startedAt,
+    agentId: agent.id,
+    contextKey: ctxKey
+  })
 
-    reply.raw.write(`data: ${JSON.stringify({ type: 'session', session_id: sid })}\n\n`)
-    reply.raw.write(`data: ${JSON.stringify({ type: 'text', content: finalContent })}\n\n`)
-    reply.raw.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
-    reply.raw.end()
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  })
+  reply.raw.write(`data: ${JSON.stringify({ type: 'session', session_id: sid, agent_id: agent.id, agent_name: agent.name })}\n\n`)
+  reply.raw.write(`data: ${JSON.stringify({ type: 'text', content: finalContent })}\n\n`)
+  reply.raw.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
+  reply.raw.end()
+}
+
+function resolveAiAgent(db, { agentId, agentKey } = {}, user) {
+  let agent = null
+  const requested = !!agentId || !!agentKey
+  if (agentId) agent = db.prepare('SELECT * FROM ai_agents WHERE id = ? AND enabled = 1').get(Number(agentId))
+  if (!agent && agentKey) agent = db.prepare('SELECT * FROM ai_agents WHERE key = ? AND enabled = 1').get(String(agentKey))
+  if (agent) return canUseAiAgent(agent, user) ? agent : null
+  if (requested) return null
+  agent = db.prepare('SELECT * FROM ai_agents WHERE is_default = 1 AND enabled = 1 ORDER BY id LIMIT 1').get()
+  if (agent && canUseAiAgent(agent, user)) return agent
+  const rows = db.prepare('SELECT * FROM ai_agents WHERE enabled = 1 ORDER BY id LIMIT 20').all()
+  agent = rows.find(row => canUseAiAgent(row, user))
+  return agent || { id: 0, key: 'general', name: '简尚总助手', purpose: '系统助手', base_prompt: '', memory_enabled: 0, memory_retention_days: 7 }
+}
+
+function canUseAiAgent(agent, user) {
+  if (!agent || !user) return false
+  if (user.role === 'super_admin') return true
+  const roles = parseRoleList(agent.allowed_roles)
+  if (roles.length === 0) return user.role === 'admin' || Number(agent.is_default || 0) === 1 || Number(agent.id || 0) === 0
+  return roles.includes(user.role)
+}
+
+function parseRoleList(value) {
+  try {
+    const parsed = JSON.parse(value || '[]')
+    return Array.isArray(parsed) ? parsed.map(item => String(item || '').trim()).filter(Boolean) : []
+  } catch {
+    return String(value || '').split(',').map(item => item.trim()).filter(Boolean)
+  }
+}
+
+function ensureAiContext(db, { userId, agentId, contextType, contextKey, title }) {
+  db.prepare(`
+    INSERT INTO ai_contexts (context_type, context_key, agent_id, user_id, title, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+    ON CONFLICT(context_type, context_key, user_id) DO UPDATE SET
+      agent_id = excluded.agent_id,
+      title = excluded.title,
+      updated_at = datetime('now', 'localtime')
+  `).run(contextType, contextKey, agentId || 0, userId || 0, title || '')
+}
+
+function saveChatMessage(db, { userId, agentId, contextType, contextKey, sessionId, role, content }) {
+  db.prepare(`
+    INSERT INTO chat_history (
+      user_id, agent_id, context_type, context_key, role, content, session_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+  `).run(userId || 0, agentId || 0, contextType || 'direct', contextKey || '', role, content, sessionId)
+}
+
+function loadAiMemory(db, { userId, agentId, contextType, contextKey }) {
+  const row = db.prepare(`
+    SELECT summary
+    FROM ai_memories
+    WHERE user_id = ? AND agent_id = ? AND context_type = ? AND context_key = ?
+      AND (expires_at = '' OR expires_at > datetime('now', 'localtime'))
+    ORDER BY id DESC LIMIT 1
+  `).get(userId || 0, agentId || 0, contextType || 'direct', contextKey || '')
+  return row?.summary || ''
+}
+
+function saveAiMemory(db, { userId, agentId, contextType, contextKey, summary, retentionDays }) {
+  const text = summarize(summary || '', 500)
+  db.prepare(`
+    INSERT INTO ai_memories (
+      agent_id, context_type, context_key, user_id, summary, source, expires_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'auto', datetime('now', 'localtime', ?), datetime('now', 'localtime'))
+    ON CONFLICT(agent_id, context_type, context_key, user_id) DO UPDATE SET
+      summary = excluded.summary,
+      expires_at = excluded.expires_at,
+      updated_at = datetime('now', 'localtime')
+  `).run(agentId || 0, contextType || 'direct', contextKey || '', userId || 0, text, `+${Math.max(1, Number(retentionDays || 7))} days`)
+}
+
+function cleanContextType(value) {
+  const text = String(value || 'direct').trim()
+  return ['direct', 'group', 'page', 'module'].includes(text) ? text : 'direct'
+}
+
+function cleanContextKey(value) {
+  return String(value || '').trim().slice(0, 120) || crypto.randomUUID()
+}
+
+function parseJsonSafe(value, fallback) {
+  try {
+    return value ? JSON.parse(value) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function canManageAi(user) {
+  return ['super_admin', 'admin'].includes(user?.role)
+}
+
+function normalizeAgentBody(body = {}) {
+  const key = String(body.key || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)
+  const allowedRoles = Array.isArray(body.allowed_roles)
+    ? body.allowed_roles
+    : parseRoleList(body.allowed_roles)
+  return {
+    key,
+    name: String(body.name || '').trim().slice(0, 40),
+    purpose: String(body.purpose || '').trim().slice(0, 200),
+    scenario_type: ['general', 'finance', 'warehouse', 'project', 'custom'].includes(body.scenario_type) ? body.scenario_type : 'custom',
+    base_prompt: String(body.base_prompt || '').trim().slice(0, 4000),
+    allowed_roles: JSON.stringify(allowedRoles.filter(role => ['super_admin', 'admin', 'finance', 'warehouse', 'engineering', 'employee'].includes(role))),
+    memory_enabled: body.memory_enabled ? 1 : 0,
+    memory_retention_days: Math.max(1, Math.min(90, Number(body.memory_retention_days || 7))),
+    enabled: body.enabled === 0 || body.enabled === false ? 0 : 1
+  }
+}
+
+function seedAgentToolRows(db, agentId) {
+  const stmt = db.prepare('INSERT OR IGNORE INTO ai_agent_tools (agent_id, tool_name, allowed) VALUES (?, ?, 0)')
+  for (const tool of AI_TOOL_REGISTRY) stmt.run(agentId, tool.name)
+}
+
+export default function aiRoutes(server, db) {
+  server.post('/api/ai/chat', async (request, reply) => handleAiChat(request, reply, db))
+  server.post('/api/chat', async (request, reply) => handleAiChat(request, reply, db))
+
+  server.get('/api/ai/agents', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canManageAi(request.user)) return reply.code(403).send({ success: false, message: '无权限管理 AI 分身' })
+    const agents = db.prepare('SELECT * FROM ai_agents ORDER BY is_default DESC, id ASC').all()
+    const tools = db.prepare('SELECT agent_id, tool_name, allowed FROM ai_agent_tools ORDER BY id ASC').all()
+    return {
+      success: true,
+      data: agents.map(agent => ({
+        ...agent,
+        tools: tools.filter(tool => tool.agent_id === agent.id)
+      }))
+    }
+  })
+
+  server.post('/api/ai/agents', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canManageAi(request.user)) return reply.code(403).send({ success: false, message: '无权限创建 AI 分身' })
+    const body = normalizeAgentBody(request.body || {})
+    if (!body.key || !body.name) return reply.code(400).send({ success: false, message: '分身标识和名称必填' })
+    const result = db.prepare(`
+      INSERT INTO ai_agents (
+        key, name, purpose, scenario_type, base_prompt, allowed_roles, memory_enabled, memory_retention_days, enabled, is_default
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    `).run(body.key, body.name, body.purpose, body.scenario_type, body.base_prompt, body.allowed_roles, body.memory_enabled, body.memory_retention_days, body.enabled)
+    seedAgentToolRows(db, result.lastInsertRowid)
+    return { success: true, data: db.prepare('SELECT * FROM ai_agents WHERE id = ?').get(result.lastInsertRowid) }
+  })
+
+  server.put('/api/ai/agents/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canManageAi(request.user)) return reply.code(403).send({ success: false, message: '无权限更新 AI 分身' })
+    const id = Number(request.params.id || 0)
+    const current = db.prepare('SELECT * FROM ai_agents WHERE id = ?').get(id)
+    if (!current) return reply.code(404).send({ success: false, message: 'AI 分身不存在' })
+    const body = normalizeAgentBody({ ...current, ...(request.body || {}) })
+    db.prepare(`
+      UPDATE ai_agents
+      SET name = ?, purpose = ?, scenario_type = ?, base_prompt = ?,
+          allowed_roles = ?, memory_enabled = ?, memory_retention_days = ?, enabled = ?,
+          updated_at = datetime('now', 'localtime')
+      WHERE id = ?
+    `).run(body.name, body.purpose, body.scenario_type, body.base_prompt, body.allowed_roles, body.memory_enabled, body.memory_retention_days, body.enabled, id)
+    return { success: true, data: db.prepare('SELECT * FROM ai_agents WHERE id = ?').get(id) }
+  })
+
+  server.get('/api/ai/tools', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canManageAi(request.user)) return reply.code(403).send({ success: false, message: '无权限查看 AI 工具目录' })
+    const rows = db.prepare('SELECT * FROM ai_tool_registry WHERE enabled = 1 ORDER BY tier ASC, tool_name ASC').all()
+    return { success: true, data: rows }
+  })
+
+  server.put('/api/ai/agents/:id/tools', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canManageAi(request.user)) return reply.code(403).send({ success: false, message: '无权限更新分身工具' })
+    const agentId = Number(request.params.id || 0)
+    const agent = db.prepare('SELECT id FROM ai_agents WHERE id = ?').get(agentId)
+    if (!agent) return reply.code(404).send({ success: false, message: 'AI 分身不存在' })
+    const tools = Array.isArray(request.body?.tools) ? request.body.tools : []
+    const tx = db.transaction(() => {
+      for (const item of tools) {
+        const toolName = String(item.tool_name || item.name || '').trim()
+        if (!toolName) continue
+        db.prepare(`
+          INSERT INTO ai_agent_tools (agent_id, tool_name, allowed)
+          VALUES (?, ?, ?)
+          ON CONFLICT(agent_id, tool_name) DO UPDATE SET allowed = excluded.allowed
+        `).run(agentId, toolName, item.allowed ? 1 : 0)
+      }
+    })
+    tx()
+    return { success: true }
+  })
+
+  server.get('/api/ai/audit-logs', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canManageAi(request.user)) return reply.code(403).send({ success: false, message: '无权限查看 AI 审计' })
+    const { agent_id, tool_name, action_type, status, limit = 100 } = request.query || {}
+    const conditions = []
+    const params = []
+    if (agent_id) { conditions.push('l.agent_id = ?'); params.push(Number(agent_id)) }
+    if (tool_name) { conditions.push('l.tool_name = ?'); params.push(String(tool_name)) }
+    if (action_type) { conditions.push('l.action_type = ?'); params.push(String(action_type)) }
+    if (status) { conditions.push('l.status = ?'); params.push(String(status)) }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    const rows = db.prepare(`
+      SELECT l.*, u.username, u.real_name, a.name as agent_name
+      FROM ai_audit_logs l
+      LEFT JOIN users u ON u.id = l.user_id
+      LEFT JOIN ai_agents a ON a.id = l.agent_id
+      ${where}
+      ORDER BY l.id DESC LIMIT ?
+    `).all(...params, Math.min(300, Number(limit) || 100))
+    return { success: true, data: rows }
   })
 
   // 获取聊天历史

@@ -53,6 +53,20 @@
             <div class="task-owner" v-if="p.assignee_name">
               施工负责人：{{ p.assignee_name }}
             </div>
+            <div class="task-owner" v-if="p.hint">
+              {{ p.hint }}
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
+      <el-row :gutter="16" v-else-if="g.items?.length">
+        <el-col :xs="24" :sm="12" :md="8" v-for="item in g.items" :key="item.id" style="margin-bottom: 16px;">
+          <el-card class="task-card stock-card" shadow="never" @click="goProducts">
+            <div class="task-name">{{ item.name }}</div>
+            <div class="task-meta">
+              <span>{{ item.meta }}</span>
+              <el-tag size="small" type="warning" class="task-status-tag">低库存</el-tag>
+            </div>
           </el-card>
         </el-col>
       </el-row>
@@ -130,6 +144,10 @@ function goProject(id) {
   router.push(`/main/projects/${id}`)
 }
 
+function goProducts() {
+  router.push('/main/products')
+}
+
 function copyCode(code) {
   try {
     navigator.clipboard.writeText(code)
@@ -139,8 +157,9 @@ function copyCode(code) {
 
 function isUrgentGroup(group) {
   if (!group?.count) return false
-  if (user.value.role === 'warehouse') return ['out', 'return'].includes(group.key)
+  if (user.value.role === 'warehouse') return ['out', 'return', 'stock_alerts'].includes(group.key)
   if (['engineering', 'employee'].includes(user.value.role)) return ['onsite', 'prepare', 'active'].includes(group.key)
+  if (['admin', 'super_admin'].includes(user.value.role)) return ['missing', 'overdue', 'stuck'].includes(group.key)
   return false
 }
 

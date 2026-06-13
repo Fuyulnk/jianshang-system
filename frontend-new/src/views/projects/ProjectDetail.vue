@@ -142,6 +142,18 @@
               <strong>{{ displayUser(project.assignee_real_name, project.assignee_username) }}</strong>
             </div>
             <div>
+              <span>首勘人员</span>
+              <strong>{{ displayUser(project.survey_real_name, project.survey_username) }}</strong>
+            </div>
+            <div>
+              <span>二勘/复尺</span>
+              <strong>{{ displayUser(project.recheck_real_name, project.recheck_username) }}</strong>
+            </div>
+            <div>
+              <span>收尾验收</span>
+              <strong>{{ displayUser(project.final_inspection_real_name, project.final_inspection_username) }}</strong>
+            </div>
+            <div>
               <span>班组长</span>
               <strong>{{ project.team_leader || '未安排' }}</strong>
             </div>
@@ -161,6 +173,10 @@
               <div class="work-kicker">步骤补充资料</div>
               <h3>{{ currentTask.title }}</h3>
               <p>这里填写当前步骤需要同步到项目工单的结构化字段。</p>
+              <div class="handoff-line">
+                <span>当前处理：<b>{{ currentOwnerLabel }}</b></span>
+                <span>完成后自动抄送：<b>{{ nextOwnerLabel }}</b></span>
+              </div>
             </div>
             <el-tag :type="project.status === 'archived' ? 'success' : 'primary'">{{ project.status_label }}</el-tag>
           </div>
@@ -172,16 +188,33 @@
               <strong>先核对门店交接资料。</strong>
               <span>来源、接单人、业主联系方式和详细地址补齐后，才能安排现场勘察。</span>
             </div>
+            <el-form-item label="首勘人员">
+              <el-select v-model="editForm.survey_user_id" clearable filterable style="width:100%" placeholder="选择负责首勘的监理">
+                <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+              </el-select>
+            </el-form-item>
           </template>
 
           <template v-else-if="project.status === 'survey_pending'">
             <el-row :gutter="16">
+              <el-col :span="8">
+                <el-form-item label="首勘人员">
+                  <el-select v-model="editForm.survey_user_id" clearable filterable style="width:100%" placeholder="选择首勘人员">
+                    <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
               <el-col :span="8"><el-form-item label="工勘日期"><el-input v-model="editForm.survey_date" placeholder="2026-01-01" /></el-form-item></el-col>
-              <el-col :span="16"><el-form-item label="工勘记录"><el-input v-model="editForm.survey_report" placeholder="现场面积、基层情况、特殊工艺等" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="工勘记录"><el-input v-model="editForm.survey_report" placeholder="现场面积、基层情况、特殊工艺等" /></el-form-item></el-col>
             </el-row>
           </template>
 
           <template v-else-if="project.status === 'survey_done'">
+            <el-form-item label="二勘/复尺人员">
+              <el-select v-model="editForm.recheck_user_id" clearable filterable style="width:100%" placeholder="选择负责二勘/复尺的监理">
+                <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+              </el-select>
+            </el-form-item>
             <el-form-item label="复尺/开工条件复核"><el-input v-model="editForm.condition_note" type="textarea" :rows="2" placeholder="复尺面积、现场是否具备进场条件、水电/保护/基层等情况" /></el-form-item>
           </template>
 
@@ -278,6 +311,11 @@
                 </el-form-item>
               </el-col>
             </el-row>
+            <el-form-item label="收尾验收人员">
+              <el-select v-model="editForm.final_inspection_user_id" clearable filterable style="width:100%" placeholder="选择负责收尾验收的监理">
+                <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+              </el-select>
+            </el-form-item>
             <el-form-item label="施工/验收记录"><el-input v-model="editForm.construction_note" type="textarea" :rows="3" placeholder="施工进度、现场问题、整改说明、验收结论" /></el-form-item>
           </template>
 
@@ -291,26 +329,22 @@
           <template v-else-if="project.status === 'material_returned'">
             <div class="stage-hint">
               <strong>回库完成，等待工费结算。</strong>
-              <span>本阶段先作为流程卡点存在，后续会接入施工班组工费结算单。</span>
+              <span>请在下方资料链处理“施工班组工费结算单”，填写或导入人工费合计后确认推进。</span>
             </div>
           </template>
 
           <template v-else-if="project.status === 'labor_settled'">
             <div class="stage-hint">
               <strong>工费结算已完成，等待成本核算。</strong>
-              <span>本阶段先保留附件和状态，下一阶段再结构化成本核算字段。</span>
+              <span>请在下方资料链处理“完工成本核算表”，成本合计确认后自动转到财务结算。</span>
             </div>
           </template>
 
           <template v-else-if="project.status === 'cost_checked'">
-            <el-form-item label="结算金额">
-              <div class="money-editor">
-                <el-input v-model="editForm.settlement_amount" type="number" placeholder="请输入最终结算金额">
-                  <template #append>元</template>
-                </el-input>
-                <div class="money-preview">{{ formatCurrency(editForm.settlement_amount) }}</div>
-              </div>
-            </el-form-item>
+            <div class="stage-hint">
+              <strong>成本核算已完成，等待财务结算。</strong>
+              <span>请在下方资料链处理“财务结算/归档凭证”，收款状态确认为已收齐后才能推进。</span>
+            </div>
           </template>
 
           <template v-else-if="project.status === 'finance_settled' || project.status === 'archived'">
@@ -588,6 +622,29 @@
               </el-col>
             </el-row>
             <el-row :gutter="16">
+              <el-col :span="8">
+                <el-form-item label="首勘人员">
+                  <el-select v-model="editForm.survey_user_id" clearable filterable style="width:100%" placeholder="选择首勘人员">
+                    <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="二勘/复尺人员">
+                  <el-select v-model="editForm.recheck_user_id" clearable filterable style="width:100%" placeholder="选择二勘/复尺人员">
+                    <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="收尾验收人员">
+                  <el-select v-model="editForm.final_inspection_user_id" clearable filterable style="width:100%" placeholder="选择收尾验收人员">
+                    <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-row :gutter="16">
               <el-col :span="12">
                 <el-form-item label="班组长"><el-input v-model="editForm.team_leader" /></el-form-item>
               </el-col>
@@ -690,11 +747,17 @@ const canManageProject = computed(() => ['super_admin', 'admin', 'engineering'].
 const isAssignedEmployee = computed(() => {
   if (!project.value) return false
   return project.value.assignee_user_id === userId
+    || project.value.survey_user_id === userId
+    || project.value.recheck_user_id === userId
+    || project.value.final_inspection_user_id === userId
     || parseCrewMemberIds(project.value.crew_member_user_ids).includes(userId)
 })
 const canEditProject = computed(() => canManageProject.value || (userRole === 'employee' && isAssignedEmployee.value))
 const formattedAddress = computed(() => formatProjectAddress(project.value || {}))
 const isProjectClosed = computed(() => ['finance_settled', 'archived', 'repair_done'].includes(project.value?.status))
+const engineeringAssignees = computed(() => assignees.value.filter(user => ['super_admin', 'admin', 'engineering'].includes(user.role)))
+const currentOwnerLabel = computed(() => project.value?.current_owner_label || currentTask.value.owner || '当前岗位')
+const nextOwnerLabel = computed(() => project.value?.next_owner_label || currentTask.value.nextOwner || '下一岗位')
 const requiredMissingFields = computed(() => {
   if (!project.value) return []
   const checks = [
@@ -734,7 +797,7 @@ const TASKS = {
     action: '资料核对完成，安排勘察',
     next: 'survey_pending',
     roles: ['super_admin', 'admin', 'engineering'],
-    required: ['handover']
+    required: ['handover', 'survey_assignee']
   },
   survey_pending: {
     title: '现场勘察',
@@ -742,7 +805,10 @@ const TASKS = {
     action: '',
     next: '',
     roles: ['super_admin', 'admin', 'engineering'],
-    required: []
+    required: ['survey'],
+    owner: '工程部/监理',
+    nextOwner: '总监/工程部',
+    assignedOnly: true
   },
   survey_done: {
     title: '复尺和开工条件复核',
@@ -750,7 +816,10 @@ const TASKS = {
     action: '复尺完成，进入交底',
     next: 'recheck_done',
     roles: ['super_admin', 'admin', 'engineering'],
-    required: ['condition_note']
+    required: ['recheck_assignee', 'condition_note'],
+    owner: '总监/工程部',
+    nextOwner: '总监/工程部',
+    assignedOnly: true
   },
   recheck_done: {
     title: '安排施工组并完成交底',
@@ -758,21 +827,27 @@ const TASKS = {
     action: '交底完成，等待出库',
     next: 'briefing_done',
     roles: ['super_admin', 'admin', 'engineering'],
-    required: ['assignee', 'briefing_date']
+    required: ['assignee', 'briefing_date'],
+    owner: '总监/工程部',
+    nextOwner: '仓管'
   },
   briefing_done: {
     title: '发起材料出库',
     desc: '请在材料出库单中创建申请。仓库确认后系统自动进入已出库待进场。',
     action: '',
     next: '',
-    roles: []
+    roles: [],
+    owner: '仓管',
+    nextOwner: '仓管确认出库后转工程/监理'
   },
   material_requested: {
     title: '等待仓库确认出库',
     desc: '仓库确认会扣减库存并推进到已出库待进场；取消申请会回退到交底完成待出库。',
     action: '',
     next: '',
-    roles: []
+    roles: [],
+    owner: '仓管',
+    nextOwner: '工程/监理'
   },
   material_out: {
     title: '确认进场开工',
@@ -781,7 +856,9 @@ const TASKS = {
     next: 'in_progress',
     roles: ['super_admin', 'admin', 'engineering', 'employee'],
     assignedOnly: true,
-    required: ['start_date', 'expected_end_date', 'onsite_team']
+    required: ['start_date', 'expected_end_date', 'onsite_team'],
+    owner: '工程/监理/施工负责人',
+    nextOwner: '工程/监理'
   },
   in_progress: {
     title: '完工验收/撤场确认',
@@ -790,43 +867,54 @@ const TASKS = {
     next: 'inspection_done',
     roles: ['super_admin', 'admin', 'engineering', 'employee'],
     assignedOnly: true,
-    required: ['end_date', 'acceptance_date', 'construction_note', 'inspection_pass']
+    required: ['final_inspection_assignee', 'end_date', 'acceptance_date', 'construction_note', 'inspection_pass'],
+    owner: '工程/监理/施工负责人',
+    nextOwner: '仓管'
   },
   inspection_done: {
     title: '材料回库',
     desc: '仓库核对出库明细、实际用量、回库数量和差异，确认后进入工费结算。',
     action: '',
     next: '',
-    roles: []
+    roles: [],
+    owner: '仓管',
+    nextOwner: '财务'
   },
   material_returned: {
     title: '工费结算',
-    desc: '本阶段先作为流程节点存在，后续接施工班组工费结算单。',
-    action: '工费结算完成',
-    next: 'labor_settled',
-    roles: ['super_admin', 'admin', 'finance', 'engineering']
+    desc: '本阶段等待接入施工班组工费结算单；未形成结算凭证前不能一键跳过。',
+    action: '',
+    next: '',
+    roles: [],
+    owner: '财务/工程',
+    nextOwner: '财务'
   },
   labor_settled: {
     title: '成本核算',
-    desc: '本阶段先作为流程节点存在，下一阶段再接入成本核算表结构化字段。',
-    action: '成本核算完成',
-    next: 'cost_checked',
-    roles: ['super_admin', 'admin', 'finance']
+    desc: '本阶段等待接入完工成本核算表；未形成成本凭证前不能一键跳过。',
+    action: '',
+    next: '',
+    roles: [],
+    owner: '财务',
+    nextOwner: '财务'
   },
   cost_checked: {
     title: '财务结算',
-    desc: '填写最终结算金额，确认后进入待归档。',
-    action: '财务结算完成',
-    next: 'finance_settled',
-    roles: ['super_admin', 'admin', 'finance'],
-    required: ['settlement_amount']
+    desc: '通过下方“财务结算/归档凭证”确认收款和尾款，不能用普通按钮空跳。',
+    action: '',
+    next: '',
+    roles: [],
+    owner: '财务',
+    nextOwner: '财务/归档'
   },
   finance_settled: {
     title: '归档确认',
     desc: '财务结算完成后，确认资料和附件齐全即可归档。',
     action: '确认归档',
     next: 'archived',
-    roles: ['super_admin', 'admin', 'finance']
+    roles: ['super_admin', 'admin', 'finance'],
+    owner: '财务/归档',
+    nextOwner: '已完成'
   },
   archived: {
     title: '工单已归档',
@@ -913,6 +1001,10 @@ const currentStepNote = computed(() => {
   if (project.value?.status === 'material_out') return '工程部确认进场时间、人员和班组安排。'
   if (project.value?.status === 'in_progress') return '施工中先做轻量记录；确认验收通过后交给仓库回库。'
   if (project.value?.status === 'inspection_done') return '验收完成后由仓管填写材料回库单。'
+  if (project.value?.status === 'material_returned') return '回库后必须确认施工班组工费结算单，不能用普通按钮跳过。'
+  if (project.value?.status === 'labor_settled') return '工费后必须确认完工成本核算表，成本合计不能为空。'
+  if (project.value?.status === 'cost_checked') return '成本后必须确认财务结算/归档凭证，收款状态需为已收齐。'
+  if (project.value?.status === 'finance_settled') return '归档前会检查关键单据链是否都已确认。'
   if (project.value?.status === 'archived') return '工单已归档，可查看财务归档、成本和收付款口径。'
   return '当前步骤相关资料会在下方资料链中高亮。'
 })
@@ -992,21 +1084,35 @@ function missingForTask(required) {
   const missing = []
   for (const key of required) {
     if (key === 'handover') missing.push(...requiredMissingFields.value)
-    if (key === 'survey' && !merged.survey_report && !merged.survey_date) missing.push('工勘记录或工勘日期')
-    if (key === 'condition_note' && !String(merged.condition_note || '').trim()) missing.push('复尺/开工条件复核记录')
+    if (key === 'survey_assignee' && !merged.survey_user_id) missing.push('首勘人员')
+    if (key === 'survey' && !merged.survey_date) missing.push('工勘日期')
+    if (key === 'survey' && !hasMeaningfulText(merged.survey_report, 8)) missing.push('不少于 8 字的工勘记录')
+    if (key === 'recheck_assignee' && !merged.recheck_user_id) missing.push('二勘/复尺人员')
+    if (key === 'condition_note' && !hasMeaningfulText(merged.condition_note, 8)) missing.push('不少于 8 字的复尺/开工条件复核记录')
     if (key === 'assignee' && !merged.assignee_user_id && !merged.team_leader && !parseCrewMemberIds(merged.crew_member_user_ids).length) missing.push('施工负责人、班组长或施工成员')
     if (key === 'briefing_date' && !merged.briefing_date) missing.push('交底日期')
     if (key === 'start_date' && !merged.start_date) missing.push('开工日期')
     if (key === 'expected_end_date' && !merged.expected_end_date) missing.push('预计完工日期')
     if (key === 'onsite_team' && !merged.assignee_user_id && !merged.team_leader && !parseCrewMemberIds(merged.crew_member_user_ids).length) missing.push('施工负责人、班组长或施工成员')
-    if (key === 'construction_note' && !String(merged.construction_note || '').trim()) missing.push('施工/验收记录')
+    if (key === 'construction_note' && !hasMeaningfulText(merged.construction_note, 10)) missing.push('不少于 10 字的施工/验收记录')
+    if (key === 'final_inspection_assignee' && !merged.final_inspection_user_id) missing.push('收尾验收人员')
     if (key === 'end_date' && !merged.end_date) missing.push('完工日期')
     if (key === 'acceptance_date' && !merged.acceptance_date) missing.push('验收日期')
-    if (key === 'inspection_pass' && inspectionResult.value !== 'pass') missing.push('验收通过结论')
+    if (key === 'inspection_pass' && (inspectionResult.value !== 'pass' || !hasPassConclusion(merged.construction_note))) missing.push('明确的验收通过/允许回库结论')
     if (key === 'material_return' && merged.material_return_status !== 'done') missing.push('材料回库状态')
     if (key === 'settlement_amount' && !Number(merged.settlement_amount)) missing.push('结算金额')
   }
   return [...new Set(missing)]
+}
+
+function hasMeaningfulText(value, minLength = 1) {
+  return String(value || '').trim().length >= minLength
+}
+
+function hasPassConclusion(value) {
+  const text = String(value || '')
+  if (/需要整改|不允许进入回库|整改未完成|验收不通过/.test(text)) return false
+  return /验收通过|允许进入回库|客户确认|内部验收通过|合格/.test(text)
 }
 
 async function fetchDetail() {
@@ -1134,7 +1240,7 @@ async function saveProjectFields() {
     'material_out_status', 'material_out_note', 'material_return_status', 'material_return_note',
     'start_date', 'expected_end_date', 'construction_note',
     'end_date', 'acceptance_date', 'total_amount', 'deposit_amount', 'settlement_amount',
-    'manager_user_id', 'assignee_user_id']
+    'manager_user_id', 'assignee_user_id', 'survey_user_id', 'recheck_user_id', 'final_inspection_user_id']
   for (const f of fields) {
     if (editForm.value[f] !== undefined) {
       body[f] = typeof editForm.value[f] === 'string' ? editForm.value[f].trim() : editForm.value[f]
@@ -1146,6 +1252,9 @@ async function saveProjectFields() {
   body.settlement_amount = parseFloat(body.settlement_amount) || 0
   body.manager_user_id = body.manager_user_id || 0
   body.assignee_user_id = body.assignee_user_id || 0
+  body.survey_user_id = body.survey_user_id || 0
+  body.recheck_user_id = body.recheck_user_id || 0
+  body.final_inspection_user_id = body.final_inspection_user_id || 0
   body.crew_member_user_ids = Array.isArray(body.crew_member_user_ids) ? body.crew_member_user_ids : []
 
   const res = await fetch(`/api/projects/${route.params.id}`, {
@@ -1415,6 +1524,22 @@ onMounted(() => {
   margin: 0;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+.handoff-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.handoff-line span {
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--bg-page));
+}
+.handoff-line b {
+  color: var(--text-primary);
 }
 .work-form {
   max-width: 960px;
