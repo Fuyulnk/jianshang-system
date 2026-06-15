@@ -65,7 +65,7 @@ export default function materialRequestRoutes(server, db) {
       return
     }
     if (canonicalProjectStatus(project.status) !== 'briefing_done') {
-      return { success: false, message: '只有交底完成待出库的项目工单才能发起出库申请' }
+      return { success: false, message: '只有班组交底完成待出库的项目工单才能发起出库申请' }
     }
 
     const items = normalizeItems(request.body?.items)

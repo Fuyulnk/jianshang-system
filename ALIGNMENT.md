@@ -173,6 +173,37 @@
 
 ## 对接记录
 
+### 2026-06-15 Claude：补修 ProjectDetail 遗留旧标签
+
+- 任务：Codex 省额度模式下漏了 `ProjectDetail.vue` 的阶段标签"复尺交底/出库"，改为"班组交底/出库"。
+- 修改：`frontend-new/src/views/projects/ProjectDetail.vue` 两处（注释 + 显示文本）。
+- 验证：仅文案修改，无需构建。
+
+### 2026-06-15 Codex：门店交底 / 班组交底口径修正
+
+- 任务：只修正“交底”口径，不改状态 key、不做数据库迁移、不扩账号/仓库/财务/AI 大功能；明确门店交底是项目起点，班组交底是复尺后、出库前的执行交底。
+- 修改重点：
+  - `backend/src/routes/projects.js`、`employee-dashboard.js`、`material-requests.js`：项目状态、岗位待办、出库限制文案统一为“门店交底待核对”“复尺完成待班组交底”“班组交底完成待出库”。
+  - `backend/src/routes/ai.js`、`backend/src/ai/toolRegistry.js`：AI 状态机说明和缺项提示区分门店交底资料与班组交底单。
+  - `backend/src/routes/project-imports.js`、`backend/src/utils/projectDocumentImport.js`、`backend/src/utils/projectImport.js`：项目创建导入使用“门店交底单”，项目详情 `briefing` 节点使用“班组交底单”；旧“施工交底/交接备注”仍作为历史文件识别兼容。
+  - `frontend-new/src/views/projects/ProjectDetail.vue`、`ProjectList.vue`、`components/projects/*`：项目列表、详情、资料链、导入弹窗、按钮和提示同步新口径。
+  - `handoff/简尚系统路线图V1.md`、`handoff/门店交接到施工承接流程V1.md`、`handoff/2026-06-13-project-document-field-mapping-v1.md`：路线图和 SOP 文案同步新口径。
+- 验证：
+  - `node --check backend/src/routes/projects.js`
+  - `node --check backend/src/routes/employee-dashboard.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/material-requests.js`
+  - `node --check backend/src/routes/project-imports.js`
+  - `node --check backend/src/utils/projectDocumentImport.js`
+  - `node --check backend/src/utils/projectImport.js`
+  - `node --check backend/src/ai/toolRegistry.js`
+  - `npm run build`（在 `frontend-new/`，通过；仅既有 Vite 大 chunk 警告）
+  - `git diff --check`（通过）
+  - 静态搜索确认活代码和三份当前 handoff 文档已区分“门店交底 / 班组交底”；旧“施工交底/交接备注”仅作为历史文件识别兼容别名保留。
+- 注意事项：
+  - 本轮未提交、未上传服务器。
+  - 未完成登录冒烟检查：本轮只做口径和文案修正，未启动/重启本地服务。
+
 ### 2026-06-15 Codex：账号注册/分配返工，拆清账号、员工档案、岗位权限
 
 - 任务：按用户测试反馈返工注册账号流程和 token 刷新问题；注册后先进入普通员工入口，管理员完成建档和岗位角色分配后，员工端提示重新登录成为岗位账号。

@@ -85,7 +85,7 @@ const mockStats = [
   { label: '待出库材料', value: '8', meta: '仓库今日处理' }
 ]
 const mockSummary = [
-  { label: '待交底', value: '4' },
+  { label: '待班组交底', value: '4' },
   { label: '待回库', value: '3' },
   { label: '待工费', value: '5' },
   { label: '待分配', value: '1' }
@@ -366,7 +366,7 @@ function backToLogin() {
         </div>
         <div class="ghost-welcome">
           <strong>今日项目流转</strong>
-          <span>交接、仓库、财务在同一条单据链里协作</span>
+          <span>门店交底、仓库、财务在同一条单据链里协作</span>
         </div>
         <div class="ghost-stat-row">
           <div v-for="item in mockStats" :key="item.label" class="ghost-stat">

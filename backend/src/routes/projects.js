@@ -1,14 +1,14 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule, canAccessProjectRecord, getDataScope } from '../utils/permissions.js'
 
-// 项目状态流转规则：V2 对齐总监“门店交接 -> 施工承接 -> 结算归档”流程。
+// 项目状态流转规则：V2 对齐总监“门店交底 -> 施工承接 -> 结算归档”流程。
 const STATUS_LABELS = {
-  handover_received: { phase: 1, label: '门店交接待核对', phaseLabel: '交接/勘察' },
-  survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '交接/勘察' },
-  survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '交接/勘察' },
-  recheck_done: { phase: 2, label: '复尺完成待交底', phaseLabel: '复尺/交底/出库' },
-  briefing_done: { phase: 2, label: '交底完成待出库', phaseLabel: '复尺/交底/出库' },
-  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/交底/出库' },
+  handover_received: { phase: 1, label: '门店交底待核对', phaseLabel: '门店交底/勘察' },
+  survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '门店交底/勘察' },
+  survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '门店交底/勘察' },
+  recheck_done: { phase: 2, label: '复尺完成待班组交底', phaseLabel: '复尺/班组交底/出库' },
+  briefing_done: { phase: 2, label: '班组交底完成待出库', phaseLabel: '复尺/班组交底/出库' },
+  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/班组交底/出库' },
   material_out: { phase: 3, label: '已出库待进场', phaseLabel: '进场/施工/验收' },
   in_progress: { phase: 3, label: '施工中', phaseLabel: '进场/施工/验收' },
   inspection_done: { phase: 3, label: '验收完成待回库', phaseLabel: '进场/施工/验收' },
@@ -67,7 +67,7 @@ const STATUS_HANDOFFS = {
 
 const ARCHIVE_REQUIRED_DOCUMENTS = [
   ['survey_initial', '首次工勘表'],
-  ['briefing', '施工交底单'],
+  ['briefing', '班组交底单'],
   ['material_io', '材料回库单'],
   ['completion_inspection', '完工验收质检表'],
   ['labor_settlement', '施工班组工费结算单'],
@@ -361,7 +361,7 @@ export default function projectRoutes(server, db) {
     addLog(
       db,
       project.id,
-      guard.emergency ? '超级管理员应急推进' : '自动交接',
+      guard.emergency ? '超级管理员应急推进' : '自动流转',
       request.user.username,
       guard.emergency
         ? emergencyTransitionLogContent(project.status, targetStatus, request.body?.emergency_reason)
@@ -424,7 +424,7 @@ function decorateProjectStatus(project) {
   const meta = { ...statusMeta(rawStatus) }
   const handoff = handoffForProject(project, canonicalStatus)
   if (canonicalStatus === 'recheck_done' && /无需复尺|跳过复尺/.test(String(project.condition_note || ''))) {
-    meta.label = '无需复尺，待施工交底'
+    meta.label = '无需复尺，待班组交底'
   }
   return {
     ...project,
@@ -514,7 +514,7 @@ function missingRequired(db, project, required) {
     if (key === 'survey' && !hasMeaningfulText(project.survey_report, 8)) missing.push('不少于 8 字的工勘记录')
     if (key === 'recheck_assignee' && !project.recheck_user_id) missing.push('二勘/复尺人员')
     if (key === 'assignee' && !project.assignee_user_id && !project.team_leader && !hasCrewMembers(project)) missing.push('施工负责人、班组长或施工成员')
-    if (key === 'briefing_date' && !project.briefing_date) missing.push('交底日期')
+    if (key === 'briefing_date' && !project.briefing_date) missing.push('班组交底日期')
     if (key === 'condition_note' && !hasMeaningfulText(project.condition_note, 8)) missing.push('不少于 8 字的复尺/开工条件复核记录')
     if (key === 'start_date' && !project.start_date) missing.push('开工日期')
     if (key === 'expected_end_date' && !project.expected_end_date) missing.push('预计完工日期')

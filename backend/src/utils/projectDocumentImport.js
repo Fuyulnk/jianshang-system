@@ -16,12 +16,12 @@ const BRIEFING_FIELD_DEFS = [
   { key: 'phone', label: '业主联系方式', source: '客户电话' },
   { key: 'address_detail', label: '详细地址', source: '详细地址' },
   { key: 'team_leader', label: '班组长', source: '其他事项说明' },
-  { key: 'briefing_date', label: '交底日期', source: '接单时间推断', inferred: true, caution: '表内没有独立交底日期，只能按接单时间推断；必须单独勾选确认后才会写入。' }
+  { key: 'briefing_date', label: '班组交底日期', source: '接单时间推断', inferred: true, caution: '表内没有独立班组交底日期，只能按接单时间推断；必须单独勾选确认后才会写入。' }
 ]
 
 export function parseBriefingDocument(fileName = '', fileData = '') {
   if (!looksLikeSpreadsheet(fileName)) {
-    return { fields: [], items: [], warnings: ['施工交底单 V1 只支持 CSV / XLS / XLSX'] }
+    return { fields: [], items: [], warnings: ['门店交底单 V1 只支持 CSV / XLS / XLSX'] }
   }
 
   const workbook = XLSX.read(decodeData(fileData), { type: 'buffer' })
@@ -68,7 +68,7 @@ export function parseBriefingDocument(fileName = '', fileData = '') {
 
   return {
     document_type: 'briefing',
-    document_label: '施工交底单',
+    document_label: '门店交底单',
     file_name: fileName,
     sheet_name: sheetName,
     project_draft: projectDraft,
@@ -114,7 +114,10 @@ export function parseMaterialOutDocument(fileName = '', fileData = '') {
 }
 
 export function parseDeliveryDocument(documentType = '', fileName = '', fileData = '') {
-  if (documentType === 'briefing') return parseBriefingDocument(fileName, fileData)
+  if (documentType === 'briefing') {
+    const parsed = parseBriefingDocument(fileName, fileData)
+    return { ...parsed, document_label: deliveryDocumentLabel(documentType) }
+  }
   if (documentType === 'material_io') return parseMaterialIoDocument(fileName, fileData)
   if (documentType === 'labor_settlement') return parseLaborSettlementDocument(fileName, fileData)
   if (documentType === 'cost_check') return parseCostCheckDocument(fileName, fileData)
@@ -750,7 +753,7 @@ function deliveryDocumentLabel(documentType) {
   const labels = {
     survey_initial: '首次工勘表',
     survey_recheck: '二次勘察表',
-    briefing: '施工交底单',
+    briefing: '班组交底单',
     material_io: '材料出库单',
     completion_inspection: '完工验收质检表',
     labor_settlement: '施工班组工费结算单',

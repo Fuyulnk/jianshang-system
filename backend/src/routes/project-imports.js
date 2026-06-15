@@ -33,14 +33,14 @@ export default function projectImportRoutes(server, db) {
         actionType: 'tool_write',
         toolName: 'parse_project_handover',
         status: 'denied',
-        errorMessage: '无权限导入施工交底单'
+        errorMessage: '无权限导入门店交底单'
       })
-      reply.code(403).send({ success: false, message: '无权限导入施工交底单' })
+      reply.code(403).send({ success: false, message: '无权限导入门店交底单' })
       return
     }
 
     const { text = '', file_name = '', file_data = '' } = request.body || {}
-    if (!String(text || '').trim() && !file_data) return { success: false, message: '请上传施工交底单或粘贴交底内容' }
+    if (!String(text || '').trim() && !file_data) return { success: false, message: '请上传门店交底单或粘贴交底内容' }
     try {
       const parsed = file_data
         ? parseBriefingDocument(file_name, file_data)
@@ -50,7 +50,7 @@ export default function projectImportRoutes(server, db) {
         actionType: 'tool_write',
         toolName: 'parse_project_handover',
         requestSummary: file_name || summarizeRawContent(text, 500),
-        resultSummary: `施工交底单识别：${parsed.form_data?.items?.length || 0} 条施工明细`,
+        resultSummary: `门店交底单识别：${parsed.form_data?.items?.length || 0} 条施工明细`,
         model: getAiConfig(db).model
       })
       return { success: true, data: { ...parsed, duplicate_matches: duplicates } }
@@ -59,9 +59,9 @@ export default function projectImportRoutes(server, db) {
         actionType: 'tool_write',
         toolName: 'parse_project_handover',
         status: 'failed',
-        errorMessage: err.message || '施工交底单解析失败'
+        errorMessage: err.message || '门店交底单解析失败'
       })
-      reply.code(400).send({ success: false, message: err.message || '施工交底单解析失败' })
+      reply.code(400).send({ success: false, message: err.message || '门店交底单解析失败' })
     }
   })
 
@@ -72,9 +72,9 @@ export default function projectImportRoutes(server, db) {
         actionType: 'tool_write',
         toolName: 'create_project_workorder',
         status: 'denied',
-        errorMessage: '无权限从施工交底单创建项目'
+        errorMessage: '无权限从门店交底单创建项目'
       })
-      reply.code(403).send({ success: false, message: '无权限从施工交底单创建项目' })
+      reply.code(403).send({ success: false, message: '无权限从门店交底单创建项目' })
       return
     }
 
@@ -128,15 +128,15 @@ export default function projectImportRoutes(server, db) {
           warnings: [...warnings, ...duplicates.map(item => `可能重复：${item.name || item.customer}#${item.id}`)],
           userId: request.user.userId
         })
-        addProjectLog(db, projectId, '导入施工交底单创建工单', request.user.username,
-          `由施工交底单创建；单据 #${documentId}；缺失提示 ${missing.length} 项；重复提示 ${duplicates.length} 项；不自动推进状态。`)
+        addProjectLog(db, projectId, '导入门店交底单创建工单', request.user.username,
+          `由门店交底单创建；单据 #${documentId}；缺失提示 ${missing.length} 项；重复提示 ${duplicates.length} 项；不自动推进状态。`)
       })
       tx()
 
       logAiAudit(db, request.user, {
         actionType: 'tool_write',
         toolName: 'create_project_workorder',
-        requestSummary: `施工交底单创建项目：${draft.name}`,
+        requestSummary: `门店交底单创建项目：${draft.name}`,
         resultSummary: `项目 #${projectId}，单据 #${documentId}`,
         model: getAiConfig(db).model
       })
@@ -176,7 +176,7 @@ export default function projectImportRoutes(server, db) {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
     if (!project) return reply.code(404).send({ success: false, message: '项目不存在' })
     if (!canApplyProjectDocumentImport(request.user) || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
-      reply.code(403).send({ success: false, message: '无权限保存施工交底单' })
+      reply.code(403).send({ success: false, message: '无权限保存班组交底单' })
       return
     }
 
@@ -201,8 +201,8 @@ export default function projectImportRoutes(server, db) {
         userId: request.user.userId
       })
       syncProjectFromBriefing(db, project, draft)
-      addProjectLog(db, project.id, '保存施工交底单', request.user.username,
-        `系统版交底单 #${documentId} 已保存；同步字段 ${changed.join('、') || '无'}；不自动推进状态。`)
+      addProjectLog(db, project.id, '保存班组交底单', request.user.username,
+        `系统版班组交底单 #${documentId} 已保存；同步字段 ${changed.join('、') || '无'}；不自动推进状态。`)
     })
     tx()
 
@@ -509,15 +509,15 @@ export default function projectImportRoutes(server, db) {
     }
 
     const { file_name = '', file_data = '' } = request.body || {}
-    if (!file_name || !file_data) return { success: false, message: '请选择施工交底单表格' }
+    if (!file_name || !file_data) return { success: false, message: '请选择班组交底单表格' }
 
     try {
       const parsed = parseBriefingDocument(file_name, file_data)
       const current = {}
       for (const field of parsed.fields || []) current[field.key] = project[field.key] ?? ''
-      return { success: true, data: { ...parsed, current } }
+      return { success: true, data: { ...parsed, document_label: '班组交底单', current } }
     } catch (err) {
-      reply.code(400).send({ success: false, message: err.message || '施工交底单解析失败' })
+      reply.code(400).send({ success: false, message: err.message || '班组交底单解析失败' })
     }
   })
 
@@ -526,7 +526,7 @@ export default function projectImportRoutes(server, db) {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
     if (!project) return reply.code(404).send({ success: false, message: '项目不存在' })
     if (!canApplyProjectDocumentImport(request.user) || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
-      reply.code(403).send({ success: false, message: '无权限写入施工交底单字段' })
+      reply.code(403).send({ success: false, message: '无权限写入班组交底单字段' })
       return
     }
 
@@ -540,7 +540,7 @@ export default function projectImportRoutes(server, db) {
     for (const field of allowedFields) {
       if (incoming[field] === undefined) continue
       if (field === 'briefing_date' && !confirmedInferredFields.includes(field)) {
-        reply.code(400).send({ success: false, message: '交底日期来自接单时间推断，必须单独确认后才能写入' })
+        reply.code(400).send({ success: false, message: '班组交底日期来自接单时间推断，必须单独确认后才能写入' })
         return
       }
       const value = safeText(incoming[field], field === 'address_detail' ? 300 : 120)
@@ -564,7 +564,7 @@ export default function projectImportRoutes(server, db) {
     vals.push(project.id)
 
     db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...vals)
-    addProjectLog(db, project.id, '导入施工交底单字段', request.user.username,
+    addProjectLog(db, project.id, '导入班组交底单字段', request.user.username,
       buildDocumentImportLog(request.body, changed, incoming))
 
     return { success: true, data: { changed_fields: changed } }
@@ -577,9 +577,9 @@ export default function projectImportRoutes(server, db) {
         actionType: 'tool_write',
         toolName: 'parse_project_handover',
         status: 'denied',
-        errorMessage: '无权限导入施工交底单'
+        errorMessage: '无权限导入门店交底单'
       })
-      reply.code(403).send({ success: false, message: '无权限导入施工交底单' })
+      reply.code(403).send({ success: false, message: '无权限导入门店交底单' })
       return
     }
 
@@ -588,7 +588,7 @@ export default function projectImportRoutes(server, db) {
     const rawContent = sourceType === 'file'
       ? extractFileContent(file_name, file_data)
       : String(text || '')
-    if (!rawContent.trim()) return { success: false, message: '请粘贴交接内容或上传表格' }
+    if (!rawContent.trim()) return { success: false, message: '请粘贴门店交底内容或上传表格' }
 
     const aiDrafts = await parseWithAi(rawContent, db)
     const fallbackDrafts = sourceType === 'file' && looksLikeSpreadsheet(file_name, mime_type)
@@ -750,7 +750,7 @@ export default function projectImportRoutes(server, db) {
           Number(finalDraft.total_amount || 0),
           request.user.userId
         )
-        addProjectLog(db, created.lastInsertRowid, '导入施工交底单创建工单', request.user.username,
+        addProjectLog(db, created.lastInsertRowid, '导入门店交底单创建工单', request.user.username,
           `由导入批次 #${batch.id} 创建；修正字段 ${Object.keys(diff).length} 个`)
         updateItem.run(
           JSON.stringify(finalDraft),
@@ -885,8 +885,8 @@ function validateDeliveryStepConfirmation(db, project, documentType, doc) {
   }
   if (documentType === 'briefing') {
     const items = Array.isArray(data.items) ? data.items : []
-    if (!data.project?.customer && !project.customer) return { ok: false, message: '施工交底单缺少客户姓名' }
-    if (!items.length) return { ok: false, message: '施工交底单缺少施工项目明细' }
+    if (!data.project?.customer && !project.customer) return { ok: false, message: '班组交底单缺少客户姓名' }
+    if (!items.length) return { ok: false, message: '班组交底单缺少施工项目明细' }
   }
   if (documentType === 'material_io') {
     const summary = data.summary || {}
@@ -942,8 +942,8 @@ function stepConfirmProjectUpdates(documentType, confirmedData, guard) {
 function deliveryStatusLabel(status) {
   return {
     survey_done: '勘察完成待复尺',
-    recheck_done: '无需复尺/复尺完成待交底',
-    briefing_done: '交底完成待出库',
+    recheck_done: '无需复尺/复尺完成待班组交底',
+    briefing_done: '班组交底完成待出库',
     inspection_done: '验收完成待回库',
     material_returned: '回库完成待工费结算',
     labor_settled: '工费结算完成待成本核算',
@@ -973,10 +973,10 @@ const DELIVERY_NODE_RULES = [
   },
   {
     key: 'briefing',
-    stage: '交底',
-    label: '施工交底单',
-    desc: '交付资料源头，沉淀客户、地址、施工面积、施工项和合同报价。',
-    rx: /施工交底|工勘交底|成本交底|交底单/i,
+    stage: '班组交底',
+    label: '班组交底单',
+    desc: '复尺后、出库前的工程执行交底，沉淀班组、施工面积、施工项和进场注意事项。',
+    rx: /班组交底|施工交底|工勘交底|成本交底|交底单/i,
     required: true,
     actions: ['view', 'import']
   },
@@ -1280,7 +1280,7 @@ function parseBriefingText(text = '') {
   const projectDraft = buildProjectDraft(formData)
   return {
     document_type: 'briefing',
-    document_label: '施工交底单',
+    document_label: '门店交底单',
     file_name: '',
     sheet_name: '',
     project_draft: projectDraft,
@@ -1295,7 +1295,7 @@ function parseBriefingText(text = '') {
       item_summary: ''
     },
     missing_fields: missingBriefingFields(projectDraft, formData),
-    warnings: ['文字交底只做基础信息识别，施工项目明细建议上传正式施工交底单。']
+    warnings: ['文字交底只做基础信息识别，施工项目明细建议上传正式门店交底单。']
   }
 }
 
@@ -1454,10 +1454,10 @@ function saveProjectAttachment(db, user, projectId, file) {
   const originalName = safeFileName(file.name)
   const ext = extname(originalName).toLowerCase()
   if (!ALLOWED_BRIEFING_ATTACHMENT_EXTS.has(ext)) {
-    throw new Error('该文件类型不允许作为交底单附件上传')
+    throw new Error('该文件类型不允许作为班组交底单附件上传')
   }
   const buffer = decodeData(file.data)
-  if (!buffer.length) throw new Error('交底单文件内容为空')
+  if (!buffer.length) throw new Error('班组交底单文件内容为空')
   if (buffer.length > MAX_FILE_SIZE || Number(file.size || 0) > MAX_FILE_SIZE) throw new Error('单个文件不能超过 50MB')
 
   mkdirSync(UPLOAD_DIR, { recursive: true })
@@ -1875,9 +1875,9 @@ function changedProjectFields(project, draft) {
     order_taker: '接单人',
     order_date: '接单日期',
     external_order_no: '门店单号',
-    handover_note: '交接备注',
+    handover_note: '门店交底备注',
     team_leader: '班组长',
-    briefing_date: '交底日期',
+    briefing_date: '班组交底日期',
     total_amount: '金额'
   }
   return Object.entries(labels)
@@ -1906,7 +1906,7 @@ async function parseWithAi(rawContent, db) {
         messages: [
           {
             role: 'system',
-            content: '你是简尚涂装项目工单导入助手。请把门店/渠道交接内容拆分成 JSON 数组，只输出 JSON。字段：name, customer, phone, source, order_taker, order_date, external_order_no, address_province, address_city, address_detail, handover_note, total_amount, needs_construction, needs_stock, stock_note。没有就留空，不要编造。'
+            content: '你是简尚涂装项目工单导入助手。请把门店/渠道交底内容拆分成 JSON 数组，只输出 JSON。字段：name, customer, phone, source, order_taker, order_date, external_order_no, address_province, address_city, address_detail, handover_note, total_amount, needs_construction, needs_stock, stock_note。没有就留空，不要编造。'
           },
           { role: 'user', content: rawContent.slice(0, 12000) }
         ]
@@ -2097,9 +2097,9 @@ function safeText(value, limit) {
 }
 
 function safeFileName(name) {
-  return String(name || '施工交底单')
+  return String(name || '班组交底单')
     .replace(/[\\/:*?"<>|]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 120) || '施工交底单'
+    .slice(0, 120) || '班组交底单'
 }

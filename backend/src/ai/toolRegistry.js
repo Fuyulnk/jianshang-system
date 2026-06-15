@@ -61,7 +61,7 @@ export const AI_TOOL_REGISTRY = [
     schema: {
       type: 'object',
       properties: {
-        phase: { type: 'number', description: '阶段编号 1=交接勘察 2=复尺出库 3=施工验收 4=回库核算 5=财务归档 6=售后处理' },
+        phase: { type: 'number', description: '阶段编号 1=门店交底/勘察 2=复尺出库 3=施工验收 4=回库核算 5=财务归档 6=售后处理' },
         status: { type: 'string', description: '工单状态，如 handover_received、survey_pending、cost_checked、archived' }
       },
       required: []
@@ -133,15 +133,15 @@ export const AI_TOOL_REGISTRY = [
   },
   {
     name: 'parse_project_handover',
-    label: '解析项目交接草稿',
-    desc: '把门店/渠道交接文字拆分成一个或多个项目工单草稿',
+    label: '解析项目交底草稿',
+    desc: '把门店/渠道交底文字拆分成一个或多个项目工单草稿',
     tier: 'L2',
     risk_level: 'medium',
     action_type: 'tool_draft',
     schema: {
       type: 'object',
       properties: {
-        raw_text: { type: 'string', description: '微信、电话记录或交接单文字' }
+        raw_text: { type: 'string', description: '微信、电话记录或交底单文字' }
       },
       required: ['raw_text']
     }
@@ -168,7 +168,7 @@ export const AI_TOOL_REGISTRY = [
         address_province: { type: 'string', description: '省份' },
         address_city: { type: 'string', description: '城市' },
         address_detail: { type: 'string', description: '详细地址' },
-        handover_note: { type: 'string', description: '交接备注' },
+        handover_note: { type: 'string', description: '门店交底备注' },
         total_amount: { type: 'number', description: '合同金额' }
       },
       required: ['confirmed', 'name', 'customer']

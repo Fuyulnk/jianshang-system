@@ -9,12 +9,12 @@ const KB_SERVER = 'http://127.0.0.1:18790'
 const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
 
 const PROJECT_STATUS_LABELS = {
-  handover_received: { phase: 1, label: '门店交接待核对', phaseLabel: '交接/勘察' },
-  survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '交接/勘察' },
-  survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '交接/勘察' },
-  recheck_done: { phase: 2, label: '复尺完成待交底', phaseLabel: '复尺/交底/出库' },
-  briefing_done: { phase: 2, label: '交底完成待出库', phaseLabel: '复尺/交底/出库' },
-  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/交底/出库' },
+  handover_received: { phase: 1, label: '门店交底待核对', phaseLabel: '门店交底/勘察' },
+  survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '门店交底/勘察' },
+  survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '门店交底/勘察' },
+  recheck_done: { phase: 2, label: '复尺完成待班组交底', phaseLabel: '复尺/班组交底/出库' },
+  briefing_done: { phase: 2, label: '班组交底完成待出库', phaseLabel: '复尺/班组交底/出库' },
+  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/班组交底/出库' },
   material_out: { phase: 3, label: '已出库待进场', phaseLabel: '进场/施工/验收' },
   in_progress: { phase: 3, label: '施工中', phaseLabel: '进场/施工/验收' },
   inspection_done: { phase: 3, label: '验收完成待回库', phaseLabel: '进场/施工/验收' },
@@ -89,10 +89,10 @@ function projectStatusesForFilter(status) {
 
 function projectNextStep(status) {
   return {
-    handover_received: '安排首勘人员，补齐门店交接资料后进入待现场勘察。',
+    handover_received: '安排首勘人员，补齐门店交底资料后进入待现场勘察。',
     survey_pending: '首勘人员补齐工勘日期和现场记录，确认首次工勘结论。',
     survey_done: '安排二勘/复尺人员，补齐复尺或开工条件复核记录。',
-    recheck_done: '确认施工交底单，补齐班组、施工负责人和交底日期。',
+    recheck_done: '确认班组交底单，补齐班组、施工负责人和班组交底日期。',
     briefing_done: '仓库处理材料出库申请并确认出库。',
     material_requested: '仓库核对库存，确认材料出库。',
     material_out: '工程/施工负责人确认开工日期、预计完工日期和进场人员。',
@@ -516,17 +516,17 @@ function getSystemPrompt(username, agent, memorySummary = '') {
   return `你是简尚系统的智能助手，名字叫"简尚小助手"。
 
 ## 简尚真实业务
-简尚不是销售 CRM，门店/渠道负责签单和交接，简尚负责施工承接。项目工单流程是：
-1. 门店交接待核对：补齐来源门店/渠道、门店接单人、业主联系方式、详细地址。
+简尚不是销售 CRM，门店/渠道负责签单和交底，简尚负责施工承接。项目工单流程是：
+1. 门店交底待核对：补齐来源门店/渠道、门店接单人、业主联系方式、详细地址、施工空间、材料意向和注意事项。
 2. 待现场勘察：工程部填写勘察日期和现场记录，或关联标准勘察表。
 3. 勘察完成待复尺：记录复尺面积、基层、水电、保护和进场条件。
-4. 复尺完成待交底：安排班组长、施工负责人、施工成员和交底日期。
-5. 交底完成待出库：只能通过材料出库申请进入仓库确认，不能直接跳过。
+4. 复尺完成待班组交底：安排班组长、施工负责人、施工成员和班组交底日期。
+5. 班组交底完成待出库：只能通过材料出库申请进入仓库确认，不能直接跳过。
 6. 已出库待进场 / 施工中 / 验收完成待回库：记录开工日期、施工过程、完工验收和回库状态。
 7. 回库完成待工费结算 -> 工费结算完成待成本核算 -> 成本核算完成待财务结算 -> 财务结算完成待归档 -> 已归档。
 8. 售后是独立事件：repair_requested / repair_assigned / repair_done，不倒退主工程流程。
 
-你描述项目状态时必须使用以上口径，不要再说“项目前期、准备阶段、施工执行”这种旧阶段名称。
+你描述项目状态时必须使用以上口径，不要再说“项目前期、准备阶段、施工执行”这种旧阶段名称。注意区分“门店交底”和“班组交底”：门店交底是项目来源和客户需求，班组交底是复尺后、出库前的工程执行安排。
 你可以说明下一步缺什么、帮用户生成草稿或检查单据，但不能绕过人工确认。工费、成本、财务结算必须分别通过施工班组工费结算单、完工成本核算表、财务结算/归档凭证确认推进。
 普通员工只能查看和自己相关的项目；如果用户询问无关项目或工具没有返回数据，应明确说明“没有权限或没有查到可见数据”，不要猜测。
 
@@ -540,7 +540,7 @@ ${memorySummary ? `\n## 当前场景轻记忆\n${memorySummary}` : ''}
 1. 回答关于公司财务、制度、流程、产品、合同等方面的问题
 2. 帮助用户理解简尚系统的功能
 3. **直接查询系统数据并回答** - 你可以调用工具获取账户、交易、产品、员工、项目等实时数据
-4. 帮用户把门店/微信交接内容拆成项目工单草稿
+4. 帮用户把门店/微信交底内容拆成项目工单草稿
 
 ## 知识库
 你有一个公司文档知识库可供查询。系统会自动搜索相关文档提供给你参考。
@@ -549,7 +549,7 @@ ${memorySummary ? `\n## 当前场景轻记忆\n${memorySummary}` : ''}
 - 当用户问及具体数据时（如"查账户余额"、"今天收入多少"、"库存还有多少"等），直接调用对应工具查询
 - 当用户要求新增数据时（如"记一笔账"、"新增一个账户"等），直接调用对应工具创建
 - 创建操作前**必须向用户确认关键信息**（金额、账户、类型、工单客户、电话、地址等），得到确认后再执行
-- 当用户粘贴门店/微信交接内容时，优先调用 parse_project_handover 拆成草稿；只给用户确认清单，不要直接创建
+- 当用户粘贴门店/微信交底内容时，优先调用 parse_project_handover 拆成草稿；只给用户确认清单，不要直接创建
 - 只有用户明确说确认创建后，才允许调用 create_project_workorder
 - 查询得到数据后，用简洁易懂的语言整理给用户
 - 涉及金额用中文数字单位（元/万元）

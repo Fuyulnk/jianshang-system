@@ -122,7 +122,7 @@ async function loadBriefing() {
       headers: { Authorization: `Bearer ${token()}` }
     })
     const json = await readJson(res)
-    if (!res.ok || !json.success) throw new Error(json.message || '读取施工交底单失败')
+    if (!res.ok || !json.success) throw new Error(json.message || '读取班组交底单失败')
     document.value = json.data
     if (json.data?.confirmed_data) {
       form.value = normalizeBriefingForm(json.data.confirmed_data)
@@ -136,7 +136,7 @@ async function loadBriefing() {
       collapsed.value = false
     }
   } catch (err) {
-    ElMessage.error(err.message || '读取施工交底单失败')
+    ElMessage.error(err.message || '读取班组交底单失败')
   } finally {
     loading.value = false
   }
@@ -150,7 +150,7 @@ function onFileChange(event) {
   const file = event.target.files?.[0]
   if (!file) return
   if (!/\.(csv|xls|xlsx)$/i.test(file.name)) {
-    ElMessage.warning('施工交底单暂只支持 CSV / XLS / XLSX')
+    ElMessage.warning('班组交底单暂只支持 CSV / XLS / XLSX')
     event.target.value = ''
     return
   }
@@ -176,14 +176,14 @@ async function parseFile() {
       })
     })
     const json = await readJson(res)
-    if (!res.ok || !json.success) throw new Error(json.message || '施工交底单解析失败')
+    if (!res.ok || !json.success) throw new Error(json.message || '班组交底单解析失败')
     parsedData.value = json.data
     form.value = normalizeBriefingForm(json.data.form_data)
     warnings.value = json.data.warnings || []
     collapsed.value = false
-    ElMessage.success('交底单已解析，可核对后保存')
+    ElMessage.success('班组交底单已解析，可核对后保存')
   } catch (err) {
-    ElMessage.error(err.message || '施工交底单解析失败')
+    ElMessage.error(err.message || '班组交底单解析失败')
   } finally {
     parsing.value = false
   }
@@ -191,7 +191,7 @@ async function parseFile() {
 
 async function saveBriefing() {
   if (!props.canApply) {
-    ElMessage.warning('当前账号只能查看，不能保存施工交底单')
+    ElMessage.warning('当前账号只能查看，不能保存班组交底单')
     return
   }
   saving.value = true
@@ -214,7 +214,7 @@ async function saveBriefing() {
     })
     const json = await readJson(res)
     if (!res.ok || !json.success) throw new Error(json.message || '保存失败')
-    ElMessage.success('施工交底单已保存')
+    ElMessage.success('班组交底单已保存')
     pickedFile.value = null
     if (fileInput.value) fileInput.value.value = ''
     await loadBriefing()
@@ -306,8 +306,8 @@ async function readJson(res) {
         </button>
         <div class="head-main">
           <div class="kicker">项目核心单据</div>
-          <h3>施工交底单</h3>
-          <p>系统版可编辑交底单。原始 Excel 会作为工单附件保留，保存后不会自动推进状态。</p>
+          <h3>班组交底单</h3>
+          <p>系统版可编辑班组交底单。原始 Excel 会作为工单附件保留，保存后不会自动推进状态。</p>
         </div>
         <div class="head-actions">
           <el-tag v-if="hasDocument" type="success">已保存</el-tag>
@@ -337,7 +337,7 @@ async function readJson(res) {
     <template v-if="!collapsed">
       <div v-if="!hasDocument && !pickedFile" class="empty-hint">
         <el-icon><UploadFilled /></el-icon>
-        <span>还没有施工交底单。可以导入总监表格，也可以直接在下面补系统版字段。</span>
+        <span>还没有班组交底单。可以导入总监表格，也可以直接在下面补系统版字段。</span>
       </div>
 
       <el-form label-position="top" class="briefing-form">
@@ -350,7 +350,7 @@ async function readJson(res) {
           <el-col :span="6"><el-form-item label="客户姓名"><el-input v-model="form.basic.customer" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="6"><el-form-item label="客户联系方式"><el-input v-model="form.basic.phone" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="详细地址"><el-input v-model="form.basic.address_detail" :disabled="!canApply" /></el-form-item></el-col>
-          <el-col :span="24"><el-form-item label="交接备注"><el-input v-model="form.basic.handover_note" type="textarea" :rows="2" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="24"><el-form-item label="门店交底备注"><el-input v-model="form.basic.handover_note" type="textarea" :rows="2" :disabled="!canApply" /></el-form-item></el-col>
         </el-row>
 
         <div class="form-section">施工信息</div>
@@ -358,7 +358,7 @@ async function readJson(res) {
           <el-col :span="6"><el-form-item label="预计开工"><el-input v-model="form.construction.expected_start_date" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="6"><el-form-item label="预计总工期"><el-input v-model="form.construction.expected_duration" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="6"><el-form-item label="施工总面积"><el-input v-model="form.construction.total_area" type="number" :disabled="!canApply" /></el-form-item></el-col>
-          <el-col :span="6"><el-form-item label="交底日期"><el-input v-model="form.construction.briefing_date" :disabled="!canApply" /></el-form-item></el-col>
+          <el-col :span="6"><el-form-item label="班组交底日期"><el-input v-model="form.construction.briefing_date" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="6"><el-form-item label="进入方式"><el-input v-model="form.construction.entry_method" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="6"><el-form-item label="是否复尺"><el-input v-model="form.construction.remeasure" :disabled="!canApply" /></el-form-item></el-col>
           <el-col :span="6"><el-form-item label="车牌报备"><el-input v-model="form.construction.plate_needed" :disabled="!canApply" /></el-form-item></el-col>
@@ -442,9 +442,9 @@ async function readJson(res) {
       </el-form>
 
       <div class="save-bar">
-        <span>材料出库表、成本核算表等其他单据后续在对应流程节点处理；这里先固定施工交底单。</span>
+        <span>材料出库表、成本核算表等其他单据后续在对应流程节点处理；这里先固定班组交底单。</span>
         <el-button type="primary" :disabled="!canSave" :loading="saving" @click="saveBriefing">
-          {{ canApply ? '保存交底单' : '无保存权限' }}
+          {{ canApply ? '保存班组交底单' : '无保存权限' }}
         </el-button>
       </div>
     </template>

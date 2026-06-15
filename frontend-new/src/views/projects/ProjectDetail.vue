@@ -84,7 +84,7 @@
         <el-card class="summary-card handover-summary" shadow="never">
           <template #header>
             <div class="summary-header">
-              <span>门店交接资料</span>
+              <span>门店交底资料</span>
               <el-tag v-if="isProjectClosed" type="success" size="small">已归档</el-tag>
               <el-tag v-else-if="requiredMissingFields.length" type="danger" size="small">缺核心 {{ requiredMissingFields.length }} 项</el-tag>
               <el-tag v-else-if="suggestedMissingFields.length" type="warning" size="small">待完善 {{ suggestedMissingFields.length }} 项</el-tag>
@@ -113,7 +113,7 @@
               <strong>{{ formattedAddress || '未填写' }}</strong>
             </div>
             <div class="summary-item wide">
-              <span>交接备注</span>
+              <span>门店交底备注</span>
               <strong>{{ project.handover_note || '未填写' }}</strong>
             </div>
           </div>
@@ -185,8 +185,8 @@
         <el-form :model="editForm" label-position="top" class="work-form">
           <template v-if="project.status === 'handover_received'">
             <div class="stage-hint">
-              <strong>先核对门店交接资料。</strong>
-              <span>来源、接单人、业主联系方式和详细地址补齐后，才能安排现场勘察。</span>
+              <strong>先核对门店交底资料。</strong>
+              <span>客户、电话、地址、施工空间、材料意向、注意事项和门店接单人补齐后，才能安排现场勘察。</span>
             </div>
             <el-form-item label="首勘人员">
               <el-select v-model="editForm.survey_user_id" clearable filterable style="width:100%" placeholder="选择负责首勘的监理">
@@ -244,12 +244,12 @@
                 </el-option>
               </el-select>
             </el-form-item>
-            <el-form-item label="开工交底日期"><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
+            <el-form-item label="班组交底日期"><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
           </template>
 
           <template v-else-if="project.status === 'briefing_done'">
             <div class="stage-hint">
-              <strong>交底已完成，等待仓库处理材料出库。</strong>
+              <strong>班组交底已完成，等待仓库处理材料出库。</strong>
               <span>仓管在“材料出库单”里录入材料、辅材、工具和运输费，确认后工单自动进入已出库待进场。</span>
             </div>
           </template>
@@ -257,7 +257,7 @@
           <template v-else-if="project.status === 'material_requested'">
             <div class="stage-hint">
               <strong>已申请出库，等待仓库确认。</strong>
-              <span>仓库确认会扣减库存并把工单推进到已出库待进场；如取消申请，会回退到交底完成待出库。</span>
+              <span>仓库确认会扣减库存并把工单推进到已出库待进场；如取消申请，会回退到班组交底完成待出库。</span>
             </div>
           </template>
 
@@ -420,11 +420,11 @@
 
       <!-- 阶段详情 -->
       <div class="phase-panels">
-        <!-- 阶段1: 门店交接/勘察 -->
+        <!-- 阶段1: 门店交底/勘察 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Document /></el-icon> 门店交接 / 勘察</span>
+              <span><el-icon><Document /></el-icon> 门店交底 / 勘察</span>
               <el-tag size="small" :type="project.phase >= 1 ? 'success' : 'info'">{{ project.phase >= 1 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -434,17 +434,17 @@
             <el-descriptions-item label="接单日期">{{ project.order_date || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="门店单号/合同号">{{ project.external_order_no || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="施工地址">{{ formattedAddress || '未填写' }}</el-descriptions-item>
-            <el-descriptions-item label="交接备注" :span="2">{{ project.handover_note || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="门店交底备注" :span="2">{{ project.handover_note || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="工勘报告">{{ project.survey_report || '未填写' }}</el-descriptions-item>
             <el-descriptions-item label="工勘日期">{{ project.survey_date || '未填写' }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
 
-        <!-- 阶段2: 复尺交底/出库 -->
+        <!-- 阶段2: 班组交底/出库 -->
         <el-card class="phase-card">
           <template #header>
             <div class="card-header">
-              <span><el-icon><Tools /></el-icon> 复尺交底 / 出库</span>
+              <span><el-icon><Tools /></el-icon> 班组交底 / 出库</span>
               <el-tag size="small" :type="project.phase >= 2 ? 'success' : 'info'">{{ project.phase >= 2 ? '已完成' : '待进行' }}</el-tag>
             </div>
           </template>
@@ -457,7 +457,7 @@
               </span>
               <span v-else>未安排</span>
             </el-descriptions-item>
-            <el-descriptions-item label="开工交底日期">{{ project.briefing_date || '未填写' }}</el-descriptions-item>
+            <el-descriptions-item label="班组交底日期">{{ project.briefing_date || '未填写' }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
 
@@ -562,8 +562,8 @@
               <el-col :span="12">
                 <el-form-item label="来源门店/渠道">
                   <el-select v-model="editForm.source" filterable allow-create default-first-option placeholder="选择或输入来源" style="width:100%">
-                    <el-option label="门店" value="门店" /><el-option label="微信交接" value="微信交接" />
-                    <el-option label="电话交接" value="电话交接" /><el-option label="直接客户" value="直接客户" />
+                    <el-option label="门店" value="门店" /><el-option label="微信交底" value="微信交底" />
+                    <el-option label="电话交底" value="电话交底" /><el-option label="直接客户" value="直接客户" />
                     <el-option label="其他渠道" value="其他渠道" />
                   </el-select>
                 </el-form-item>
@@ -580,7 +580,7 @@
                 <el-form-item label="门店单号"><el-input v-model="editForm.external_order_no" placeholder="合同号/门店单号" /></el-form-item>
               </el-col>
             </el-row>
-            <el-form-item label="交接备注"><el-input v-model="editForm.handover_note" type="textarea" :rows="2" /></el-form-item>
+            <el-form-item label="门店交底备注"><el-input v-model="editForm.handover_note" type="textarea" :rows="2" /></el-form-item>
             <el-form-item label="施工地址">
               <div class="address-fields">
                 <el-cascader
@@ -649,7 +649,7 @@
                 <el-form-item label="班组长"><el-input v-model="editForm.team_leader" /></el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="交底日期"><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
+                <el-form-item label="班组交底日期"><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
               </el-col>
             </el-row>
             <el-form-item label="施工成员">
@@ -774,7 +774,7 @@ const suggestedMissingFields = computed(() => {
   const checks = [
     ['order_date', '接单日期'],
     ['external_order_no', '门店单号'],
-    ['handover_note', '交接备注']
+    ['handover_note', '门店交底备注']
   ]
   return checks.filter(([field]) => !String(project.value[field] || '').trim()).map(([, label]) => label)
 })
@@ -793,9 +793,9 @@ const TASK_FALLBACK = {
 
 const TASKS = {
   handover_received: {
-    title: '门店交接资料核对',
-    desc: '确认来源、接单人、业主联系方式和详细地址，资料齐后安排现场勘察。',
-    action: '资料核对完成，安排勘察',
+    title: '门店交底资料核对',
+    desc: '确认客户、电话、地址、施工空间、材料意向、注意事项和门店接单人，资料齐后安排现场勘察。',
+    action: '门店交底核对完成，安排勘察',
     next: 'survey_pending',
     roles: ['super_admin', 'admin', 'engineering'],
     required: ['handover', 'survey_assignee']
@@ -813,8 +813,8 @@ const TASKS = {
   },
   survey_done: {
     title: '复尺和开工条件复核',
-    desc: '记录复尺面积、基层、水电、保护和进场条件，确认后进入交底排班。',
-    action: '复尺完成，进入交底',
+    desc: '记录复尺面积、基层、水电、保护和进场条件，确认后进入班组交底排班。',
+    action: '复尺完成，进入班组交底',
     next: 'recheck_done',
     roles: ['super_admin', 'admin', 'engineering'],
     required: ['recheck_assignee', 'condition_note'],
@@ -823,9 +823,9 @@ const TASKS = {
     assignedOnly: true
   },
   recheck_done: {
-    title: '安排施工组并完成交底',
-    desc: '安排班组长、施工负责人、施工成员和交底日期，交底完成后才能出库。',
-    action: '交底完成，等待出库',
+    title: '安排施工组并完成班组交底',
+    desc: '安排班组长、施工负责人、施工成员和班组交底日期，班组交底完成后才能出库。',
+    action: '班组交底完成，等待出库',
     next: 'briefing_done',
     roles: ['super_admin', 'admin', 'engineering'],
     required: ['assignee', 'briefing_date'],
@@ -843,7 +843,7 @@ const TASKS = {
   },
   material_requested: {
     title: '等待仓库确认出库',
-    desc: '仓库确认会扣减库存并推进到已出库待进场；取消申请会回退到交底完成待出库。',
+    desc: '仓库确认会扣减库存并推进到已出库待进场；取消申请会回退到班组交底完成待出库。',
     action: '',
     next: '',
     roles: [],
@@ -978,7 +978,7 @@ const currentDocumentLabel = computed(() => {
   return deliveryNodes.value.find(node => node.key === currentDocumentKey.value)?.label || {
     survey_initial: '首次工勘表',
     survey_recheck: '二次勘察表',
-    briefing: '施工交底单',
+    briefing: '班组交底单',
     material_io: '材料出库单',
     completion_inspection: '完工验收质检表',
     labor_settlement: '施工班组工费结算单',
@@ -996,9 +996,9 @@ const currentActionHint = computed(() => {
 })
 const currentStepNote = computed(() => {
   if (project.value?.status === 'survey_pending') return '先上传现场图片、补充说明，再生成 PPT 并确认工勘结果。'
-  if (project.value?.status === 'survey_done') return needRecheck.value ? '该项目需要复尺，处理二次勘察后再交底。' : '该项目可跳过复尺，下一步进入施工交底。'
-  if (project.value?.status === 'recheck_done') return '核对施工交底单，确认班组、面积、工艺和进场注意事项。'
-  if (project.value?.status === 'briefing_done') return '交底完成后由仓管填写材料出库单并确认出库。'
+  if (project.value?.status === 'survey_done') return needRecheck.value ? '该项目需要复尺，处理二次勘察后再做班组交底。' : '该项目可跳过复尺，下一步进入班组交底。'
+  if (project.value?.status === 'recheck_done') return '核对班组交底单，确认班组、面积、工艺和进场注意事项。'
+  if (project.value?.status === 'briefing_done') return '班组交底完成后由仓管填写材料出库单并确认出库。'
   if (project.value?.status === 'material_out') return '工程部确认进场时间、人员和班组安排。'
   if (project.value?.status === 'in_progress') return '施工中先做轻量记录；确认验收通过后交给仓库回库。'
   if (project.value?.status === 'inspection_done') return '验收完成后由仓管填写材料回库单。'
@@ -1013,10 +1013,10 @@ const workflowSteps = computed(() => {
   if (!project.value) return []
   const status = project.value.status
   const order = [
-    { key: 'handover', label: '交接核对', statuses: ['handover_received'] },
+    { key: 'handover', label: '门店交底', statuses: ['handover_received'] },
     { key: 'survey', label: '首次工勘', statuses: ['survey_pending'] },
     { key: 'recheck', label: '复尺复核', statuses: ['survey_done'], optional: true },
-    { key: 'briefing', label: '施工交底', statuses: ['recheck_done'] },
+    { key: 'briefing', label: '班组交底', statuses: ['recheck_done'] },
     { key: 'material', label: '出库进场', statuses: ['briefing_done', 'material_requested', 'material_out'] },
     { key: 'build', label: '施工验收', statuses: ['in_progress', 'inspection_done'] },
     { key: 'settle', label: '回库核算', statuses: ['material_returned', 'labor_settled', 'cost_checked'] },
@@ -1091,7 +1091,7 @@ function missingForTask(required) {
     if (key === 'recheck_assignee' && !merged.recheck_user_id) missing.push('二勘/复尺人员')
     if (key === 'condition_note' && !hasMeaningfulText(merged.condition_note, 8)) missing.push('不少于 8 字的复尺/开工条件复核记录')
     if (key === 'assignee' && !merged.assignee_user_id && !merged.team_leader && !parseCrewMemberIds(merged.crew_member_user_ids).length) missing.push('施工负责人、班组长或施工成员')
-    if (key === 'briefing_date' && !merged.briefing_date) missing.push('交底日期')
+    if (key === 'briefing_date' && !merged.briefing_date) missing.push('班组交底日期')
     if (key === 'start_date' && !merged.start_date) missing.push('开工日期')
     if (key === 'expected_end_date' && !merged.expected_end_date) missing.push('预计完工日期')
     if (key === 'onsite_team' && !merged.assignee_user_id && !merged.team_leader && !parseCrewMemberIds(merged.crew_member_user_ids).length) missing.push('施工负责人、班组长或施工成员')

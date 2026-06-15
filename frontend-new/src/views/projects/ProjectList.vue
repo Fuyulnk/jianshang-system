@@ -15,10 +15,10 @@
         <div>
           <el-button class="back-branch" text @click="router.push('/main/projects')">← 项目工单分支</el-button>
           <h2>施工项目工单</h2>
-          <p class="page-desc">门店/渠道签单后，由简尚承接施工交付；重点看资料是否齐、下一步卡在哪里。</p>
+          <p class="page-desc">门店/渠道交底后，由简尚承接施工交付；重点看资料是否齐、下一步卡在哪里。</p>
         </div>
         <div class="header-actions">
-          <el-button v-if="canCreateProjects" @click="showImport = true">导入交底单</el-button>
+          <el-button v-if="canCreateProjects" @click="showImport = true">导入门店交底单</el-button>
           <el-button v-if="canCreateProjects" type="primary" @click="openCreateForm">新建工单</el-button>
         </div>
       </div>
@@ -45,7 +45,7 @@
         </template>
       </el-table-column>
       <el-table-column prop="customer" label="业主/客户" width="120" />
-      <el-table-column label="门店交接" min-width="190" show-overflow-tooltip>
+      <el-table-column label="门店交底" min-width="190" show-overflow-tooltip>
         <template #default="{ row }">
           <div class="handover-cell">
             <strong>{{ row.source || '未填来源' }}</strong>
@@ -101,7 +101,7 @@
     <!-- 新建/编辑弹窗 -->
     <el-dialog v-model="showForm" :title="formMode === 'create' ? '新建项目工单' : '编辑项目工单'" width="720px">
       <el-form ref="formRef" :model="form" label-width="100px">
-        <div class="form-section-title">门店交接</div>
+        <div class="form-section-title">门店交底</div>
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="工单名称" required>
@@ -124,8 +124,8 @@
             <el-form-item label="来源门店/渠道">
               <el-select v-model="form.source" filterable allow-create default-first-option placeholder="选择或输入来源" style="width:100%">
                 <el-option label="门店" value="门店" />
-                <el-option label="微信交接" value="微信交接" />
-                <el-option label="电话交接" value="电话交接" />
+                <el-option label="微信交底" value="微信交底" />
+                <el-option label="电话交底" value="电话交底" />
                 <el-option label="直接客户" value="直接客户" />
                 <el-option label="其他渠道" value="其他渠道" />
               </el-select>
@@ -149,8 +149,8 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="交接备注">
-          <el-input v-model="form.handover_note" type="textarea" :rows="2" placeholder="门店交接的特殊要求、承诺事项、注意点" />
+        <el-form-item label="交底备注">
+          <el-input v-model="form.handover_note" type="textarea" :rows="2" placeholder="门店交底的施工空间、材料意向、特殊要求、承诺事项、注意点" />
         </el-form-item>
         <div class="form-section-title">施工承接</div>
         <el-row :gutter="16">
@@ -267,7 +267,7 @@ const canCreateProjects = computed(() => ['super_admin', 'admin'].includes(userR
 const canDeleteProjects = computed(() => ['super_admin', 'admin'].includes(userRole.value))
 
 const phaseOptions = [
-  { value: '1', label: '交接勘察' },
+  { value: '1', label: '门店交底/勘察' },
   { value: '2', label: '复尺出库' },
   { value: '3', label: '施工验收' },
   { value: '4', label: '回库核算' },
@@ -289,14 +289,14 @@ const boardStats = computed(() => [
     key: 'survey',
     label: '待勘察/复尺',
     count: list.value.filter(row => ['handover_received', 'survey_pending', 'survey_done'].includes(row.status)).length,
-    desc: '交接核对到现场复核',
+    desc: '门店交底到现场复核',
     tone: 'info'
   },
   {
     key: 'prepare',
-    label: '待交底/出库',
+    label: '待班组交底/出库',
     count: list.value.filter(row => ['recheck_done', 'briefing_done', 'material_requested'].includes(row.status)).length,
-    desc: '交底完成后才能申请出库',
+    desc: '班组交底完成后才能申请出库',
     tone: 'primary'
   },
   {
@@ -338,7 +338,7 @@ function suggestedMissingFields(row) {
   const checks = [
     ['order_date', '接单日期'],
     ['external_order_no', '门店单号'],
-    ['handover_note', '交接备注']
+    ['handover_note', '门店交底备注']
   ]
   return checks.filter(([field]) => !String(row[field] || '').trim()).map(([, label]) => label)
 }
@@ -383,7 +383,7 @@ function computeStats(data) {
   }
   stats.value = [
     { key: 'all', label: '全部工单', count: counts.all, active: !phaseFilter.value },
-    { key: '1', label: '交接勘察', count: counts['1'], active: phaseFilter.value === '1' },
+    { key: '1', label: '门店交底/勘察', count: counts['1'], active: phaseFilter.value === '1' },
     { key: '2', label: '复尺出库', count: counts['2'], active: phaseFilter.value === '2' },
     { key: '3', label: '施工验收', count: counts['3'], active: phaseFilter.value === '3' },
     { key: '4', label: '回库核算', count: counts['4'], active: phaseFilter.value === '4' },

@@ -136,7 +136,7 @@ function onFileChange(event) {
   const file = event.target.files?.[0]
   if (!file) return
   if (!/\.(csv|xls|xlsx)$/i.test(file.name)) {
-    ElMessage.warning('施工交底单暂只支持 CSV / XLS / XLSX')
+    ElMessage.warning('门店交底单暂只支持 CSV / XLS / XLSX')
     event.target.value = ''
     return
   }
@@ -151,7 +151,7 @@ function onFileChange(event) {
 
 async function parseBriefing() {
   if (!pickedFile.value && !rawText.value.trim()) {
-    ElMessage.warning('请上传施工交底单或粘贴交底内容')
+    ElMessage.warning('请上传门店交底单或粘贴交底内容')
     return
   }
   parsing.value = true
@@ -168,14 +168,14 @@ async function parseBriefing() {
       body: JSON.stringify(body)
     })
     const json = await readJson(res)
-    if (!res.ok || !json.success) throw new Error(json.message || '施工交底单解析失败')
+    if (!res.ok || !json.success) throw new Error(json.message || '门店交底单解析失败')
     parsedData.value = json.data
     form.value = normalizeBriefingForm(json.data.form_data)
     duplicateMatches.value = json.data.duplicate_matches || []
     warnings.value = json.data.warnings || []
-    ElMessage.success('施工交底单已解析，请核对后创建工单')
+    ElMessage.success('门店交底单已解析，请核对后创建工单')
   } catch (err) {
-    ElMessage.error(err.message || '施工交底单解析失败')
+    ElMessage.error(err.message || '门店交底单解析失败')
   } finally {
     parsing.value = false
   }
@@ -202,7 +202,7 @@ async function confirmCreate() {
     })
     const json = await readJson(res)
     if (!res.ok || !json.success) throw new Error(json.message || `创建失败（HTTP ${res.status}）`)
-    ElMessage.success('已由施工交底单创建项目工单')
+    ElMessage.success('已由门店交底单创建项目工单')
     emit('created')
     visible.value = false
     if (json.data?.project_id) router.push(`/main/projects/${json.data.project_id}`)
@@ -296,15 +296,15 @@ async function readJson(res) {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="导入施工交底单" width="1180px" class="briefing-import-dialog" @closed="resetAll">
+  <el-dialog v-model="visible" title="导入门店交底单" width="1180px" class="briefing-import-dialog" @closed="resetAll">
     <div class="briefing-layout">
       <section class="source-panel">
-        <div class="section-title">交底单来源</div>
+        <div class="section-title">门店交底单来源</div>
         <div class="upload-box" @click="openPicker">
           <input ref="fileInput" class="hidden-input" type="file" accept=".csv,.xls,.xlsx" @change="onFileChange" />
           <el-icon :size="28"><UploadFilled /></el-icon>
           <div>
-            <strong>{{ pickedFile?.name || '选择施工交底单表格' }}</strong>
+            <strong>{{ pickedFile?.name || '选择门店交底单表格' }}</strong>
             <span>支持总监工作树里的 .xls / .xlsx / .csv，原始文件会保存为工单附件。</span>
           </div>
         </div>
@@ -314,12 +314,12 @@ async function readJson(res) {
           type="textarea"
           :rows="8"
           resize="none"
-          placeholder="没有表格时，可临时粘贴交底文字。正式使用建议上传施工交底单。"
+          placeholder="没有表格时，可临时粘贴门店交底文字。正式使用建议上传门店交底单。"
           :disabled="!!pickedFile"
         />
         <div class="source-actions">
           <el-button @click="resetAll" :disabled="parsing || confirming">清空</el-button>
-          <el-button type="primary" :loading="parsing" @click="parseBriefing">解析交底单</el-button>
+          <el-button type="primary" :loading="parsing" @click="parseBriefing">解析门店交底单</el-button>
         </div>
 
         <div class="summary-box">
@@ -346,8 +346,8 @@ async function readJson(res) {
       <section class="form-panel">
         <div class="result-header">
           <div>
-            <div class="section-title">系统版施工交底单</div>
-            <p>{{ hasParsed ? '核对字段后创建项目工单；不会自动推进项目状态。' : '解析后会在这里生成可编辑交底单。' }}</p>
+            <div class="section-title">系统版门店交底单</div>
+            <p>{{ hasParsed ? '核对字段后创建项目工单；不会自动推进项目状态。' : '解析后会在这里生成可编辑门店交底单。' }}</p>
           </div>
           <el-button type="primary" :disabled="!canConfirm" :loading="confirming" @click="confirmCreate">确认创建工单</el-button>
         </div>
@@ -362,7 +362,7 @@ async function readJson(res) {
             <el-col :span="6"><el-form-item label="客户姓名"><el-input v-model="form.basic.customer" /></el-form-item></el-col>
             <el-col :span="6"><el-form-item label="客户联系方式"><el-input v-model="form.basic.phone" /></el-form-item></el-col>
             <el-col :span="12"><el-form-item label="详细地址"><el-input v-model="form.basic.address_detail" /></el-form-item></el-col>
-            <el-col :span="24"><el-form-item label="交接备注"><el-input v-model="form.basic.handover_note" type="textarea" :rows="2" /></el-form-item></el-col>
+            <el-col :span="24"><el-form-item label="门店交底备注"><el-input v-model="form.basic.handover_note" type="textarea" :rows="2" /></el-form-item></el-col>
           </el-row>
 
           <div class="form-section">施工信息</div>
@@ -370,7 +370,7 @@ async function readJson(res) {
             <el-col :span="6"><el-form-item label="预计开工"><el-input v-model="form.construction.expected_start_date" /></el-form-item></el-col>
             <el-col :span="6"><el-form-item label="预计总工期"><el-input v-model="form.construction.expected_duration" /></el-form-item></el-col>
             <el-col :span="6"><el-form-item label="施工总面积"><el-input v-model="form.construction.total_area" type="number" /></el-form-item></el-col>
-            <el-col :span="6"><el-form-item label="交底日期"><el-input v-model="form.construction.briefing_date" /></el-form-item></el-col>
+            <el-col :span="6"><el-form-item label="班组交底日期"><el-input v-model="form.construction.briefing_date" /></el-form-item></el-col>
             <el-col :span="6"><el-form-item label="进入方式"><el-input v-model="form.construction.entry_method" /></el-form-item></el-col>
             <el-col :span="6"><el-form-item label="是否复尺"><el-input v-model="form.construction.remeasure" /></el-form-item></el-col>
             <el-col :span="6"><el-form-item label="车牌报备"><el-input v-model="form.construction.plate_needed" /></el-form-item></el-col>

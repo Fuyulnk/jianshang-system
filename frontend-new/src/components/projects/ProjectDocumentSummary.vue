@@ -679,7 +679,7 @@ function confirmButtonLabel(node) {
   return {
     survey_initial: '确认工勘完成',
     survey_recheck: '确认复尺完成',
-    briefing: '确认交底完成',
+    briefing: '确认班组交底完成',
     material_io: '确认回库完成',
     completion_inspection: '确认验收完成',
     labor_settlement: '确认工费结算',
