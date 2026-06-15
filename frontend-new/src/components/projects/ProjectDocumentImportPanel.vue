@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, WarningFilled, Plus } from '@element-plus/icons-vue'
@@ -51,7 +52,7 @@ watch(() => props.project?.id, () => {
 }, { immediate: true })
 
 function token() {
-  return localStorage.getItem('token')
+  return getAuthToken()
 }
 
 function emptyBriefingForm() {

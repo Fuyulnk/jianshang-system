@@ -46,6 +46,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
@@ -93,7 +94,7 @@ const tableData = computed(() => {
   return Object.values(map)
 })
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 async function fetchData() {
   const [pRes, rRes] = await Promise.all([

@@ -3,6 +3,7 @@ import { authMiddleware } from '../middleware/auth.js'
 import { spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
+import { requireAssignedAccount } from '../utils/permissions.js'
 
 const KB_SERVER = 'http://127.0.0.1:18790'
 
@@ -71,6 +72,7 @@ export default function settingsRoutes(server, db) {
   // 测试 AI 连接
   server.post('/api/settings/test-ai', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能测试 AI 连接')) return
 
     const apiKey = process.env.AI_API_KEY
     if (!apiKey) {
@@ -104,6 +106,7 @@ export default function settingsRoutes(server, db) {
   // 知识库状态
   server.get('/api/settings/knowledge-base', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能查看知识库状态')) return
 
     try {
       const res = await fetch(`${KB_SERVER}/health`, { signal: AbortSignal.timeout(3000) })
@@ -116,6 +119,7 @@ export default function settingsRoutes(server, db) {
 
   server.post('/api/settings/knowledge-base/reindex', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能重建知识库索引')) return
     if (!['super_admin', 'admin'].includes(request.user.role)) {
       reply.code(403).send({ success: false, message: '无权限' })
       return

@@ -55,6 +55,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -64,7 +65,7 @@ const showAdd = ref(false)
 const saving = ref(false)
 const addForm = ref({ name: '', type: 'personal' })
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 async function fetchList() {
   loading.value = true

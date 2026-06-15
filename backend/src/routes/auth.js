@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { getJwtSecret } from '../config.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { departmentPositionPayload, isValidDepartmentPosition } from '../utils/orgOptions.js'
 
 // 登录失败计数（内存），IP → { count, lockUntil }
 const loginAttempts = new Map()
@@ -58,9 +59,6 @@ export default function authRoutes(server, db) {
     }
 
     const accountStatus = user.status || 'active'
-    if (accountStatus === 'pending_activation') {
-      return { success: false, code: 'pending_activation', message: '账号已提交，正在等待管理员分配人员和权限' }
-    }
     if (accountStatus === 'disabled') {
       return { success: false, code: 'disabled', message: '账号已停用，请联系管理员' }
     }
@@ -100,8 +98,10 @@ export default function authRoutes(server, db) {
         real_name: user.real_name || '',
         phone: user.phone || '',
         department: user.department || '',
+        position: user.position || '',
         employee_id: user.employee_id || 0,
         status: accountStatus,
+        assignment_status: user.assignment_status || 'assigned',
         role_version: user.role_version || 1,
         ai_pet_enabled: user.ai_pet_enabled ?? 1,
         ai_auto_query: user.ai_auto_query ?? 1,
@@ -125,9 +125,18 @@ export default function authRoutes(server, db) {
     if (regRecord.count > 10) {
       return { success: false, message: '注册过于频繁，请明天再试' }
     }
-    const { username, password, name, phone, department, ai_pet_enabled, ai_auto_query, ai_name } = request.body
+    const { username, password, name, phone, department, position, ai_pet_enabled, ai_auto_query, ai_name } = request.body
     if (!username || !password) {
       return { success: false, message: '账号和密码不能为空' }
+    }
+    if (!name || !String(name).trim()) {
+      return { success: false, message: '姓名不能为空' }
+    }
+    if (!phone || !String(phone).trim()) {
+      return { success: false, message: '手机号不能为空' }
+    }
+    if (!department || !position || !isValidDepartmentPosition(String(department).trim(), String(position).trim())) {
+      return { success: false, message: '请选择正确的部门和职位' }
     }
     if (password.length < 6) {
       return { success: false, message: '密码至少6位' }
@@ -141,20 +150,35 @@ export default function authRoutes(server, db) {
     const displayName = String(name || username).trim()
     const safePhone = String(phone || '').trim()
     const safeDepartment = String(department || '').trim()
+    const safePosition = String(position || '').trim()
     const safeAiName = String(ai_name || '简尚小助手').trim().slice(0, 20) || '简尚小助手'
     const petEnabled = ai_pet_enabled === false ? 0 : 1
     const autoQuery = ai_auto_query === false ? 0 : 1
     const result = db.prepare(`
       INSERT INTO users (
         username, password, role, real_name, phone, department,
-        ai_pet_enabled, ai_auto_query, ai_name, status, onboarding_done
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_activation', 0)
-    `).run(username, hashed, 'employee', displayName, safePhone, safeDepartment, petEnabled, autoQuery, safeAiName)
+        position, ai_pet_enabled, ai_auto_query, ai_name, status, assignment_status, onboarding_done
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'pending', 0)
+    `).run(username, hashed, 'employee', displayName, safePhone, safeDepartment, safePosition, petEnabled, autoQuery, safeAiName)
+
+    const secret = getJwtSecret()
+    const token = jwt.sign(
+      {
+        userId: result.lastInsertRowid,
+        username,
+        role: 'employee',
+        roleVersion: 1,
+        employeeId: 0
+      },
+      secret,
+      { expiresIn: '1d' }
+    )
 
     return {
       success: true,
-      pending_activation: true,
-      message: '注册信息已提交，等待管理员分配人员和权限',
+      token,
+      pending_assignment: true,
+      message: '账号已开通普通员工入口，等待管理员建档和岗位分配',
       user: {
         id: result.lastInsertRowid,
         username,
@@ -163,8 +187,10 @@ export default function authRoutes(server, db) {
         real_name: displayName,
         phone: safePhone,
         department: safeDepartment,
+        position: safePosition,
         employee_id: 0,
-        status: 'pending_activation',
+        status: 'active',
+        assignment_status: 'pending',
         role_version: 1,
         ai_pet_enabled: petEnabled,
         ai_auto_query: autoQuery,
@@ -179,7 +205,8 @@ export default function authRoutes(server, db) {
     try {
       const user = db.prepare(`
         SELECT id, username, role, role_version, employee_id, avatar_url, onboarding_done,
-               real_name, phone, department, ai_pet_enabled, ai_auto_query, ai_name, status, created_at
+               real_name, phone, department, position, ai_pet_enabled, ai_auto_query, ai_name,
+               status, assignment_status, created_at
         FROM users WHERE id = ?
       `).get(request.user.userId)
       if (!user) {
@@ -191,5 +218,9 @@ export default function authRoutes(server, db) {
     } catch {
       reply.code(401).send({ success: false, message: 'token 无效' })
     }
+  })
+
+  server.get('/api/org-options', async () => {
+    return { success: true, data: departmentPositionPayload() }
   })
 }

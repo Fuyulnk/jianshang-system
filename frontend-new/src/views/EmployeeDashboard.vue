@@ -93,6 +93,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../utils/authSession'
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -113,7 +114,7 @@ const surveySop = [
   { title: '4. 判断进场', desc: '按可进场、有条件进场、暂不建议进场三档输出，不要只把照片丢给总监判断。' }
 ]
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 async function fetchDashboard() {
   try {

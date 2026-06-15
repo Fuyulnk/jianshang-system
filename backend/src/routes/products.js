@@ -7,8 +7,8 @@ export default function productRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireModuleAccess(db, request, reply, 'products', 'can_view', '无权限查看产品库存')) return
 
-    const products = db.prepare('SELECT * FROM products ORDER BY id ASC').all()
-    return { success: true, data: products }
+    const products = db.prepare('SELECT * FROM products ORDER BY name ASC, spec ASC, id ASC').all()
+    return { success: true, data: products.map(enrichProductSku) }
   })
 
   // 新增产品
@@ -96,4 +96,32 @@ function displayProductSku(item) {
   const spec = String(item?.spec || '').trim()
   const unit = String(item?.unit || '').trim()
   return `${name}${spec && !name.includes(spec) ? spec : ''}${unit ? `｜${unit}` : ''}`
+}
+
+function enrichProductSku(item) {
+  const displayName = displayProductName(item)
+  const unit = String(item?.unit || '').trim()
+  const stock = Number(item?.stock || 0)
+  const skuLabel = `${displayName}${unit ? `｜${unit}` : ''}｜${formatQty(stock)}`
+  return {
+    ...item,
+    display_name: displayName,
+    sku_label: skuLabel,
+    search_text: [displayName, item.name, item.spec, item.category, item.unit, skuLabel]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+  }
+}
+
+function displayProductName(item) {
+  const name = String(item?.name || '').trim()
+  const spec = String(item?.spec || '').trim()
+  if (!spec || name.includes(spec)) return name
+  return `${name}${spec}`
+}
+
+function formatQty(value) {
+  const n = Number(value || 0)
+  return Number.isInteger(n) ? String(n) : n.toFixed(2)
 }

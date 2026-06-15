@@ -47,6 +47,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../utils/authSession'
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -78,7 +79,7 @@ function updateTime() {
 }
 
 async function fetchStats() {
-  const token = localStorage.getItem('token')
+  const token = getAuthToken()
   if (!token) return
   try {
     const [accRes, txWindow, prodRes, empRes] = await Promise.all([

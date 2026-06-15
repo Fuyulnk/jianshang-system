@@ -18,7 +18,7 @@
             <span>{{ isAdmin ? '控制台' : '工作台' }}</span>
           </el-menu-item>
 
-          <el-menu-item index="/main/chat">
+          <el-menu-item v-if="!isPendingAssignment" index="/main/chat">
             <el-icon><ChatDotSquare /></el-icon>
             <span>聊天</span>
           </el-menu-item>
@@ -101,6 +101,14 @@
         </div>
       </el-header>
       <el-main class="content">
+        <el-alert
+          v-if="userInfo.assignment_status === 'pending'"
+          class="assignment-alert"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="当前为普通员工入口，管理员建档并分配岗位后，系统会提示你重新登录刷新权限。"
+        />
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
             <component :is="Component" />
@@ -110,15 +118,17 @@
     </el-container>
 
     <!-- 入职向导 -->
-    <OnboardingWizard :visible="showOnboarding" @done="onOnboardingDone" />
+    <OnboardingWizard :visible="showOnboarding" :user="userInfo" @done="onOnboardingDone" />
 
     <!-- AI 桌宠浮窗 -->
-    <AiPetWidget />
+    <AiPetWidget v-if="!isPendingAssignment" />
   </el-container>
 </template>
 
 <script setup>
+import { getAuthToken, clearAuthSession } from '../utils/authSession'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { useRouter, useRoute } from 'vue-router'
 import { HomeFilled, Wallet, List, Goods, User, Operation, ChatDotSquare, Fold, Expand, Tools, Sunny, Moon, TrendCharts, Document } from '@element-plus/icons-vue'
 import UserAvatar from '../components/UserAvatar.vue'
@@ -134,8 +144,11 @@ const collapsed = ref(window.innerWidth < 1200)
 const showOnboarding = ref(false)
 const isDark = ref(false)
 const themeTimer = ref(null)
-const hasFinanceAccess = computed(() => isAdmin.value || userInfo.value.role === 'finance' || allowedModules.value.includes('finance'))
-const hasFileCenterAccess = computed(() => isAdmin.value || ['finance', 'warehouse', 'engineering'].includes(userInfo.value.role) || ['projects', 'transactions', 'products'].some(hasPerm))
+const assignmentTimer = ref(null)
+const sessionExpiredPrompting = ref(false)
+const isPendingAssignment = computed(() => userInfo.value.assignment_status === 'pending')
+const hasFinanceAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || userInfo.value.role === 'finance' || allowedModules.value.includes('finance')))
+const hasFileCenterAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || ['finance', 'warehouse', 'engineering'].includes(userInfo.value.role) || ['projects', 'transactions', 'products'].some(hasPerm)))
 const themeTitle = computed(() => {
   const mode = localStorage.getItem('theme-mode') || 'auto'
   const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -187,10 +200,11 @@ function applyPersonalAppearance() {
 }
 
 function hasPerm(module) {
+  if (isPendingAssignment.value) return false
   return isAdmin.value || allowedModules.value.includes(module)
 }
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 async function fetchUserInfo() {
   try {
@@ -198,9 +212,8 @@ async function fetchUserInfo() {
       headers: { Authorization: `Bearer ${token()}` }
     })
     if (res.status === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      router.replace('/')
+      const json = await res.json().catch(() => ({}))
+      await handleSessionExpired(json.message || '未登录或 token 已过期')
       return
     }
     const json = await res.json()
@@ -216,6 +229,40 @@ async function fetchUserInfo() {
         showOnboarding.value = true
       }
     }
+  } catch {}
+}
+
+async function handleSessionExpired(message) {
+  if (sessionExpiredPrompting.value) return
+  sessionExpiredPrompting.value = true
+  const isAssigned = String(message || '').includes('权限已变更')
+  if (isAssigned) {
+    try {
+      await ElMessageBox.alert('账号已分配，请重新登录后进入新的岗位界面。', '账号已分配', {
+        confirmButtonText: '回到登录页',
+        type: 'success',
+        showClose: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false
+      })
+    } catch {}
+  }
+  clearAuthSession({ clearRemembered: true })
+  router.replace('/')
+}
+
+async function checkAssignmentChange() {
+  if (userInfo.value.assignment_status !== 'pending') return
+  try {
+    const res = await fetch('/api/me', {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json().catch(() => ({}))
+    if (res.status === 401) {
+      await handleSessionExpired(json.message || '用户权限已变更，请重新登录')
+      return
+    }
+    if (json.success) userInfo.value = json.user
   } catch {}
 }
 
@@ -235,8 +282,7 @@ async function fetchMenu() {
 }
 
 const handleLogout = () => {
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
+  clearAuthSession({ clearRemembered: true })
   router.push('/')
 }
 
@@ -246,16 +292,22 @@ onMounted(() => {
   window.addEventListener('personal-appearance-change', applyPersonalAppearance)
   fetchUserInfo()
   fetchMenu()
+  assignmentTimer.value = window.setInterval(checkAssignmentChange, 15000)
 })
 
 onUnmounted(() => {
   if (themeTimer.value) window.clearInterval(themeTimer.value)
+  if (assignmentTimer.value) window.clearInterval(assignmentTimer.value)
   window.removeEventListener('personal-appearance-change', applyPersonalAppearance)
 })
 </script>
 
 <style scoped>
 .main-layout { height: 100vh; }
+
+.assignment-alert {
+  margin-bottom: 14px;
+}
 
 .sidebar {
   background-color: var(--sidebar-bg);

@@ -42,6 +42,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import UserAvatar from '../../components/UserAvatar.vue'
@@ -75,7 +76,7 @@ function resetForm() {
   fileData.value = null
 }
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 function onFileSelect(e) {
   const file = e.target.files?.[0]

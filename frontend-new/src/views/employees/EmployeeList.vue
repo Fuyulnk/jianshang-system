@@ -28,6 +28,9 @@
           <el-table-column label="部门" min-width="120">
             <template #default="{ row }">{{ row.department || '未填写' }}</template>
           </el-table-column>
+          <el-table-column label="职位" min-width="120">
+            <template #default="{ row }">{{ row.position || '未填写' }}</template>
+          </el-table-column>
           <el-table-column label="手机号" min-width="130">
             <template #default="{ row }">{{ row.phone || '未填写' }}</template>
           </el-table-column>
@@ -79,8 +82,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="80">
+        <el-table-column label="操作" width="120">
           <template #default="{ row }">
+            <el-button v-if="canManage" type="primary" link size="small" @click="openEdit(row)">编辑</el-button>
             <el-button v-if="canManage" type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -93,11 +97,15 @@
         <el-form-item label="姓名">
           <el-input v-model="addForm.name" />
         </el-form-item>
-        <el-form-item label="部门">
-          <el-input v-model="addForm.department" />
-        </el-form-item>
-        <el-form-item label="职位">
-          <el-input v-model="addForm.position" />
+        <el-form-item label="部门职位">
+          <el-cascader
+            v-model="addForm.departmentPosition"
+            class="employee-cascader"
+            :options="orgOptions"
+            :props="cascaderProps"
+            placeholder="选择部门 / 职位"
+            clearable
+          />
         </el-form-item>
         <el-form-item label="手机号">
           <el-input v-model="addForm.phone" />
@@ -108,10 +116,43 @@
         <el-button type="primary" @click="handleAdd" :loading="saving">确定</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showEdit" title="编辑员工档案" width="420px">
+      <el-form :model="editForm" label-width="70px">
+        <el-form-item label="姓名">
+          <el-input v-model="editForm.name" />
+        </el-form-item>
+        <el-form-item label="部门职位">
+          <el-cascader
+            v-model="editForm.departmentPosition"
+            class="employee-cascader"
+            :options="orgOptions"
+            :props="cascaderProps"
+            placeholder="选择部门 / 职位"
+            clearable
+          />
+        </el-form-item>
+        <el-form-item label="手机号">
+          <el-input v-model="editForm.phone" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="editForm.status" style="width: 100%">
+            <el-option label="在职" value="active" />
+            <el-option label="离职" value="inactive" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEdit = false">取消</el-button>
+        <el-button type="primary" @click="handleEdit" :loading="saving">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
+import { toDepartmentCascaderOptions } from '../../utils/orgOptions'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
@@ -120,30 +161,36 @@ const list = ref([])
 const pendingUsers = ref([])
 const loading = ref(false)
 const showAdd = ref(false)
+const showEdit = ref(false)
 const saving = ref(false)
 const bindingId = ref(0)
-const addForm = ref({ name: '', department: '', position: '', phone: '' })
+const addForm = ref({ name: '', departmentPosition: [], phone: '' })
+const editForm = ref({ id: 0, name: '', departmentPosition: [], phone: '', status: 'active' })
+const orgOptions = ref(toDepartmentCascaderOptions())
+const cascaderProps = { value: 'value', label: 'label', children: 'children', expandTrigger: 'hover' }
 
 const currentRole = computed(() => {
   try {
-    const token = localStorage.getItem('token') || ''
+    const token = getAuthToken() || ''
     const payload = JSON.parse(atob(token.split('.')[1]))
     return payload.role || ''
   } catch { return '' }
 })
 const canManage = computed(() => ['super_admin', 'admin'].includes(currentRole.value))
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 async function fetchList() {
   loading.value = true
   try {
-    const [employeeJson, pendingJson] = await Promise.all([
+    const [employeeJson, pendingJson, orgJson] = await Promise.all([
       requestJson('/api/employees'),
-      requestJson('/api/employees/pending-users')
+      requestJson('/api/employees/pending-users'),
+      requestJson('/api/employees/org-options')
     ])
     if (employeeJson.success) list.value = employeeJson.data || []
     if (pendingJson.success) pendingUsers.value = pendingJson.data || []
+    if (orgJson.success) orgOptions.value = toDepartmentCascaderOptions(orgJson.data)
     if (!employeeJson.success) ElMessage.error(employeeJson.message || '员工列表加载失败')
   } finally {
     loading.value = false
@@ -163,24 +210,78 @@ async function requestJson(url, options = {}) {
 
 async function handleAdd() {
   if (!addForm.value.name) { ElMessage.warning('请输入员工姓名'); return }
+  const payload = employeePayload(addForm.value)
+  if (!payload) return
   saving.value = true
   try {
     const res = await fetch('/api/employees', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
-      body: JSON.stringify(addForm.value)
+      body: JSON.stringify(payload)
     })
     const json = await res.json()
     if (json.success) {
       ElMessage.success('新增成功')
       showAdd.value = false
-      addForm.value = { name: '', department: '', position: '', phone: '' }
+      addForm.value = { name: '', departmentPosition: [], phone: '' }
       fetchList()
     } else {
       ElMessage.error(json.message || '新增失败')
     }
   } finally {
     saving.value = false
+  }
+}
+
+function openEdit(row) {
+  editForm.value = {
+    id: row.id,
+    name: row.name || '',
+    departmentPosition: row.department && row.position ? [row.department, row.position] : [],
+    phone: row.phone || '',
+    status: row.status || 'active'
+  }
+  showEdit.value = true
+}
+
+async function handleEdit() {
+  const payload = employeePayload(editForm.value)
+  if (!payload) return
+  saving.value = true
+  try {
+    const res = await fetch(`/api/employees/${editForm.value.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ ...payload, status: editForm.value.status || 'active' })
+    })
+    const json = await res.json()
+    if (json.success) {
+      ElMessage.success('员工档案已更新')
+      showEdit.value = false
+      fetchList()
+    } else {
+      ElMessage.error(json.message || '保存失败')
+    }
+  } finally {
+    saving.value = false
+  }
+}
+
+function employeePayload(form) {
+  const [department, position] = form.departmentPosition || []
+  if (!form.name) {
+    ElMessage.warning('请输入员工姓名')
+    return null
+  }
+  if (!department || !position) {
+    ElMessage.warning('请选择部门和职位')
+    return null
+  }
+  return {
+    name: form.name,
+    department,
+    position,
+    phone: form.phone || ''
   }
 }
 
@@ -305,5 +406,9 @@ onMounted(fetchList)
   background: var(--bg-page);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.employee-cascader {
+  width: 100%;
 }
 </style>

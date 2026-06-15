@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -55,7 +56,7 @@ watch(visible, value => {
 })
 
 function token() {
-  return localStorage.getItem('token')
+  return getAuthToken()
 }
 
 function emptyBriefingForm() {

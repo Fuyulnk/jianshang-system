@@ -64,6 +64,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
@@ -75,7 +76,7 @@ const selectedUserId = ref(null)
 const userOverrides = ref([])
 const userRoleId = ref(null)
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 const roleTableData = computed(() => {
   const map = {}

@@ -85,6 +85,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../utils/authSession'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Hide, Refresh, Close } from '@element-plus/icons-vue'
 
@@ -336,7 +337,7 @@ function scrollDown() {
 watch(messages, scrollDown, { deep: true })
 watch(streaming, scrollDown)
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 async function loadHistory() {
   const t = token()

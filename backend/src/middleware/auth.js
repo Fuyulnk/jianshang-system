@@ -10,12 +10,11 @@ export function resolveFreshUser(decoded) {
   if (!authDb) return decoded
 
   const user = authDb.prepare(`
-    SELECT id, username, role, role_version, employee_id, status
+    SELECT id, username, role, role_version, employee_id, status, assignment_status
     FROM users
     WHERE id = ?
   `).get(decoded.userId)
   if (!user) throw new Error('用户不存在')
-  if ((user.status || 'active') === 'pending_activation') throw new Error('账号正在等待管理员分配人员和权限')
   if ((user.status || 'active') === 'disabled') throw new Error('账号已停用，请联系管理员')
 
   const tokenRoleVersion = decoded.roleVersion ?? decoded.role_version
@@ -29,7 +28,8 @@ export function resolveFreshUser(decoded) {
     username: user.username,
     role: user.role,
     roleVersion: user.role_version || 1,
-    employeeId: user.employee_id || 0
+    employeeId: user.employee_id || 0,
+    assignmentStatus: user.assignment_status || 'assigned'
   }
 }
 

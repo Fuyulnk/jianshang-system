@@ -50,6 +50,7 @@
 </template>
 
 <script setup>
+import { getAuthToken, clearAuthSession } from '../utils/authSession'
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -65,7 +66,7 @@ const previewUrl = ref('')
 const fileData = ref(null)
 const pwdForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 async function fetchUser() {
   try {
@@ -73,7 +74,7 @@ async function fetchUser() {
       headers: { Authorization: `Bearer ${token()}` }
     })
     if (res.status === 401) {
-      localStorage.removeItem('token')
+      clearAuthSession({ clearRemembered: true })
       router.push('/')
       return
     }

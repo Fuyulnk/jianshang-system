@@ -327,7 +327,7 @@
                 show-icon
               >
                 <template #title>
-                  有 {{ pendingUserCount }} 个注册账号等待分配人员
+                  有 {{ pendingUserCount }} 个注册账号等待建档或岗位分配
                 </template>
               </el-alert>
             </div>
@@ -351,9 +351,19 @@
                     </el-tag>
                   </template>
                 </el-table-column>
+                <el-table-column label="注册部门/职位" min-width="150">
+                  <template #default="{ row }">
+                    <span>{{ row.department || '未填写' }} / {{ row.position || row.employee_position || '未填写' }}</span>
+                  </template>
+                </el-table-column>
                 <el-table-column label="账号状态" width="120">
                   <template #default="{ row }">
                     <el-tag :type="userStatusType(row.status)" size="small">{{ userStatusLabel(row.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="分配状态" width="120">
+                  <template #default="{ row }">
+                    <el-tag :type="assignmentStatusType(row)" size="small">{{ assignmentStatusLabel(row) }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column label="AI 偏好" min-width="150">
@@ -365,9 +375,10 @@
                   <template #default="{ row }">{{ row.last_login_at || '未登录' }}</template>
                 </el-table-column>
                 <el-table-column prop="created_at" label="创建时间" width="145" />
-                <el-table-column label="操作" width="330" fixed="right">
+                <el-table-column label="操作" width="390" fixed="right">
                   <template #default="{ row }">
                     <el-button link size="small" @click="editUserEmployee(row)">{{ row.employee_id ? '改绑档案' : '绑定档案' }}</el-button>
+                    <el-button v-if="!row.employee_id" type="primary" link size="small" @click="handleCreateEmployeeFromUser(row)">生成档案</el-button>
                     <el-button v-if="row.username !== 'fuyulnk'" link size="small" @click="editUserRole(row)">分配角色</el-button>
                     <el-button
                       v-if="row.username !== 'fuyulnk' && row.status !== 'active'"
@@ -376,7 +387,7 @@
                       size="small"
                       @click="handleUserStatus(row, 'active')"
                     >
-                      激活
+                      启用
                     </el-button>
                     <el-button
                       v-if="row.username !== 'fuyulnk' && row.status === 'active'"
@@ -470,6 +481,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting, Aim, Collection, InfoFilled, User, Operation } from '@element-plus/icons-vue'
@@ -491,7 +503,7 @@ const navItems = [
 
 const currentRole = computed(() => {
   try {
-    const token = localStorage.getItem('token') || ''
+    const token = getAuthToken() || ''
     const payload = JSON.parse(atob(token.split('.')[1]))
     return payload.role || ''
   } catch { return '' }
@@ -686,7 +698,7 @@ const selectedUserRole = ref('')
 const selectedEmployeeId = ref(null)
 const addUserForm = ref({ username: '', password: '', role: 'employee' })
 const employeeList = ref([])
-const pendingUserCount = computed(() => userList.value.filter(user => user.status === 'pending_activation').length)
+const pendingUserCount = computed(() => userList.value.filter(user => assignmentStatusLabel(user) !== '已分配').length)
 
 const employeeOptions = computed(() => {
   const editingId = editingUser.value?.id
@@ -695,7 +707,7 @@ const employeeOptions = computed(() => {
 
 function userStatusLabel(status) {
   return {
-    pending_activation: '待分配',
+    pending_activation: '已启用',
     active: '已启用',
     disabled: '已停用'
   }[status || 'active'] || status || '已启用'
@@ -703,14 +715,29 @@ function userStatusLabel(status) {
 
 function userStatusType(status) {
   return {
-    pending_activation: 'danger',
+    pending_activation: 'success',
     active: 'success',
     disabled: 'info'
   }[status || 'active'] || 'info'
 }
 
+function assignmentStatusLabel(row) {
+  if (row.status === 'disabled') return '已停用'
+  if (!row.employee_id) return '待建档'
+  if ((row.assignment_status || 'assigned') !== 'assigned') return '待分配'
+  return '已分配'
+}
+
+function assignmentStatusType(row) {
+  const label = assignmentStatusLabel(row)
+  if (label === '待建档') return 'danger'
+  if (label === '待分配') return 'warning'
+  if (label === '已停用') return 'info'
+  return 'success'
+}
+
 function userRowClassName({ row }) {
-  return row.status === 'pending_activation' ? 'pending-user-row' : ''
+  return assignmentStatusLabel(row) !== '已分配' ? 'pending-user-row' : ''
 }
 
 async function fetchUsers() {
@@ -777,11 +804,6 @@ function employeeOptionLabel(employee) {
 }
 
 async function handleUserStatus(row, status) {
-  if (status === 'active' && !row.employee_id) {
-    ElMessage.warning('请先绑定或生成员工档案，再激活账号')
-    editUserEmployee(row)
-    return
-  }
   if (status === 'disabled') {
     try {
       await ElMessageBox.confirm(`确定停用账号「${row.username}」？停用后该账号不能登录。`, '停用账号')
@@ -816,9 +838,9 @@ async function handleAssignRole() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
       body: JSON.stringify({ role: selectedUserRole.value })
     })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      ElMessage.error(err.message || '操作失败')
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok || !json.success) {
+      ElMessage.error(json.message || '操作失败')
       return
     }
     ElMessage.success('角色已更新')
@@ -855,6 +877,26 @@ async function handleBindEmployee() {
 async function handleUnbindEmployee() {
   selectedEmployeeId.value = null
   await handleBindEmployee()
+}
+
+async function handleCreateEmployeeFromUser(row) {
+  if (!row?.id) return
+  userSaving.value = true
+  try {
+    const res = await fetch(`/api/employees/from-user/${row.id}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json().catch(() => ({}))
+    if (json.success) {
+      ElMessage.success(`已生成并绑定员工档案 ${json.employee_code || ''}`)
+      await fetchUsers()
+    } else {
+      ElMessage.error(json.message || '生成员工档案失败')
+    }
+  } finally {
+    userSaving.value = false
+  }
 }
 
 async function deleteUser(row) {
@@ -905,7 +947,7 @@ const kbStatus = reactive({
   message: '',
 })
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 async function fetchSettings() {
   try {

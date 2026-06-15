@@ -1,5 +1,6 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { AI_TOOL_REGISTRY } from '../ai/toolRegistry.js'
+import { requireAssignedAccount } from '../utils/permissions.js'
 
 const TOOL_LABELS = AI_TOOL_REGISTRY.map(tool => ({
   name: tool.name,
@@ -14,6 +15,7 @@ export default function aiPermissionsRoutes(server, db) {
   // 获取工具列表（含中文名）
   server.get('/api/ai-tools/list', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能查看 AI 工具目录')) return
     return { success: true, data: TOOL_LABELS }
   })
 

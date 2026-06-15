@@ -198,6 +198,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -223,7 +224,7 @@ const analysis = ref({
   suggestions: ['暂无分析数据']
 })
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 function formatMoney(v) {
   const n = Number(v) || 0

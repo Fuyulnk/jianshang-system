@@ -1,4 +1,12 @@
 <script setup>
+import {
+  getAuthToken,
+  setAuthToken,
+  rememberAuthToken,
+  clearRememberedAuth,
+  clearAuthSession
+} from '../utils/authSession'
+import { toDepartmentCascaderOptions } from '../utils/orgOptions'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -29,6 +37,8 @@ const regForm = reactive({
   name: '',
   phone: '',
   department: '',
+  position: '',
+  departmentPosition: [],
   ai_pet_enabled: true,
   ai_auto_query: true,
   ai_name: '简尚小助手'
@@ -45,12 +55,19 @@ const regLoading = ref(false)
 const errorMsg = ref('')
 const isDark = ref(false)
 const authTransitionName = ref('auth-slide-forward')
+const orgOptions = ref(toDepartmentCascaderOptions())
 
 const stepItems = [
   { title: '个人信息', desc: '填写账号与联系信息' },
   { title: 'AI 助手', desc: '选择新人默认 AI 偏好' },
-  { title: '等待分配', desc: '管理员绑定人员与岗位' }
+  { title: '进入系统', desc: '先用普通员工入口' }
 ]
+const cascaderProps = {
+  value: 'value',
+  label: 'label',
+  children: 'children',
+  expandTrigger: 'hover'
+}
 const mockMenu = [
   { label: '工作台', icon: Grid },
   { label: '项目交付', icon: Briefcase },
@@ -95,6 +112,7 @@ const ghostDate = computed(() => {
 onMounted(async () => {
   initTheme()
   restoreLoginPreference()
+  await loadOrgOptions()
   if (await hasValidToken()) router.replace('/main/dashboard')
 })
 
@@ -125,7 +143,7 @@ function restoreLoginPreference() {
 }
 
 async function hasValidToken() {
-  const token = localStorage.getItem('token')
+  const token = getAuthToken()
   if (!token) return false
   try {
     const res = await fetch('/api/me', {
@@ -133,14 +151,20 @@ async function hasValidToken() {
     })
     const json = await res.json().catch(() => ({}))
     if (res.ok && json.success) return true
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+    clearAuthSession({ clearRemembered: true })
     return false
   } catch {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+    clearAuthSession({ clearRemembered: true })
     return false
   }
+}
+
+async function loadOrgOptions() {
+  try {
+    const res = await fetch('/api/org-options')
+    const json = await res.json()
+    if (json.success) orgOptions.value = toDepartmentCascaderOptions(json.data)
+  } catch {}
 }
 
 function saveLoginPreference(username) {
@@ -209,6 +233,15 @@ function nextRegisterStep() {
     errorMsg.value = '请填写账号、密码和姓名'
     return
   }
+  if (!regForm.phone) {
+    errorMsg.value = '请填写手机号'
+    return
+  }
+  const [department, position] = regForm.departmentPosition || []
+  if (!department || !position) {
+    errorMsg.value = '请选择部门和职位'
+    return
+  }
   if (regForm.password.length < 6) {
     errorMsg.value = '密码至少6位'
     return
@@ -235,8 +268,12 @@ async function handleLogin() {
     })
     const result = await response.json()
     if (result.success) {
-      localStorage.setItem('token', result.token)
-      localStorage.removeItem('user')
+      setAuthToken(result.token)
+      if (rememberMe.value) {
+        rememberAuthToken(result.token, form.username)
+      } else {
+        clearRememberedAuth()
+      }
       saveLoginPreference(form.username)
       router.push('/main/dashboard')
     } else {
@@ -261,7 +298,8 @@ async function handleRegister() {
         password: regForm.password,
         name: regForm.name,
         phone: regForm.phone,
-        department: regForm.department,
+        department: regForm.departmentPosition[0],
+        position: regForm.departmentPosition[1],
         ai_pet_enabled: regForm.ai_pet_enabled,
         ai_auto_query: regForm.ai_auto_query,
         ai_name: regForm.ai_name
@@ -270,6 +308,8 @@ async function handleRegister() {
     const json = await res.json()
     if (json.success) {
       submittedUser.value = json.user || { username: regForm.username, real_name: regForm.name }
+      if (json.token) setAuthToken(json.token)
+      saveLoginPreference(regForm.username)
       registerStep.value = 2
       authTransitionName.value = 'auth-slide-forward'
       mode.value = 'submitted'
@@ -283,7 +323,12 @@ async function handleRegister() {
   }
 }
 
+function enterEmployeeWorkspace() {
+  router.replace('/main/employee-dashboard')
+}
+
 function backToLogin() {
+  clearAuthSession()
   authTransitionName.value = 'auth-slide-back'
   mode.value = 'login'
   registerStep.value = 0
@@ -420,7 +465,7 @@ function backToLogin() {
               </el-form-item>
               <div class="login-options">
                 <el-checkbox v-model="rememberAccount" size="small">记住账号</el-checkbox>
-                <el-checkbox v-model="rememberMe" size="small">7天自动登录</el-checkbox>
+                <el-checkbox v-model="rememberMe" size="small">保存密码</el-checkbox>
               </div>
               <el-button type="primary" size="large" :loading="loading" class="primary-action" @click="handleLogin">
                 {{ loading ? '登录中...' : '进入系统' }}
@@ -458,10 +503,18 @@ function backToLogin() {
                   <el-input v-model="regForm.name" size="large" placeholder="真实姓名" />
                 </el-form-item>
                 <el-form-item>
-                  <el-input v-model="regForm.phone" size="large" placeholder="手机号（选填）" />
+                  <el-input v-model="regForm.phone" size="large" placeholder="手机号" />
                 </el-form-item>
                 <el-form-item>
-                  <el-input v-model="regForm.department" size="large" placeholder="部门/岗位意向（选填）" />
+                  <el-cascader
+                    v-model="regForm.departmentPosition"
+                    class="department-cascader"
+                    :options="orgOptions"
+                    :props="cascaderProps"
+                    size="large"
+                    placeholder="选择部门 / 职位"
+                    clearable
+                  />
                 </el-form-item>
                 <el-form-item>
                   <el-input v-model="regForm.password" type="password" size="large" show-password placeholder="密码（至少6位）" :prefix-icon="Lock" />
@@ -514,14 +567,15 @@ function backToLogin() {
               <el-icon><Check /></el-icon>
             </div>
             <p class="submitted-kicker">注册信息已提交</p>
-            <h2>{{ pendingName }}，等待管理员分配人员</h2>
-            <p class="submitted-desc">你的账号已经进入后台待处理列表。管理员绑定员工档案、分配岗位权限后，就可以回到这里登录。</p>
+            <h2>{{ pendingName }}，普通员工入口已开通</h2>
+            <p class="submitted-desc">你的账号已经进入后台待建档列表。现在可以先进入普通员工界面；管理员建档并分配岗位后，系统会提示你重新登录刷新权限。</p>
             <div class="pending-steps">
               <span class="done">资料提交</span>
-              <span class="active">管理员分配</span>
-              <span>账号启用</span>
+              <span class="done">普通员工入口</span>
+              <span class="active">等待岗位分配</span>
             </div>
-            <el-button type="primary" size="large" class="primary-action" @click="backToLogin">返回登录</el-button>
+            <el-button type="primary" size="large" class="primary-action" @click="enterEmployeeWorkspace">进入普通员工界面</el-button>
+            <el-button size="large" class="secondary-action" @click="backToLogin">返回登录</el-button>
           </div>
         </Transition>
 
@@ -530,6 +584,7 @@ function backToLogin() {
         </Transition>
       </section>
     </section>
+    <p class="login-copyright">◎ 2026 简尚系统 · 艺术涂料施工交付管理平台</p>
   </main>
 </template>
 
@@ -882,6 +937,22 @@ function backToLogin() {
   backdrop-filter: blur(24px);
 }
 
+.login-copyright {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(18px, 2.6vh, 28px);
+  z-index: 3;
+  margin: 0;
+  transform: translateX(-50%);
+  color: rgba(93, 108, 134, 0.36);
+  font-size: 12px;
+  line-height: 1.4;
+  letter-spacing: 0;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.58);
+  pointer-events: none;
+}
+
 .auth-stage::before {
   content: '';
   position: absolute;
@@ -1123,7 +1194,9 @@ function backToLogin() {
 }
 
 .account-input,
-.primary-action {
+.department-cascader,
+.primary-action,
+.secondary-action {
   width: 100%;
 }
 
@@ -1140,6 +1213,11 @@ function backToLogin() {
   align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+.secondary-action {
+  height: 42px;
+  margin: 12px 0 0;
 }
 
 .account-option {
@@ -1506,6 +1584,16 @@ function backToLogin() {
   .error-msg {
     left: 28px;
     right: 28px;
+  }
+  .login-copyright {
+    position: relative;
+    left: auto;
+    bottom: auto;
+    width: 100%;
+    margin: 18px 0 0;
+    transform: none;
+    text-align: center;
+    white-space: normal;
   }
 }
 

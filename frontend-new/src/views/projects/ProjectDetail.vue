@@ -701,6 +701,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -733,13 +734,13 @@ const deliveryChain = ref(null)
 // 当前用户角色
 const userRole = (() => {
   try {
-    const t = localStorage.getItem('token')
+    const t = getAuthToken()
     return JSON.parse(atob(t.split('.')[1])).role || ''
   } catch { return '' }
 })()
 const userId = (() => {
   try {
-    const t = localStorage.getItem('token')
+    const t = getAuthToken()
     return JSON.parse(atob(t.split('.')[1])).userId || 0
   } catch { return 0 }
 })()
@@ -1069,7 +1070,7 @@ const warrantyInfo = computed(() => {
   }
 })
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 function formatTime(t) { return t ? new Date(t).toLocaleString('zh-CN') : '' }
 function displayUser(realName, username) { return realName || username || '未分配' }
 function userOptionLabel(user) {

@@ -58,7 +58,14 @@
             style="width: 100%"
             placeholder="输入或选择曾录入的产品"
             @select="applyProductSuggestion"
-          />
+          >
+            <template #default="{ item }">
+              <div class="product-suggestion">
+                <strong>{{ item.value }}</strong>
+                <span>{{ item.unit || '单位未填' }}｜库存 {{ formatQty(item.stock) }}</span>
+              </div>
+            </template>
+          </el-autocomplete>
         </el-form-item>
         <el-form-item label="分类">
           <el-select
@@ -119,6 +126,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, ref, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MaterialRequestPanel from '../../components/material/MaterialRequestPanel.vue'
@@ -133,7 +141,7 @@ const presetUnits = ['kg', 'g', 'ml', 'L', '桶', '罐', '支', '把', '套', '�
 
 const userRole = computed(() => {
   try {
-    const t = localStorage.getItem('token')
+    const t = getAuthToken()
     return JSON.parse(atob(t.split('.')[1])).role || ''
   } catch { return '' }
 })
@@ -147,6 +155,7 @@ const productMemory = computed(() => {
       category: item.category || '',
       unit: item.unit || '',
       spec: item.spec || '',
+      stock: item.stock || 0,
       unit_price: item.unit_price || 0,
       price_unit: item.price_unit || '',
       searchText: productSearchText(item)
@@ -164,9 +173,10 @@ const unitOptions = computed(() => {
   return [...new Set([...presetUnits, ...learned])]
 })
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 function productDisplayName(item) {
+  if (item?.display_name) return item.display_name
   const name = String(item?.name || '').trim()
   const spec = String(item?.spec || '').trim()
   if (!spec || name.includes(spec)) return name
@@ -174,7 +184,8 @@ function productDisplayName(item) {
 }
 
 function productSearchText(item) {
-  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit]
+  if (item?.search_text) return item.search_text
+  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit, item?.sku_label]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
@@ -217,6 +228,8 @@ async function handleAdd() {
       showAdd.value = false
       addForm.value = defaultProductForm()
       fetchList()
+    } else {
+      ElMessage.error(json.message || '新增失败')
     }
   } finally {
     saving.value = false
@@ -266,4 +279,20 @@ onMounted(fetchList)
 </script>
 
 <style scoped>
+.product-suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.product-suggestion strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.product-suggestion span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
 </style>

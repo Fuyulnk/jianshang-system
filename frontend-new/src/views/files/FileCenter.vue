@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -12,7 +13,7 @@ const filters = ref({ entity_type: '', keyword: '' })
 const totalSize = computed(() => files.value.reduce((sum, item) => sum + Number(item.size || 0), 0))
 
 function token() {
-  return localStorage.getItem('token')
+  return getAuthToken()
 }
 
 async function fetchFiles() {

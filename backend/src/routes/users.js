@@ -22,13 +22,13 @@ export default function userRoutes(server, db) {
     }
     const users = db.prepare(`
       SELECT u.id, u.username, u.role, u.avatar_url, u.real_name, u.phone, u.department,
-             u.employee_id, e.employee_code, e.name as employee_name, e.position as employee_position,
-             r.label as role_label, u.status, u.ai_pet_enabled, u.ai_auto_query, u.ai_name,
+             u.position, u.employee_id, e.employee_code, e.name as employee_name, e.position as employee_position,
+             r.label as role_label, u.status, u.assignment_status, u.ai_pet_enabled, u.ai_auto_query, u.ai_name,
              u.activated_at, u.disabled_at, u.last_login_at, u.created_at
       FROM users u
       LEFT JOIN roles r ON u.role = r.name
       LEFT JOIN employees e ON u.employee_id = e.id
-      ORDER BY CASE WHEN u.status = 'pending_activation' THEN 0 ELSE 1 END, u.id ASC
+      ORDER BY CASE WHEN COALESCE(u.assignment_status, 'assigned') = 'pending' THEN 0 ELSE 1 END, u.id ASC
     `).all()
     return { success: true, data: users }
   })
@@ -49,11 +49,12 @@ export default function userRoutes(server, db) {
       return { success: false, message: '角色不存在' }
     }
     const hashed = bcrypt.hashSync(password, 10)
+    const assignmentStatus = ['super_admin', 'admin'].includes(targetRole) ? 'assigned' : 'pending'
     try {
       const result = db.prepare(`
-        INSERT INTO users (username, password, role, status, activated_at, activated_by)
-        VALUES (?, ?, ?, 'active', datetime('now', 'localtime'), ?)
-      `).run(username, hashed, targetRole, request.user.userId)
+        INSERT INTO users (username, password, role, status, assignment_status, activated_at, activated_by)
+        VALUES (?, ?, ?, 'active', ?, datetime('now', 'localtime'), ?)
+      `).run(username, hashed, targetRole, assignmentStatus, request.user.userId)
       return { success: true, id: result.lastInsertRowid }
     } catch {
       return { success: false, message: '账号已存在' }
@@ -83,10 +84,6 @@ export default function userRoutes(server, db) {
       reply.code(403).send({ success: false, message: '系统所有者账号不能停用' })
       return
     }
-    if (status === 'active' && Number(target.employee_id || 0) <= 0) {
-      return { success: false, message: '请先绑定或生成员工档案，再激活账号' }
-    }
-
     if (status === 'active') {
       db.prepare(`
         UPDATE users
@@ -110,7 +107,8 @@ export default function userRoutes(server, db) {
     } else {
       db.prepare(`
         UPDATE users
-        SET status = 'pending_activation',
+        SET status = 'active',
+            assignment_status = 'pending',
             activated_at = '',
             activated_by = 0,
             role_version = COALESCE(role_version, 1) + 1
@@ -128,7 +126,7 @@ export default function userRoutes(server, db) {
       reply.code(403).send({ success: false, message: '无权限' })
       return
     }
-    const target = db.prepare('SELECT username, role FROM users WHERE id = ?').get(request.params.id)
+    const target = db.prepare('SELECT username, role, employee_id FROM users WHERE id = ?').get(request.params.id)
     if (!target) {
       reply.code(404).send({ success: false, message: '用户不存在' })
       return
@@ -141,7 +139,17 @@ export default function userRoutes(server, db) {
       reply.code(403).send({ success: false, message: '系统所有者账号不能降权' })
       return
     }
-    db.prepare('UPDATE users SET role = ?, role_version = COALESCE(role_version, 1) + 1 WHERE id = ?').run(role, request.params.id)
+    db.prepare(`
+      UPDATE users
+      SET role = ?,
+          assignment_status = CASE
+            WHEN ? IN ('super_admin', 'admin') THEN 'assigned'
+            WHEN COALESCE(employee_id, 0) > 0 THEN 'assigned'
+            ELSE 'pending'
+          END,
+          role_version = COALESCE(role_version, 1) + 1
+      WHERE id = ?
+    `).run(role, role, request.params.id)
     return { success: true }
   })
 
@@ -173,9 +181,18 @@ export default function userRoutes(server, db) {
 
     db.prepare(`
       UPDATE users
-      SET employee_id = ?, role_version = COALESCE(role_version, 1) + 1
+      SET employee_id = ?,
+          assignment_status = CASE
+            WHEN role IN ('super_admin', 'admin') THEN 'assigned'
+            WHEN ? > 0 THEN 'assigned'
+            ELSE 'pending'
+          END,
+          role_version = CASE
+            WHEN ? = 0 OR role != 'employee' THEN COALESCE(role_version, 1) + 1
+            ELSE COALESCE(role_version, 1)
+          END
       WHERE id = ?
-    `).run(employeeId, userId)
+    `).run(employeeId, employeeId, employeeId, userId)
 
     return { success: true }
   })

@@ -1,4 +1,5 @@
 import { authMiddleware } from '../middleware/auth.js'
+import { isPendingAssignmentUser } from '../utils/permissions.js'
 
 export default function roleRoutes(server, db) {
   // 获取角色列表
@@ -56,6 +57,10 @@ export default function roleRoutes(server, db) {
   // 获取当前用户可访问的菜单
   server.get('/api/user-menu', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+
+    if (isPendingAssignmentUser(request.user)) {
+      return { success: true, data: [] }
+    }
 
     const role = db.prepare('SELECT * FROM roles WHERE name = ?').get(request.user.role)
     if (!role) {

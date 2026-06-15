@@ -172,6 +172,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ChatDotSquare, Cpu, Document, Download, Paperclip, UploadFilled } from '@element-plus/icons-vue'
@@ -213,7 +214,7 @@ function insertAtAi() {
   inputText.value = '@AI ' + inputText.value
 }
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 // Socket.io
 function connectSocket() {

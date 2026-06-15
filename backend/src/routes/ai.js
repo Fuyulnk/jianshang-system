@@ -1,7 +1,7 @@
 // AI 聊天模块 - 调 DeepSeek API + 工具调用 + 流式返回
 import crypto from 'crypto'
 import { authMiddleware } from '../middleware/auth.js'
-import { canAccessModule, canAccessProjectRecord } from '../utils/permissions.js'
+import { canAccessModule, canAccessProjectRecord, requireAssignedAccount } from '../utils/permissions.js'
 import { missingCoreFields, normalizeProjectDraft, parseProjectHandoverText } from '../utils/projectImport.js'
 import { AI_TOOL_REGISTRY, buildToolSchemas, toolMeta } from '../ai/toolRegistry.js'
 
@@ -588,6 +588,7 @@ async function callDeepSeek(messages, config, tools) {
 
 async function handleAiChat(request, reply, db) {
   if (authMiddleware(request, reply) === false) return
+  if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能使用 AI 查询业务数据')) return
   const user = request.user
   const { message, session_id, agent_id, agent_key, context_type = 'direct', context_key = '' } = request.body || {}
   if (!message) {
@@ -1016,6 +1017,7 @@ export default function aiRoutes(server, db) {
   // 获取聊天历史
   server.get('/api/chat/history', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能查看 AI 聊天历史')) return
 
     const sessions = db.prepare(
       `SELECT session_id, role, content, created_at

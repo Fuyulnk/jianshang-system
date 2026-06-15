@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
@@ -48,7 +49,7 @@ const groupedTools = computed(() => {
 })
 
 function token() {
-  return localStorage.getItem('token')
+  return getAuthToken()
 }
 
 async function readJson(res) {

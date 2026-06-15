@@ -98,6 +98,7 @@
 - `handoff/简尚系统路线图进度看板.html`：可交互路线图进度看板。用于把 P0/P1/P2、基建修复、暂停功能分开统计；勾选和备注保存在浏览器本地。
 - `handoff/简尚系统路线图V1-老板版.txt`：给老板/管理层看的汇报版路线图，语气更偏工期、难点和阶段成果说明；不要把它当开发规范直接照做。
 - `handoff/门店交接到施工承接流程V1.md`：业务主线 SOP，描述门店/渠道交接到简尚施工承接、仓库、财务、归档的流程基准。
+- `handoff/2026-06-15-account-onboarding-sop-v1.md`：账号注册、管理员分配、员工建档、激活账号和新人首次进入的 SOP V1。
 - `handoff/2026-06-13-project-document-field-mapping-v1.md`：8 类项目单据字段映射，区分结构化入库字段和先作为附件保留的内容。
 - `handoff/2026-06-13-project-library-from-folder-v1.md`：从桌面“施工项目管理总表”文件夹生成的简尚 AI 项目库 V1 说明，包含目录级索引、字段口径和导入边界。
 - `handoff/2026-06-13-real-project-smoke-run-v1.md`：线上测试项目从交接跑到归档的真实闭环试跑报告，包含项目 ID、资料链结果、库存影响和卡点分级。
@@ -171,6 +172,54 @@
 注意：这些改动可能是用户或其他 Agent 的已有成果。除非用户明确要求，不要清理或回滚。
 
 ## 对接记录
+
+### 2026-06-15 Codex：账号注册/分配返工，拆清账号、员工档案、岗位权限
+
+- 任务：按用户测试反馈返工注册账号流程和 token 刷新问题；注册后先进入普通员工入口，管理员完成建档和岗位角色分配后，员工端提示重新登录成为岗位账号。
+- 修改重点：
+  - `backend/src/routes/auth.js`：注册接口改为手机号必填、部门/职位固定选项校验；注册成功即返回普通员工 token，`status=active`、`assignment_status=pending`。
+  - `backend/src/routes/users.js`、`employees.js`：新增/使用 `assignment_status` 区分账号启停和岗位分配；生成/绑定员工档案后标记已建档，分配岗位角色后才让旧 token 失效；管理员/超级管理员即使未绑定员工档案也保持已分配。
+  - `backend/src/utils/permissions.js`、`roles.js`、`employee-dashboard.js`、`ai.js`、`chat.js`、`ai-permissions.js`、`settings.js`：修复 Hermes P1，待建档账号后端统一限制业务数据访问；菜单为空，工作台只返回等待态，AI/聊天/产品/知识库等接口返回 403。
+  - `frontend-new/src/utils/authSession.js`、`router/index.js`：移除登录页/路由守卫的“恢复最后保存 token”逻辑；刷新只保留当前标签页会话，不会串到最后登录账号。
+  - `frontend-new/src/views/Login.vue`：注册表单改为姓名、手机号、部门/职位级联必填；提交后进入普通员工入口，不再停在系统外等待。
+  - `frontend-new/src/layouts/MainLayout.vue`：待分配普通员工显示提示；岗位分配后弹出“账号已分配”，点击回登录页重新登录。
+  - `frontend-new/src/views/system/SystemSettings.vue`、`employees/EmployeeList.vue`：后台显示待建档/待分配；员工档案新增编辑入口，部门/职位也改为固定选择。
+  - `backend/src/utils/orgOptions.js`：集中维护当前公司部门/职位选项：工程部、财务部、仓库、样板开发；注册页不展示老板/总监/AI 等管理或特殊岗位。
+  - `handoff/2026-06-15-account-onboarding-sop-v1.md`：同步新版账号入职 SOP。
+- 验证：
+  - `node --check backend/src/routes/auth.js && node --check backend/src/routes/users.js && node --check backend/src/routes/employees.js && node --check backend/src/middleware/auth.js && node --check backend/src/utils/orgOptions.js && node --check backend/src/index.js && node --check backend/src/db/init.js && node --check backend/src/db/seed.js`（通过）
+  - `npm run build`（在 `frontend-new/`，通过；仅既有 Vite 大 chunk 警告）
+  - `git diff --check`（通过）
+  - 静态搜索确认没有路由/登录页继续调用 `restoreRememberedAuthSession`，没有继续写入共享 `localStorage.token`，旧 `remembered-auth-v1` 只保留清理逻辑。
+  - 内存数据库 + Fastify `inject` 动态烟测通过：缺手机号拒绝、错误部门/职位组合拒绝、注册后普通员工 token 可进入、后台显示待建档/待分配、待建档账号菜单为空且业务接口 403、生成员工档案不踢登录并变为已建档、分配 `engineering` 后旧 token 失效、重新登录变岗位账号、管理员无员工档案仍为已分配、员工档案职位可编辑且继续拒绝错误组合。
+- 注意事项：
+  - 本轮未上传服务器，未提交。
+
+### 2026-06-15 Codex：登录页收口 + 账号入职闭环 + 库存规格补齐
+
+- 任务：按用户确认的 1/2/3/4 长任务推进：登录页底部细节、账号流程、新人 SOP/指引、材料回库和库存规格补漏。
+- 修改重点：
+  - `frontend-new/src/views/Login.vue`：底部新增浅色版权行；登录态仍保持每标签页独立，“保存密码”只作为员工文案，底层不保存明文密码。
+  - `frontend-new/src/components/OnboardingWizard.vue` + `MainLayout.vue`：新人首次进入时按当前角色显示岗位、今日入口和注意事项。
+  - `frontend-new/src/views/system/SystemSettings.vue`：用户管理里未绑定账号新增“生成档案”，直接从注册信息生成员工档案并绑定，减少管理员跳转。
+  - `handoff/2026-06-15-account-onboarding-sop-v1.md`：新增账号注册、分配、激活、岗位入口和常见问题 SOP。
+  - `backend/src/routes/products.js`：产品接口返回 `display_name`、`sku_label`、`search_text`，统一“名称+规格+单位+库存”口径。
+  - `frontend-new/src/views/products/ProductList.vue`、`MaterialRequestPanel.vue`、`ProjectSupplyList.vue`：库存页、出库页、供货单页统一规格显示和搜索匹配，支持如“霞光沙1L / 霞光沙5L”区分。
+- 验证：
+  - `node --check backend/src/routes/products.js`
+  - `node --check backend/src/routes/material-requests.js`
+  - `node --check backend/src/routes/users.js`
+  - `node --check backend/src/routes/employees.js`
+  - `npm run build`（在 `frontend-new/`，通过；仅既有 Vite 大 chunk 警告）
+  - `git diff --check`（通过）
+  - 静态检查确认 `frontend-new/src` 不再直接读写共享 `localStorage.token`。
+  - 静态检查确认材料回库 `updateMaterialReturnDocument()` 写入 `material_io` 且 `step_confirmed=true`。
+  - 本地临时库登录/账号流程冒烟通过：临时 `HOME=/private/tmp/jianshang-smoke-auth`、`PORT=3101` 启动后端，完成 `fuyulnk` 登录 -> 新员工注册 -> 待分配账号 -> 生成员工档案 -> 分配 `engineering` -> 激活 -> 新账号登录成功。
+  - 产品规格匹配脚本通过：`霞光沙5L` 命中 5L，`霞光沙 1L` 命中 1L。
+- 注意事项：
+  - 本轮使用临时数据库做冒烟，不影响真实本地库和线上库。
+  - 本轮未上传服务器，未提交。
+  - 线上仍需按部署流程同步 `frontend-new/dist -> backend/public` 后再上传服务器，上传后必须做线上登录冒烟。
 
 ### 2026-06-13 Claude：修复 ai_agents 表缺少 agent_key 列导致 AI 全不可用
 

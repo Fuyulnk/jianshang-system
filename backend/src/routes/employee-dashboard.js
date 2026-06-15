@@ -1,5 +1,5 @@
 import { authMiddleware } from '../middleware/auth.js'
-import { canAccessModule, canAccessProjectRecord, getDataScope } from '../utils/permissions.js'
+import { canAccessModule, canAccessProjectRecord, getDataScope, isPendingAssignmentUser } from '../utils/permissions.js'
 
 const STATUS_LABELS = {
   handover_received: { phase: 1, label: '门店交接待核对', phaseLabel: '交接/勘察' },
@@ -82,6 +82,33 @@ export default function employeeDashboardRoutes(server, db) {
       SELECT u.id, u.username, u.role, u.real_name, u.department, u.phone, u.avatar_url
       FROM users u WHERE u.id = ?
     `).get(request.user.userId)
+
+    if (isPendingAssignmentUser(request.user)) {
+      return {
+        success: true,
+        data: {
+          user: {
+            username: user?.username || request.user.username,
+            role: user?.role || role,
+            role_label: '普通员工',
+            real_name: user?.real_name || '',
+            department: user?.department || '',
+            avatar_url: user?.avatar_url || '',
+          },
+          groups: [
+            {
+              key: 'pending_assignment',
+              label: '等待管理员建档和岗位分配',
+              count: 0,
+              kind: 'notice',
+              projects: [],
+              items: []
+            }
+          ],
+          stats: { total: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+        }
+      }
+    }
 
     // 获取项目。普通员工只看和自己相关的项目；仓管/财务/管理层看职责范围内的项目。
     let allProjects

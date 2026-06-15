@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -50,7 +51,7 @@ const board = computed(() => [
 ])
 
 function token() {
-  return localStorage.getItem('token') || ''
+  return getAuthToken() || ''
 }
 
 function emptyForm() {
@@ -266,8 +267,9 @@ function removeEmptyItems() {
 
 function onItemChange({ row, column }) {
   if (column.key === 'product_name') {
-    const matched = products.value.find(item => String(item.name || '').trim() === String(row.product_name || '').trim())
+    const matched = matchProduct(row.product_name)
     if (matched) {
+      row.product_name = productDisplayName(matched)
       if (!row.category) row.category = matched.category || ''
       if (!row.unit) row.unit = matched.unit || ''
       if (!row.unit_price) row.unit_price = Number(matched.unit_price || 0)
@@ -281,8 +283,9 @@ function onItemChange({ row, column }) {
 
 function onImportItemChange({ row, column }) {
   if (column.key === 'product_name') {
-    const matched = products.value.find(item => String(item.name || '').trim() === String(row.product_name || '').trim())
+    const matched = matchProduct(row.product_name)
     if (matched) {
+      row.product_name = productDisplayName(matched)
       if (!row.category) row.category = matched.category || ''
       if (!row.unit) row.unit = matched.unit || ''
       if (!row.unit_price) row.unit_price = Number(matched.unit_price || 0)
@@ -292,6 +295,30 @@ function onImportItemChange({ row, column }) {
     row.amount = roundMoney(Number(row.quantity || 0) * Number(row.unit_price || 0))
     refreshImportAmount()
   }
+}
+
+function matchProduct(value) {
+  const keyword = compactSku(value)
+  if (!keyword) return null
+  return products.value.find(item => compactSku(productDisplayName(item)) === keyword)
+    || products.value.find(item => compactSku(item.name) === keyword)
+    || products.value.find(item => compactSku(item.sku_label) === keyword)
+    || products.value.find(item => compactSku(item.search_text).includes(keyword))
+    || null
+}
+
+function productDisplayName(item) {
+  if (item?.display_name) return item.display_name
+  const name = String(item?.name || '').trim()
+  const spec = String(item?.spec || '').trim()
+  if (!spec || name.includes(spec)) return name
+  return `${name}${spec}`
+}
+
+function compactSku(value) {
+  return String(value || '')
+    .replace(/[｜|\s　/／·,，-]/g, '')
+    .toLowerCase()
 }
 
 function refreshAmount() {

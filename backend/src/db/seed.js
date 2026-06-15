@@ -17,9 +17,19 @@ db.exec(`CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
   password TEXT NOT NULL,
-  role TEXT DEFAULT 'user',
+  role TEXT DEFAULT 'employee',
+  onboarding_done INTEGER DEFAULT 0,
+  real_name TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
+  department TEXT DEFAULT '',
+  position TEXT DEFAULT '',
+  ai_pet_enabled INTEGER DEFAULT 1,
+  ai_auto_query INTEGER DEFAULT 1,
+  ai_name TEXT DEFAULT '简尚小助手',
   role_version INTEGER DEFAULT 1,
   employee_id INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'active',
+  assignment_status TEXT DEFAULT 'assigned',
   created_at DATETIME DEFAULT (datetime('now', 'localtime'))
 )`)
 
@@ -148,10 +158,10 @@ console.log('✅ 6 张表创建成功')
 // 插入默认系统所有者账号（用户名：fuyulnk，密码：123456）
 const hashedPassword = bcrypt.hashSync('123456', 10)
 db.prepare(`
-  INSERT OR IGNORE INTO users (username, password, role)
-  VALUES ('fuyulnk', ?, 'super_admin')
+  INSERT OR IGNORE INTO users (username, password, role, onboarding_done, assignment_status)
+  VALUES ('fuyulnk', ?, 'super_admin', 1, 'assigned')
 `).run(hashedPassword)
-db.prepare("UPDATE users SET role = 'super_admin' WHERE username = 'fuyulnk'").run()
+db.prepare("UPDATE users SET role = 'super_admin', onboarding_done = 1, assignment_status = 'assigned' WHERE username = 'fuyulnk'").run()
 console.log('✅ 系统所有者账号创建成功（fuyulnk/123456）')
 
 // 插入 11 个账户

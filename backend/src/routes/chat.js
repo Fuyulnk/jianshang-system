@@ -1,4 +1,5 @@
 import { authMiddleware } from '../middleware/auth.js'
+import { requireAssignedAccount } from '../utils/permissions.js'
 import { fileURLToPath } from 'url'
 import { dirname, extname, join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
@@ -21,6 +22,7 @@ export default function chatRoutes(server, db, realtime = {}) {
   // 获取会话列表（带最后一条消息）
   server.get('/api/conversations', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能访问聊天')) return
 
     const userId = request.user.userId
     ensureDefaultGroups(db)
@@ -55,6 +57,7 @@ export default function chatRoutes(server, db, realtime = {}) {
   // 创建会话
   server.post('/api/conversations', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能创建聊天')) return
 
     const { type = 'group', name, participant_ids = [] } = request.body
     const creatorId = request.user.userId
@@ -79,6 +82,7 @@ export default function chatRoutes(server, db, realtime = {}) {
   // 获取会话消息
   server.get('/api/conversations/:id/messages', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能查看聊天消息')) return
 
     const userId = request.user.userId
     const convId = request.params.id
@@ -109,6 +113,7 @@ export default function chatRoutes(server, db, realtime = {}) {
   // 群聊文件上传：当前用 base64 JSON，后续统一文件中心再升级 multipart。
   server.post('/api/conversations/:id/files', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能上传聊天文件')) return
 
     const userId = request.user.userId
     const convId = Number(request.params.id)
@@ -169,6 +174,7 @@ export default function chatRoutes(server, db, realtime = {}) {
   // 群聊文件下载：必须是会话成员才能下载，避免 data 文件被路径直出。
   server.get('/api/chat/files/:id/download', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能下载聊天文件')) return
 
     const userId = request.user.userId
     const fileId = Number(request.params.id)
@@ -201,6 +207,7 @@ export default function chatRoutes(server, db, realtime = {}) {
   // 获取用户列表（用于选择聊天对象）
   server.get('/api/users/chat', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能查看聊天用户')) return
 
     const users = db.prepare(`
       SELECT u.id, u.username, r.label as role_label

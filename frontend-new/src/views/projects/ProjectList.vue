@@ -211,6 +211,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -258,7 +259,7 @@ function emptyForm() {
 
 const userRole = computed(() => {
   try {
-    const t = localStorage.getItem('token')
+    const t = getAuthToken()
     return JSON.parse(atob(t.split('.')[1])).role || ''
   } catch { return '' }
 })
@@ -307,7 +308,7 @@ const boardStats = computed(() => [
   }
 ])
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 function formatTime(t) { return t ? new Date(t).toLocaleString('zh-CN') : '' }
 
 function phaseTagType(phase) {

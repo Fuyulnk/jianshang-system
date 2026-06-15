@@ -17,6 +17,7 @@ import ProjectDetail from '../views/projects/ProjectDetail.vue'
 import ProjectSupplyList from '../views/projects/ProjectSupplyList.vue'
 import FinanceOverview from '../views/finance/FinanceOverview.vue'
 import FileCenter from '../views/files/FileCenter.vue'
+import { getAuthToken, clearAuthSession } from '../utils/authSession'
 
 const routes = [
   {
@@ -59,7 +60,7 @@ const router = createRouter({
 
 // 路由守卫：未登录跳转登录页，过期 token 自动清理
 router.beforeEach((to, from) => {
-  const token = localStorage.getItem('token')
+  const token = getAuthToken()
   if (to.name !== 'Login' && !token) {
     return '/'
   }
@@ -67,16 +68,14 @@ router.beforeEach((to, from) => {
     try {
       const payload = JSON.parse(atob(token.split('.')[1]))
       if (payload.exp && payload.exp * 1000 < Date.now()) {
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
+        clearAuthSession({ clearRemembered: true })
         if (to.name !== 'Login') {
           return '/'
         }
       }
     } catch {
       // token 格式损坏，清除并跳转登录
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+      clearAuthSession({ clearRemembered: true })
       if (to.name !== 'Login') {
         return '/'
       }

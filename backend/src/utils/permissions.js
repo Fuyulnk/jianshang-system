@@ -1,5 +1,6 @@
 export function canAccessModule(db, user, module, permission = 'can_view') {
   if (!user) return false
+  if (isPendingAssignmentUser(user)) return false
   if (['super_admin', 'admin'].includes(user.role)) return true
 
   const row = getModulePermission(db, user, module)
@@ -8,6 +9,16 @@ export function canAccessModule(db, user, module, permission = 'can_view') {
 
 export function getModulePermission(db, user, module) {
   if (!user) return null
+  if (isPendingAssignmentUser(user)) {
+    return {
+      module,
+      can_view: 0,
+      can_create: 0,
+      can_edit: 0,
+      can_delete: 0,
+      data_scope: 'none'
+    }
+  }
   if (user.role === 'super_admin') {
     return {
       module,
@@ -43,22 +54,35 @@ export function getModulePermission(db, user, module) {
 
 export function requireModuleAccess(db, request, reply, module, permission = 'can_view', message = '无权限') {
   if (canAccessModule(db, request.user, module, permission)) return true
-  reply.code(403).send({ success: false, message })
+  const pendingMessage = isPendingAssignmentUser(request.user) ? '账号等待管理员建档和岗位分配，暂不能访问业务数据' : message
+  reply.code(403).send({ success: false, message: pendingMessage })
   return false
 }
 
 export function getDataScope(db, user, module) {
+  if (isPendingAssignmentUser(user)) return 'none'
   return getModulePermission(db, user, module)?.data_scope || 'none'
 }
 
 export function canAccessProjectRecord(db, user, project) {
   if (!user || !project) return false
+  if (isPendingAssignmentUser(user)) return false
   const scope = getDataScope(db, user, 'projects')
   if (scope === 'all') return true
   if (scope === 'none' || scope === 'private_grant') return false
   if (['self', 'department', 'project_related'].includes(scope)) {
     return isUserLinkedToProject(user.userId, project)
   }
+  return false
+}
+
+export function isPendingAssignmentUser(user) {
+  return (user?.assignmentStatus || user?.assignment_status || 'assigned') === 'pending'
+}
+
+export function requireAssignedAccount(request, reply, message = '账号等待管理员建档和岗位分配，暂不能访问该功能') {
+  if (!isPendingAssignmentUser(request.user)) return true
+  reply.code(403).send({ success: false, message })
   return false
 }
 

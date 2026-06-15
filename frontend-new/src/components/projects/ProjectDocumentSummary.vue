@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Collection, DocumentChecked, Download, UploadFilled, View, MagicStick, MoreFilled, Delete } from '@element-plus/icons-vue'
@@ -154,7 +155,7 @@ const costColumns = [
 ]
 
 function token() {
-  return localStorage.getItem('token') || ''
+  return getAuthToken() || ''
 }
 
 async function fetchChain() {

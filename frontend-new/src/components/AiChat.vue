@@ -50,6 +50,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../utils/authSession'
 import { ref, nextTick, watch } from 'vue'
 import { ChatDotSquare } from '@element-plus/icons-vue'
 
@@ -80,7 +81,7 @@ function closeChat() {
 }
 
 async function loadHistory() {
-  const token = localStorage.getItem('token')
+  const token = getAuthToken()
   if (!token) return
   try {
     const res = await fetch('/api/chat/history', {
@@ -105,7 +106,7 @@ async function sendMessage() {
   const text = inputText.value.trim()
   if (!text || streaming.value) return
 
-  const token = localStorage.getItem('token')
+  const token = getAuthToken()
   if (!token) {
     messages.value.push({ role: 'assistant', content: '请先登录' })
     return

@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../utils/authSession'
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Download, Paperclip, UploadFilled } from '@element-plus/icons-vue'
@@ -23,7 +24,7 @@ const hasEntity = computed(() => props.entityType && Number(props.entityId) > 0)
 const totalSize = computed(() => attachments.value.reduce((sum, item) => sum + Number(item.size || 0), 0))
 
 function token() {
-  return localStorage.getItem('token')
+  return getAuthToken()
 }
 
 function openPicker() {

@@ -180,6 +180,7 @@
 </template>
 
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -203,7 +204,7 @@ const addForm = ref({ account_id: null, type: 'expense', amount: 0, category: ''
 const filters = ref({ type: '', account_id: null, account_type: '', category: '' })
 const dateRange = ref(null)
 
-function token() { return localStorage.getItem('token') }
+function token() { return getAuthToken() }
 
 function fmt(v) {
   return '¥' + Number(v || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })

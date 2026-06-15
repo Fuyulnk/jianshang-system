@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Check, Download, Picture, Printer, RefreshLeft } from '@element-plus/icons-vue'
@@ -235,7 +236,7 @@ async function requestJson(url, body, method = 'POST') {
 }
 
 function token() {
-  return localStorage.getItem('token') || ''
+  return getAuthToken() || ''
 }
 
 function formatProjectAddress(project) {

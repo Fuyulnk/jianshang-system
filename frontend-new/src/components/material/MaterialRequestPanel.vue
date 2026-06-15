@@ -1,4 +1,5 @@
 <script setup>
+import { getAuthToken } from '../../utils/authSession'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -35,7 +36,7 @@ const rows = reactive({
 
 const userRole = computed(() => {
   try {
-    const t = localStorage.getItem('token')
+    const t = getAuthToken()
     return JSON.parse(atob(t.split('.')[1])).role || ''
   } catch { return '' }
 })
@@ -53,7 +54,7 @@ const toolLossTotal = computed(() => roundMoney(toolTotal.value * 0.1))
 const requestTotal = computed(() => roundMoney(materialTotal.value + auxiliaryTotal.value + toolLossTotal.value + toNumber(transportFee.value)))
 
 function token() {
-  return localStorage.getItem('token')
+  return getAuthToken()
 }
 
 function emptyRow(group) {
@@ -73,10 +74,12 @@ function emptyRow(group) {
 }
 
 function productLabel(item) {
-  return `${productDisplayName(item)}${item.category ? ` / ${item.category}` : ''}（库存 ${formatQty(item.stock)} ${item.unit || ''}）`
+  const sku = item?.sku_label || `${productDisplayName(item)}｜${item.unit || '单位未填'}｜${formatQty(item.stock)}`
+  return `${sku}${item.category ? ` / ${item.category}` : ''}`
 }
 
 function productDisplayName(item) {
+  if (item?.display_name) return item.display_name
   const name = String(item?.name || '').trim()
   const spec = String(item?.spec || '').trim()
   if (!spec || name.includes(spec)) return name
@@ -84,7 +87,8 @@ function productDisplayName(item) {
 }
 
 function productSearchText(item) {
-  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit]
+  if (item?.search_text) return item.search_text
+  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit, item?.sku_label]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
