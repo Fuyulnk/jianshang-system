@@ -112,13 +112,17 @@
             </div>
           </div>
           <div class="msg-input">
-            <div class="input-row" v-if="currentConvType === 'group'">
-              <span class="ai-tag" @click="insertAtAi" title="在输入中插入 @AI">@AI</span>
+            <div class="input-wrap">
+              <span v-if="currentConvType === 'group'" class="input-ai" @click="insertAtAi" title="在输入中插入 @AI">@AI</span>
+              <input v-model="inputText" type="text" :placeholder="inputPlaceholder" :disabled="uploading" @keydown.enter="sendMessage" />
+              <button class="input-send" :disabled="uploading || (!inputText.trim() && !pendingFiles.length)" @click="sendMessage" title="发送">
+                <el-icon><Promotion /></el-icon>
+              </button>
             </div>
             <input ref="fileInputRef" type="file" multiple class="hidden-file-input" @change="handleFilePick" />
-            <el-button :icon="Paperclip" :loading="uploading" @click="openFilePicker" title="选择文件">文件</el-button>
-            <input v-model="inputText" type="text" :placeholder="inputPlaceholder" :disabled="uploading" @keydown.enter="sendMessage" />
-            <el-button type="primary" :loading="uploading" @click="sendMessage">发送</el-button>
+            <button class="input-file" :loading="uploading" @click="openFilePicker" title="选择文件">
+              <el-icon><Paperclip /></el-icon>
+            </button>
           </div>
         </div>
       </template>
@@ -149,8 +153,12 @@
           </div>
         </div>
         <div class="msg-input">
-          <input v-model="aiInput" type="text" placeholder="向 AI 小助手提问..." :disabled="aiStreaming" @keydown.enter="sendAiMessage" />
-          <el-button type="primary" :loading="aiStreaming" @click="sendAiMessage">{{ aiStreaming ? '思考中' : '发送' }}</el-button>
+          <div class="input-wrap">
+            <input v-model="aiInput" type="text" placeholder="向 AI 小助手提问..." :disabled="aiStreaming" @keydown.enter="sendAiMessage" />
+            <button class="input-send" :disabled="aiStreaming || !aiInput.trim()" @click="sendAiMessage" title="发送">
+              <el-icon><Promotion /></el-icon>
+            </button>
+          </div>
         </div>
       </template>
     </div>
@@ -175,7 +183,7 @@
 import { getAuthToken } from '../../utils/authSession'
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ChatDotSquare, Cpu, Document, Download, Paperclip, UploadFilled } from '@element-plus/icons-vue'
+import { ChatDotSquare, Cpu, Document, Download, Paperclip, Promotion, UploadFilled } from '@element-plus/icons-vue'
 import { io } from 'socket.io-client'
 import UserAvatar from '../../components/UserAvatar.vue'
 
@@ -602,18 +610,32 @@ onUnmounted(() => {
 <style scoped>
 .chat-page {
   display: flex;
-  height: calc(100vh - 100px);
-  background: var(--bg-card);
-  border-radius: var(--radius-lg);
+  gap: 8px;
+  height: calc(100vh - var(--header-height));
+  margin: -24px;
+  padding: 8px;
+  align-items: stretch;
   overflow: hidden;
-  box-shadow: var(--shadow-sm);
 }
 .conv-list {
-  width: 300px;
-  border-right: 1px solid var(--border-color);
+  width: 280px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-card);
+  border-radius: 16px;
+  overflow: hidden;
+  isolation: isolate;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+}
+.dark .conv-list {
+  background: rgba(30, 30, 35, 0.65);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+  isolation: isolate;
 }
 .conv-header {
   display: flex;
@@ -631,11 +653,13 @@ onUnmounted(() => {
   padding: 12px 16px;
   cursor: pointer;
   transition: all 0.15s;
-  margin: 0 4px;
-  border-radius: var(--radius-sm);
+  margin: 0 6px;
+  border-radius: 10px;
 }
-.conv-item:hover { background: var(--border-light); }
-.conv-item.active { background: var(--color-primary-bg); }
+.conv-item:hover { background: rgba(0, 0, 0, 0.04); }
+.dark .conv-item:hover { background: rgba(255, 255, 255, 0.06); }
+.conv-item.active { background: rgba(64, 128, 255, 0.1); }
+.dark .conv-item.active { background: rgba(64, 128, 255, 0.15); }
 .conv-divider {
   padding: 12px 16px 4px;
   font-size: 11px;
@@ -658,7 +682,17 @@ onUnmounted(() => {
 .conv-name { font-size: 14px; font-weight: 500; color: var(--text-primary); }
 .conv-time { font-size: 11px; color: var(--text-tertiary); }
 .conv-last { font-size: 13px; color: var(--text-tertiary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.msg-area { flex: 1; display: flex; flex-direction: column; }
+.msg-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--bg-page);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+  isolation: isolate;
+}
 .no-conv { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-tertiary); }
 .no-conv-icon { font-size: 64px; margin-bottom: 16px; color: var(--text-placeholder); }
 .msg-header {
@@ -795,14 +829,15 @@ onUnmounted(() => {
 .msg-item.mine .msg-time { text-align: right; }
 .no-msg { text-align: center; color: var(--text-placeholder); margin-top: 60px; font-size: 14px; }
 .msg-composer {
-  border-top: 1px solid var(--border-color);
-  background: var(--bg-card);
+  padding: 0 12px 12px;
+  background: transparent;
+  border-top: none;
 }
 .pending-files {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 10px 16px 0;
+  padding: 0 12px 8px;
 }
 .pending-file {
   position: relative;
@@ -865,24 +900,124 @@ onUnmounted(() => {
   background: #ef4444;
   color: #fff;
 }
-.msg-input { display: flex; padding: 12px 16px; gap: 8px; align-items: center; }
+.msg-input {
+  display: flex;
+  padding: 8px 12px;
+  gap: 8px;
+  align-items: center;
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--border-color);
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.msg-input:focus-within {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  border-color: var(--color-primary);
+}
+.dark .msg-input {
+  background: rgba(40, 40, 45, 0.8);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
 .msg-input input {
   flex: 1; border: 1px solid var(--border-color); border-radius: 20px; padding: 8px 16px; font-size: 14px; outline: none;
   transition: border-color 0.2s;
+  background: transparent;
 }
 .msg-input input:focus { border-color: var(--color-primary); }
 .msg-input input:disabled { background: var(--bg-page); cursor: not-allowed; }
-.hidden-file-input { display: none; }
-.input-row { display: flex; align-items: center; }
-.ai-tag {
-  display: inline-flex; align-items: center; justify-content: center;
-  height: 24px; padding: 0 8px; margin-right: 6px;
-  border-radius: 4px; font-size: 12px; font-weight: 600;
+.msg-input input:disabled { background: transparent; cursor: not-allowed; }
+.input-ai {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
   background: var(--color-primary);
-  color: #fff; cursor: pointer; user-select: none;
-  transition: opacity 0.15s; flex-shrink: 0;
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: 4px;
+  transition: opacity 0.15s;
+  user-select: none;
 }
-.ai-tag:hover { opacity: 0.85; }
+.input-ai:hover { opacity: 0.85; }
+.hidden-file-input { display: none; }
+.msg-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.input-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  background: var(--bg-card);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  overflow: hidden;
+}
+.input-wrap:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+.dark .input-wrap {
+  background: rgba(40, 40, 45, 0.8);
+}
+.input-wrap input {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 8px 0 8px 6px;
+  font-size: 14px;
+  background: transparent;
+}
+.input-send {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-right: 3px;
+  transition: opacity 0.15s;
+}
+.input-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.input-send:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.input-file {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+.input-file:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+
 .ai-group-bubble {
   background: var(--color-primary-bg) !important;
   border: 1px solid var(--border-color);
