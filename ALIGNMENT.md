@@ -173,6 +173,54 @@
 
 ## 对接记录
 
+### 2026-06-17 Codex：财务智能录入与多账号串号返工
+
+- 任务：
+  - 按“财务线迁入系统、不做二次人工确认”的方向，把财务自然语言解析接入交易流水新增弹窗。
+  - 按首次使用视角测试待建档账号、财务账号和多标签刷新，发现并返工同浏览器多账号串号问题。
+- 修改文件：
+  - `backend/src/utils/financeParser.js`：新增财务消息解析器，复用账户别名、金额、收支类型、分类、对方识别逻辑。
+  - `backend/src/routes/transactions.js`：新增 `POST /api/transactions/parse-draft`，只解析填表、不落库；原“确定”新增交易仍是唯一人工确认。
+  - `backend/src/routes/ai.js`：AI 财务解析改用同一解析器，聊天写入仍保留高风险确认。
+  - `frontend-new/src/views/transactions/TransactionList.vue`：新增交易弹窗增加“智能录入”，粘贴财务消息后自动填入账户、类型、金额、分类、备注、对方。
+  - `frontend-new/src/utils/authSession.js`：认证 token 从共享存储改为当前标签页私有 `window.name` 会话槽；`localStorage` 只保留账号名等无权限偏好。
+  - `frontend-new/src/views/Login.vue`、`frontend-new/src/router/index.js`：非管理员登录和手动访问 `/main/dashboard` 都进入 `/main/employee-dashboard`，避免普通/财务/待建档账号落到管理控制台。
+  - `backend/src/routes/employee-dashboard.js`、`frontend-new/src/views/EmployeeDashboard.vue`：待建档账号返回并识别 `assignment_status=pending`，只展示等待分配入口；隐藏工程工具、项目/聊天快捷入口和财务入口。
+  - `frontend-new/src/components/OnboardingWizard.vue`：新人引导增加“稍后”，避免引导浮层挡住退出。
+- 已验证：
+  - `node --check backend/src/utils/financeParser.js`
+  - `node --check backend/src/routes/transactions.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/employee-dashboard.js`
+  - `node --check frontend-new/src/utils/authSession.js`
+  - `node --check frontend-new/src/router/index.js`
+  - `npm run build`（在 `frontend-new/`，构建成功；仍有 Vite 大 chunk 警告）
+  - 浏览器测试中实际复现：第二个标签登录财务后，第一个待建档标签刷新会变成财务；已针对该问题改为标签页私有 token。
+  - 浏览器测试中实际复现：待建档账号会看到工程部工具/现场勘察表生成器；已改为待建档只显示等待分配入口。
+- 未完成验证：
+  - 后端 `3001` 当前未运行；尝试沙盒外启动 `npm start` 被系统额度限制拒绝，未完成接口级复测。
+  - 因浏览器插件随后拒绝继续操作 `http://127.0.0.1:5173`，未能在改为 `window.name` 后做最终双标签刷新复测。
+- 注意事项：
+  - “保存密码”当前不再保存共享 token；同标签刷新不掉线依赖标签页私有会话。若后续要关闭浏览器后自动登录，需要另做”设备会话/刷新 token”，不能回退到 `localStorage.token`。
+  - 财务弹窗的智能解析只填表；写入仍走原 `POST /api/transactions`，所以财务录入本身就是一次人工确认，不再额外弹 AI 二次确认。
+- **Claude 补测完成（2026-06-17）：**
+  - ✅ 权限测试：仓库/普通员工/待建档账号均被正确拒绝（分别返回”无权限新增交易流水”和”等待管理员建档”）
+  - ✅ 财务解析：`POST /api/transactions/parse-draft` 返回成功，正确识别收支类型、金额、分类、对方
+  - ✅ 交易创建：财务账号成功创建测试流水 #6（5000元），super_admin 成功删除清理
+  - ✅ 双标签隔离：`authSession.js` 已将 token 从 `localStorage` 改为 `window.name`（标签页私有），同标签刷新不掉线，不同标签不串号
+  - ✅ 测试数据已全部清理
+
+### 2026-06-17 Codex：暗色主题去灰雾感调整
+
+- 任务：根据用户反馈，修正晚上主题在人眼看像“盖了一层纱”、图标/图片/色彩灰蒙蒙的问题。
+- 修改文件：
+  - `frontend-new/src/styles/global.css`：提高暗色主题文字、图标、边框和主色 token 对比度，减少低透明灰色带来的蒙层感。
+  - `frontend-new/src/styles/element-overrides.css`：调整暗色表格、输入框、弹窗、按钮、标签背景，让颜色更清楚。
+  - `frontend-new/src/views/Dashboard.vue`：提高暗色统计图标/快捷入口图标色块饱和度。
+  - `frontend-new/src/views/chat/ChatIndex.vue`：暗色会话侧栏从毛玻璃改为实色面板，避免雾化。
+- 验证：`npm run build` 通过；仅保留既有 Vite 大 chunk 警告。
+- 提交/部署状态：未提交，未上传服务器。
+
 ### 2026-06-17 Claude：聊天页面 UI 翻新——毛玻璃 + 浮空输入 + 布局紧凑
 
 - 任务：按用户反馈重构聊天页面视觉风格。
