@@ -173,6 +173,19 @@
 
 ## 对接记录
 
+### 2026-06-17 Claude：Hermes 审计修复 — window.name → sessionStorage + 残留函数清理
+
+- 任务：修复 Hermes 安全审计发现的 P1（window.name 存储 token）和 P2（ai.js 残留函数）。
+- P1 修复——`frontend-new/src/utils/authSession.js`：
+  - 将 token 存储从 `window.name` 改为 `sessionStorage`
+  - `window.name` 跨站可读，`sessionStorage` 有同源保护且关闭标签页即清除
+  - 仍保持每标签页独立，不串号
+  - 保留 `purgeLegacySharedAuth` 清理旧版存储
+- P2 修复——`backend/src/routes/ai.js`：
+  - 删除第 322 行的本地 `parseFinanceTransactionDraft` 函数（已从 `financeParser.js` 导入共享版本）
+- 验证：`node --check ai.js` 通过，`npm run build` 通过。
+- 部署状态：未提交，未上传服务器。
+
 ### 2026-06-17 Codex：财务智能录入与多账号串号返工
 
 - 任务：

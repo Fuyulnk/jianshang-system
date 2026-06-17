@@ -74,7 +74,7 @@
     </div>
 
     <!-- 快捷入口 -->
-    <el-card class="quick-card" shadow="never">
+    <el-card v-if="!isPendingAssignment" class="quick-card" shadow="never">
       <template #header>
         <span>快捷入口</span>
       </template>
@@ -106,7 +106,8 @@ const user = ref({})
 const employeeCode = ref('')
 const groups = ref([])
 const hasChat = ref(true)
-const showEngineeringTools = computed(() => ['engineering', 'employee', 'admin', 'super_admin'].includes(user.value.role))
+const isPendingAssignment = computed(() => user.value.assignment_status === 'pending' || groups.value.some(group => group.key === 'pending_assignment'))
+const showEngineeringTools = computed(() => !isPendingAssignment.value && ['engineering', 'employee', 'admin', 'super_admin'].includes(user.value.role))
 const surveySop = [
   { title: '1. 先拍全局', desc: '入户、客餐厅、卧室、阳台、卫生间先拍完整环境，确认作业面和保护。' },
   { title: '2. 再拍问题', desc: '墙面沙眼、点补未打磨、乳胶漆滴流、磕碰污染、柜体门窗和踢脚线未完成要单独拍。' },
@@ -125,6 +126,7 @@ async function fetchDashboard() {
     if (json.success) {
       user.value = json.data.user
       groups.value = json.data.groups
+      hasChat.value = user.value.assignment_status !== 'pending'
 
       // 尝试获取员工ID
       try {

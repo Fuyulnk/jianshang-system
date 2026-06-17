@@ -51,32 +51,32 @@
 
 /* ========== Dark Mode ========== */
 html.dark {
-  --color-primary: #6380f7;
-  --color-primary-dark: #4f6df5;
-  --color-primary-light: #8da3ff;
-  --color-primary-bg: #1a1f3a;
+  --color-primary: #6f8cff;
+  --color-primary-dark: #5874f4;
+  --color-primary-light: #9db2ff;
+  --color-primary-bg: rgba(79, 109, 245, 0.22);
 
   --color-accent: #f59e0b;
   --color-accent-light: #fbbf24;
 
-  --text-primary: #e4e4e7;
-  --text-secondary: #a1a1aa;
-  --text-tertiary: #6b6d75;
-  --text-placeholder: #4a4b52;
+  --text-primary: #f4f7fb;
+  --text-secondary: #c4ccd8;
+  --text-tertiary: #8d98aa;
+  --text-placeholder: #647084;
 
-  --bg-page: #0c0c0f;
-  --bg-card: #18181b;
-  --bg-header: rgba(24, 24, 27, 0.9);
+  --bg-page: #080b12;
+  --bg-card: #111827;
+  --bg-header: rgba(12, 17, 27, 0.96);
 
-  --sidebar-bg: #08080a;
-  --sidebar-border: rgba(255, 255, 255, 0.04);
-  --sidebar-text: rgba(255, 255, 255, 0.55);
+  --sidebar-bg: #070b13;
+  --sidebar-border: rgba(148, 163, 184, 0.16);
+  --sidebar-text: rgba(226, 232, 240, 0.78);
   --sidebar-text-active: #ffffff;
   --sidebar-logo-text: #ffffff;
-  --sidebar-icon: rgba(255, 255, 255, 0.3);
+  --sidebar-icon: rgba(148, 163, 184, 0.78);
 
-  --border-color: #27272a;
-  --border-light: #1f1f22;
+  --border-color: #263247;
+  --border-light: rgba(148, 163, 184, 0.14);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);

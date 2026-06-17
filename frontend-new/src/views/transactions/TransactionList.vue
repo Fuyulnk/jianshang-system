@@ -117,6 +117,26 @@
 
     <!-- 新增弹窗 -->
     <el-dialog v-model="showAdd" title="新增交易" width="500px">
+      <div class="smart-entry">
+        <div class="smart-head">
+          <div>
+            <strong>智能录入</strong>
+            <span>粘贴财务消息，系统会先填入下方表单</span>
+          </div>
+          <el-button size="small" type="primary" plain :loading="parsing" @click="parseFinanceText">智能解析</el-button>
+        </div>
+        <el-input
+          v-model="smartText"
+          type="textarea"
+          :rows="2"
+          placeholder="例如：支付霞光材料款 2000 晓婉中行，给张三"
+          @keyup.meta.enter="parseFinanceText"
+          @keyup.ctrl.enter="parseFinanceText"
+        />
+        <div v-if="parseWarnings.length" class="parse-warnings">
+          <span v-for="item in parseWarnings" :key="item">{{ item }}</span>
+        </div>
+      </div>
       <el-form :model="addForm" label-width="80px">
         <el-form-item label="账户">
           <el-select v-model="addForm.account_id" placeholder="选择账户" style="width: 100%">
@@ -195,10 +215,13 @@ const loading = ref(false)
 const showAdd = ref(false)
 const saving = ref(false)
 const exporting = ref(false)
+const parsing = ref(false)
 const showAttachments = ref(false)
 const selectedTransaction = ref(null)
 const receiptInput = ref(null)
 const pendingReceipts = ref([])
+const smartText = ref('')
+const parseWarnings = ref([])
 const addForm = ref({ account_id: null, type: 'expense', amount: 0, category: '', description: '', party: '' })
 
 const filters = ref({ type: '', account_id: null, account_type: '', category: '' })
@@ -304,6 +327,8 @@ async function fetchCategories() {
 function openAddDialog() {
   addForm.value = { account_id: null, type: 'expense', amount: 0, category: '', description: '', party: '' }
   pendingReceipts.value = []
+  smartText.value = ''
+  parseWarnings.value = []
   showAdd.value = true
 }
 
@@ -342,6 +367,44 @@ function resetFilters() {
   fetchList()
 }
 
+async function parseFinanceText() {
+  const rawText = smartText.value.trim()
+  if (!rawText) {
+    ElMessage.warning('请先粘贴一条财务消息')
+    return
+  }
+  parsing.value = true
+  parseWarnings.value = []
+  try {
+    const res = await fetch('/api/transactions/parse-draft', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ raw_text: rawText })
+    })
+    const json = await res.json()
+    if (!json.success) throw new Error(json.message || '解析失败')
+    const draft = json.data || {}
+    addForm.value = {
+      account_id: draft.account_id || addForm.value.account_id || null,
+      type: draft.type || 'expense',
+      amount: Number(draft.amount || 0),
+      category: draft.category || '',
+      description: draft.description || rawText,
+      party: draft.party || ''
+    }
+    parseWarnings.value = Array.isArray(draft.warnings) ? draft.warnings : []
+    if (parseWarnings.value.length) {
+      ElMessage.warning('已填入表单，请补齐提示项')
+    } else {
+      ElMessage.success('已填入表单，核对后点确定保存')
+    }
+  } catch (error) {
+    ElMessage.error(error.message || '解析失败')
+  } finally {
+    parsing.value = false
+  }
+}
+
 async function handleAdd() {
   if (!addForm.value.account_id || !addForm.value.amount) {
     ElMessage.warning('请选择账户并输入金额')
@@ -362,6 +425,8 @@ async function handleAdd() {
       ElMessage.success('新增成功')
       showAdd.value = false
       addForm.value = { account_id: null, type: 'expense', amount: 0, category: '', description: '', party: '' }
+      smartText.value = ''
+      parseWarnings.value = []
       pendingReceipts.value = []
       fetchList()
       fetchCategories()
@@ -480,6 +545,43 @@ onMounted(() => { fetchList(); fetchAccounts(); fetchCategories() })
 }
 .filter-bar :deep(.el-form-item) { margin-bottom: 0; }
 .filter-bar :deep(.el-form-item__label) { color: var(--text-secondary); }
+
+.smart-entry {
+  padding: 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-primary-bg) 38%, var(--bg-card));
+}
+.smart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.smart-head strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.smart-head span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.parse-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.parse-warnings span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-warning);
+  background: rgba(245, 158, 11, 0.12);
+}
 
 .header-actions {
   display: flex;

@@ -113,7 +113,8 @@ onMounted(async () => {
   initTheme()
   restoreLoginPreference()
   await loadOrgOptions()
-  if (await hasValidToken()) router.replace('/main/dashboard')
+  const existingUser = await currentValidUser()
+  if (existingUser) router.replace(homePathForUser(existingUser))
 })
 
 function initTheme() {
@@ -142,21 +143,27 @@ function restoreLoginPreference() {
   }
 }
 
-async function hasValidToken() {
+async function currentValidUser() {
   const token = getAuthToken()
-  if (!token) return false
+  if (!token) return null
   try {
     const res = await fetch('/api/me', {
       headers: { Authorization: `Bearer ${token}` }
     })
     const json = await res.json().catch(() => ({}))
-    if (res.ok && json.success) return true
+    if (res.ok && json.success) return json.user
     clearAuthSession({ clearRemembered: true })
-    return false
+    return null
   } catch {
     clearAuthSession({ clearRemembered: true })
-    return false
+    return null
   }
+}
+
+function homePathForUser(user = {}) {
+  return ['super_admin', 'admin'].includes(user.role) && user.assignment_status !== 'pending'
+    ? '/main/dashboard'
+    : '/main/employee-dashboard'
 }
 
 async function loadOrgOptions() {
@@ -275,7 +282,7 @@ async function handleLogin() {
         clearRememberedAuth()
       }
       saveLoginPreference(form.username)
-      router.push('/main/dashboard')
+      router.push(homePathForUser(result.user))
     } else {
       errorMsg.value = result.message || '登录失败'
     }

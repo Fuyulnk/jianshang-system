@@ -285,7 +285,7 @@
 
 /* ========== Dark Mode Overrides ========== */
 html.dark .el-table th.el-table__cell {
-  background: #121214 !important;
+  background: #0d1420 !important;
   color: var(--text-secondary) !important;
 }
 html.dark .el-table,
@@ -315,11 +315,11 @@ html.dark .el-table td.el-table__cell {
 }
 html.dark .el-table th.el-table__cell,
 html.dark .el-table__header th.el-table__cell {
-  background: #121214 !important;
+  background: #0d1420 !important;
 }
 html.dark .el-table--striped .el-table__body tr.el-table__row--striped,
 html.dark .el-table--striped .el-table__body tr.el-table__row--striped td {
-  background: #101012 !important;
+  background: #0c121d !important;
 }
 html.dark .el-table__body tr:hover,
 html.dark .el-table__body tr:hover > td,
@@ -336,7 +336,7 @@ html.dark .el-table__border-left-patch {
   background: var(--border-color) !important;
 }
 html.dark .el-input__wrapper {
-  background: #121214 !important;
+  background: #0d1420 !important;
   box-shadow: 0 0 0 1px var(--border-color) inset !important;
 }
 html.dark .el-input__inner,
@@ -350,7 +350,7 @@ html.dark .el-textarea__inner::placeholder {
   -webkit-text-fill-color: var(--text-placeholder) !important;
 }
 html.dark .el-textarea__inner {
-  background: #121214 !important;
+  background: #0d1420 !important;
   border-color: transparent !important;
   box-shadow: 0 0 0 1px var(--border-color) inset !important;
 }
@@ -365,7 +365,7 @@ html.dark .el-textarea__inner:focus {
 html.dark .el-input.is-disabled .el-input__wrapper,
 html.dark .el-textarea.is-disabled .el-textarea__inner,
 html.dark .el-input__wrapper.is-disabled {
-  background: #0f0f12 !important;
+  background: #0a101a !important;
   box-shadow: 0 0 0 1px var(--border-light) inset !important;
 }
 html.dark .el-input.is-disabled .el-input__inner,
@@ -376,12 +376,12 @@ html.dark .el-textarea.is-disabled .el-textarea__inner {
 html.dark input:-webkit-autofill,
 html.dark input:-webkit-autofill:hover,
 html.dark input:-webkit-autofill:focus {
-  -webkit-box-shadow: 0 0 0 1000px #121214 inset !important;
+  -webkit-box-shadow: 0 0 0 1000px #0d1420 inset !important;
   -webkit-text-fill-color: var(--text-primary) !important;
 }
 html.dark .el-select__wrapper,
 html.dark .el-date-editor.el-input__wrapper {
-  background: #121214 !important;
+  background: #0d1420 !important;
   box-shadow: 0 0 0 1px var(--border-color) inset !important;
 }
 html.dark .el-form-item__label,
@@ -393,13 +393,13 @@ html.dark .el-form-item__label {
   color: var(--text-secondary) !important;
 }
 html.dark .el-button:not(.el-button--primary):not(.el-button--danger):not(.is-text):not(.is-link) {
-  background: #1f1f22 !important;
+  background: #172033 !important;
   border-color: var(--border-color) !important;
   color: var(--text-primary) !important;
 }
 html.dark .el-button:not(.el-button--primary):not(.el-button--danger):not(.is-text):not(.is-link):hover {
-  background: #27272a !important;
-  border-color: #3f3f46 !important;
+  background: #1f2d46 !important;
+  border-color: #3b4a63 !important;
   color: #fff !important;
 }
 html.dark .el-select__placeholder,
@@ -408,14 +408,14 @@ html.dark .el-range-separator {
   color: var(--text-secondary) !important;
 }
 html.dark .el-select-dropdown, html.dark .el-popper {
-  background: #18181b !important;
+  background: #111827 !important;
   border-color: var(--border-color) !important;
 }
 html.dark .el-select-dropdown__item.hover, html.dark .el-select-dropdown__item:hover {
   background: var(--color-primary-bg) !important;
 }
 html.dark .el-dialog {
-  background: #18181b !important;
+  background: #111827 !important;
   border-color: var(--border-color) !important;
 }
 html.dark .el-button--primary:hover {
@@ -424,10 +424,10 @@ html.dark .el-button--primary:hover {
 html.dark .el-button--danger:hover {
   background: #2d0a0a !important;
 }
-html.dark .el-tag--success { background: #0a2e1a !important; }
-html.dark .el-tag--danger { background: #2d0a0a !important; }
-html.dark .el-tag--warning { background: #2e1a00 !important; }
-html.dark .el-tag--info { background: #1f1f22 !important; }
+html.dark .el-tag--success { background: rgba(16, 185, 129, 0.22) !important; color: #5eead4 !important; }
+html.dark .el-tag--danger { background: rgba(239, 68, 68, 0.22) !important; color: #fca5a5 !important; }
+html.dark .el-tag--warning { background: rgba(245, 158, 11, 0.24) !important; color: #fcd34d !important; }
+html.dark .el-tag--info { background: rgba(148, 163, 184, 0.16) !important; color: #cbd5e1 !important; }
 html.dark .el-message {
   border-color: var(--border-color) !important;
 }

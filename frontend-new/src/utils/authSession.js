@@ -1,15 +1,35 @@
-const TOKEN_KEY = 'token'
-const USER_KEY = 'user'
+const SESSION_KEY = 'jianshang-session'
+
+function readSession() {
+  if (typeof sessionStorage === 'undefined') return {}
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY)
+    if (!raw) return {}
+    return JSON.parse(raw) || {}
+  } catch {
+    sessionStorage.removeItem(SESSION_KEY)
+    return {}
+  }
+}
+
+function writeSession(value = {}) {
+  if (typeof sessionStorage === 'undefined') return
+  if (!value.token) {
+    sessionStorage.removeItem(SESSION_KEY)
+    return
+  }
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: value.token }))
+}
 
 export function getAuthToken() {
-  return sessionStorage.getItem(TOKEN_KEY) || ''
+  return readSession().token || ''
 }
 
 export function setAuthToken(token) {
   if (token) {
-    sessionStorage.setItem(TOKEN_KEY, token)
+    writeSession({ token })
   } else {
-    sessionStorage.removeItem(TOKEN_KEY)
+    writeSession({})
   }
   purgeLegacySharedAuth()
 }
@@ -24,16 +44,18 @@ export function clearRememberedAuth() {
 }
 
 export function clearAuthSession(options = {}) {
-  sessionStorage.removeItem(TOKEN_KEY)
-  sessionStorage.removeItem(USER_KEY)
+  writeSession({})
   if (options.clearRemembered) clearRememberedAuth()
   purgeLegacySharedAuth()
 }
 
 export function purgeLegacySharedAuth() {
-  localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem(USER_KEY)
+  sessionStorage.removeItem('token')
+  sessionStorage.removeItem('user')
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
   localStorage.removeItem('remembered-auth-v1')
+  if (String(window.name || '').startsWith('jianshang-auth:')) window.name = ''
 }
 
 export function getTokenPayload(token = getAuthToken()) {

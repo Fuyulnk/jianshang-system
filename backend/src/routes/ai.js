@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule, canAccessProjectRecord, requireAssignedAccount } from '../utils/permissions.js'
 import { missingCoreFields, normalizeProjectDraft, parseProjectHandoverText } from '../utils/projectImport.js'
+import { parseFinanceTransactionDraft as parseFinanceTransactionDraftShared } from '../utils/financeParser.js'
 import { AI_TOOL_REGISTRY, buildToolSchemas, toolMeta } from '../ai/toolRegistry.js'
 
 const KB_SERVER = 'http://127.0.0.1:18790'
@@ -221,11 +222,11 @@ function executeTool(name, args, db, user) {
     }
 
     case 'parse_finance_transaction': {
-      const draft = parseFinanceTransactionDraft(String(args.raw_text || ''), db)
+      const draft = parseFinanceTransactionDraftShared(String(args.raw_text || ''), db)
       return JSON.stringify({
         success: true,
-        message: '已生成收支草稿，写入前必须由用户确认',
-        data: draft
+        message: '已生成收支草稿，聊天写入前仍必须由用户明确确认',
+        data: { ...draft, needs_confirmation: true }
       })
     }
 
@@ -315,48 +316,6 @@ function executeTool(name, args, db, user) {
         .run(result.lastInsertRowid, 'AI创建工单', user.username || '', '用户确认后由简尚 AI 创建项目工单')
       return JSON.stringify({ success: true, id: result.lastInsertRowid, message: `已创建项目工单「${draft.name}」` })
     }
-  }
-}
-
-function parseFinanceTransactionDraft(rawText, db) {
-  const text = rawText.trim()
-  const amountMatch = text.match(/(?:收入|收到|收|支付|支出|付|扣|退款|报销)?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
-  const amount = amountMatch ? Number(amountMatch[1]) : 0
-  const type = /收入|收到|收款|进账|回款/.test(text) && !/支付|支出|付|扣/.test(text) ? 'income' : 'expense'
-  const accounts = db.prepare('SELECT id, name FROM accounts ORDER BY id').all()
-  const accountAlias = loadFinanceAccountAliases(db)
-  let account = null
-  for (const item of accounts) {
-    if (text.includes(item.name)) {
-      account = item
-      break
-    }
-  }
-  if (!account) {
-    for (const { alias, account_name: standard } of accountAlias) {
-      if (!text.includes(alias)) continue
-      account = findAccountByName(accounts, standard)
-      if (account) break
-    }
-  }
-  const category = inferFinanceCategory(text, type)
-  const party = inferCounterparty(text)
-  return {
-    raw_text: text,
-    type,
-    type_label: type === 'income' ? '收入' : '支出',
-    amount,
-    account_id: account?.id || 0,
-    account_name: account?.name || '',
-    category,
-    party,
-    description: cleanFinanceDescription(text),
-    confidence: amount > 0 ? 'medium' : 'low',
-    needs_confirmation: true,
-    warnings: [
-      ...(!amount ? ['未识别到金额'] : []),
-      ...(!account ? ['未匹配到账户，请人工选择'] : [])
-    ]
   }
 }
 

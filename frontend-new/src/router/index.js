@@ -73,6 +73,9 @@ router.beforeEach((to, from) => {
           return '/'
         }
       }
+      if (to.path === '/main/dashboard' && !['super_admin', 'admin'].includes(payload.role)) {
+        return '/main/employee-dashboard'
+      }
     } catch {
       // token 格式损坏，清除并跳转登录
       clearAuthSession({ clearRemembered: true })

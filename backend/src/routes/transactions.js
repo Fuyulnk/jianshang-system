@@ -1,5 +1,6 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { requireModuleAccess } from '../utils/permissions.js'
+import { parseFinanceTransactionDraft } from '../utils/financeParser.js'
 
 function buildTransactionFilter(query = {}) {
   const { account_id, account_type, type, category, start_date, end_date } = query
@@ -263,6 +264,25 @@ export default function transactionRoutes(server, db) {
       "SELECT DISTINCT category FROM transactions WHERE category IS NOT NULL AND category != '' ORDER BY category"
     ).all()
     return { success: true, data: data.map(r => r.category) }
+  })
+
+  // 智能解析财务录入文本。只填表，不落库；点“确定”新增流水才是唯一人工确认。
+  server.post('/api/transactions/parse-draft', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'transactions', 'can_create', '无权限新增交易流水')) return
+
+    const rawText = String(request.body?.raw_text || '').trim()
+    if (!rawText) return { success: false, message: '请输入需要解析的财务消息' }
+
+    const draft = parseFinanceTransactionDraft(rawText, db)
+    return {
+      success: true,
+      message: '已解析并填入录入表单',
+      data: {
+        ...draft,
+        single_confirm_flow: true
+      }
+    }
   })
 
   // 新增交易

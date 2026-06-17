@@ -2,6 +2,7 @@
   <Transition name="onboarding">
     <div v-if="visible" class="onboarding-overlay">
       <div class="onboarding-card">
+        <el-button class="skip-btn" text @click="skip">稍后</el-button>
         <!-- 步骤指示器 -->
           <el-steps :active="step" align-center finish-status="success" class="steps-bar">
             <el-step title="欢迎" />
@@ -245,6 +246,10 @@ function done() {
   window.dispatchEvent(new CustomEvent('ai-pet-settings', { detail: { hidden, aiName } }))
   emit('done')
 }
+
+function skip() {
+  emit('done')
+}
 </script>
 
 <style scoped>
@@ -260,6 +265,7 @@ function done() {
   justify-content: center;
 }
 .onboarding-card {
+  position: relative;
   width: 520px;
   max-height: 90vh;
   background: var(--bg-card);
@@ -268,6 +274,12 @@ function done() {
   padding: 40px 36px 24px;
   display: flex;
   flex-direction: column;
+}
+.skip-btn {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  color: var(--text-tertiary);
 }
 .steps-bar { margin-bottom: 32px; }
 .step-body { flex: 1; min-height: 260px; }
