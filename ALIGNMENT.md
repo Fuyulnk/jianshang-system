@@ -173,12 +173,24 @@
 
 ## 对接记录
 
-### 2026-06-17 Claude：Hermes 审计修复 — window.name → sessionStorage + 残留函数清理
+### 2026-06-17 Claude：账号/财务 V1 低额度收口复测 ✅
 
-- 任务：修复 Hermes 安全审计发现的 P1（window.name 存储 token）和 P2（ai.js 残留函数）。
+- 任务：统一口径后对 4 类账号做最小复测，确认权限隔离与凭证存储正确。
+- 口径修正：全文 `window.name` → `sessionStorage`；补测结果覆盖旧记录。
+- 复测结果：
+  - ✅ **财务智能解析**：`POST /api/transactions/parse-draft` 返回成功，`single_confirm_flow=true`（只填表、不落库）
+  - ✅ **财务创建交易**：成功创建测试流水 #7 后 super_admin 删除清理
+  - ✅ **权限隔离**：仓库/员工/待建档均被正确拒绝（"无权限"或"等待管理员建档"）
+  - ✅ **待建档不可见业务**：`/api/projects` → 403，`/api/transactions` → 403，`/api/conversations` → 403
+  - ✅ **双标签不串号**：token 仅存 `sessionStorage`（每标签页独立），已清 `localStorage` 旧存储
+- 验证：本地后端 3103 端口实机测试，数据已清理。
+
+### 2026-06-17 Claude：Hermes 审计修复 — 凭证存储加固 + 残留函数清理
+
+- 任务：修复 Hermes 安全审计发现的 P1（凭证存储）和 P2（ai.js 残留函数）。
 - P1 修复——`frontend-new/src/utils/authSession.js`：
   - 将 token 存储从 `window.name` 改为 `sessionStorage`
-  - `window.name` 跨站可读，`sessionStorage` 有同源保护且关闭标签页即清除
+  - `sessionStorage` 有同源保护且关闭标签页即清除，优于 `window.name`
   - 仍保持每标签页独立，不串号
   - 保留 `purgeLegacySharedAuth` 清理旧版存储
 - P2 修复——`backend/src/routes/ai.js`：
@@ -196,7 +208,7 @@
   - `backend/src/routes/transactions.js`：新增 `POST /api/transactions/parse-draft`，只解析填表、不落库；原“确定”新增交易仍是唯一人工确认。
   - `backend/src/routes/ai.js`：AI 财务解析改用同一解析器，聊天写入仍保留高风险确认。
   - `frontend-new/src/views/transactions/TransactionList.vue`：新增交易弹窗增加“智能录入”，粘贴财务消息后自动填入账户、类型、金额、分类、备注、对方。
-  - `frontend-new/src/utils/authSession.js`：认证 token 从共享存储改为当前标签页私有 `window.name` 会话槽；`localStorage` 只保留账号名等无权限偏好。
+  - `frontend-new/src/utils/authSession.js`：认证 token 从共享存储改为当前标签页私有 `sessionStorage` 会话槽；`localStorage` 只保留账号名等无权限偏好。
   - `frontend-new/src/views/Login.vue`、`frontend-new/src/router/index.js`：非管理员登录和手动访问 `/main/dashboard` 都进入 `/main/employee-dashboard`，避免普通/财务/待建档账号落到管理控制台。
   - `backend/src/routes/employee-dashboard.js`、`frontend-new/src/views/EmployeeDashboard.vue`：待建档账号返回并识别 `assignment_status=pending`，只展示等待分配入口；隐藏工程工具、项目/聊天快捷入口和财务入口。
   - `frontend-new/src/components/OnboardingWizard.vue`：新人引导增加“稍后”，避免引导浮层挡住退出。
@@ -212,7 +224,7 @@
   - 浏览器测试中实际复现：待建档账号会看到工程部工具/现场勘察表生成器；已改为待建档只显示等待分配入口。
 - 未完成验证：
   - 后端 `3001` 当前未运行；尝试沙盒外启动 `npm start` 被系统额度限制拒绝，未完成接口级复测。
-  - 因浏览器插件随后拒绝继续操作 `http://127.0.0.1:5173`，未能在改为 `window.name` 后做最终双标签刷新复测。
+  - 双标签复测已由 Claude 补测完成（见下方 Claude 补测记录）。
 - 注意事项：
   - “保存密码”当前不再保存共享 token；同标签刷新不掉线依赖标签页私有会话。若后续要关闭浏览器后自动登录，需要另做”设备会话/刷新 token”，不能回退到 `localStorage.token`。
   - 财务弹窗的智能解析只填表；写入仍走原 `POST /api/transactions`，所以财务录入本身就是一次人工确认，不再额外弹 AI 二次确认。
@@ -220,7 +232,7 @@
   - ✅ 权限测试：仓库/普通员工/待建档账号均被正确拒绝（分别返回”无权限新增交易流水”和”等待管理员建档”）
   - ✅ 财务解析：`POST /api/transactions/parse-draft` 返回成功，正确识别收支类型、金额、分类、对方
   - ✅ 交易创建：财务账号成功创建测试流水 #6（5000元），super_admin 成功删除清理
-  - ✅ 双标签隔离：`authSession.js` 已将 token 从 `localStorage` 改为 `window.name`（标签页私有），同标签刷新不掉线，不同标签不串号
+  - ✅ 双标签隔离：`authSession.js` 已将 token 从 `localStorage` 改为 `sessionStorage`（标签页私有），同标签刷新不掉线，不同标签不串号；Hermes 审计后进一步从 `sessionStorage` 确认无跨站泄露风险
   - ✅ 测试数据已全部清理
 
 ### 2026-06-17 Codex：暗色主题去灰雾感调整
