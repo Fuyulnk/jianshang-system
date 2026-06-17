@@ -125,6 +125,42 @@ try { db.exec("ALTER TABLE material_request_items ADD COLUMN usage_quantity REAL
 try { db.exec("ALTER TABLE material_request_items ADD COLUMN unit_price REAL DEFAULT 0") } catch {}
 try { db.exec("ALTER TABLE material_request_items ADD COLUMN amount REAL DEFAULT 0") } catch {}
 try { db.exec("ALTER TABLE material_request_items ADD COLUMN remark TEXT DEFAULT ''") } catch {}
+try { db.exec('ALTER TABLE products ADD COLUMN is_test INTEGER DEFAULT 0') } catch {}
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL,
+      project_id INTEGER DEFAULT 0,
+      material_request_id INTEGER DEFAULT 0,
+      movement_type TEXT NOT NULL,
+      quantity_delta REAL DEFAULT 0,
+      quantity_before REAL DEFAULT 0,
+      quantity_after REAL DEFAULT 0,
+      unit TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS material_losses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER DEFAULT 0,
+      material_request_id INTEGER DEFAULT 0,
+      product_id INTEGER DEFAULT 0,
+      product_name TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      unit TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_inventory_movements_product ON inventory_movements(product_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_inventory_movements_project ON inventory_movements(project_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_material_losses_project ON material_losses(project_id, created_at);
+  `)
+} catch {}
 try { db.exec("UPDATE projects SET address_detail = address WHERE COALESCE(address_detail, '') = '' AND COALESCE(address, '') != ''") } catch {}
 try {
   const owner = db.prepare("SELECT id FROM users WHERE username = 'fuyulnk'").get()
@@ -337,9 +373,9 @@ if (toolCount === 0) {
     if (role.name === 'super_admin') {
       for (const t of allTools) stmt.run(role.id, t, 1)
     } else if (role.name === 'admin') {
-      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_products','get_employees','get_projects','get_system_stats','parse_finance_transaction','parse_project_handover','create_project_workorder'].includes(t) ? 1 : 0)
+      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_products','get_employees','get_projects','get_system_stats','get_project_profit_summary','parse_finance_transaction','parse_project_handover','create_project_workorder'].includes(t) ? 1 : 0)
     } else if (role.name === 'finance') {
-      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_system_stats','parse_finance_transaction','create_transaction'].includes(t) ? 1 : 0)
+      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_system_stats','get_project_profit_summary','parse_finance_transaction','create_transaction'].includes(t) ? 1 : 0)
     } else if (role.name === 'warehouse') {
       for (const t of allTools) stmt.run(role.id, t, ['get_products','get_system_stats'].includes(t) ? 1 : 0)
     } else {
@@ -737,7 +773,38 @@ function ensureCoreTables(db) {
       price_unit TEXT DEFAULT '',
       stock REAL DEFAULT 0,
       min_stock REAL DEFAULT 0,
+      is_test INTEGER DEFAULT 0,
       updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL,
+      project_id INTEGER DEFAULT 0,
+      material_request_id INTEGER DEFAULT 0,
+      movement_type TEXT NOT NULL,
+      quantity_delta REAL DEFAULT 0,
+      quantity_before REAL DEFAULT 0,
+      quantity_after REAL DEFAULT 0,
+      unit TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS material_losses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER DEFAULT 0,
+      material_request_id INTEGER DEFAULT 0,
+      product_id INTEGER DEFAULT 0,
+      product_name TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      unit TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
     );
 
     CREATE TABLE IF NOT EXISTS supply_orders (
@@ -968,6 +1035,7 @@ function ensureCoreTables(db) {
   try { db.exec("ALTER TABLE products ADD COLUMN spec TEXT DEFAULT ''") } catch {}
   try { db.exec('ALTER TABLE products ADD COLUMN unit_price REAL DEFAULT 0') } catch {}
   try { db.exec("ALTER TABLE products ADD COLUMN price_unit TEXT DEFAULT ''") } catch {}
+  try { db.exec('ALTER TABLE products ADD COLUMN is_test INTEGER DEFAULT 0') } catch {}
   try { db.exec('ALTER TABLE supply_orders ADD COLUMN project_id INTEGER DEFAULT 0') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_status ON supply_orders(status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_created_by ON supply_orders(created_by, created_at)') } catch {}
@@ -975,6 +1043,9 @@ function ensureCoreTables(db) {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_requests_project ON material_requests(project_id, status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_requests_status ON material_requests(status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_request_items_request ON material_request_items(request_id)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_inventory_movements_product ON inventory_movements(product_id, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_inventory_movements_project ON inventory_movements(project_id, created_at)') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_material_losses_project ON material_losses(project_id, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_private_workspaces_owner ON private_workspaces(owner_user_id, archived_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_resource_access_grants_resource ON resource_access_grants(resource_type, resource_id, user_id, revoked_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_access_audit_user_time ON access_audit_logs(user_id, created_at)') } catch {}
@@ -1101,8 +1172,8 @@ function ensureAiToolPermissionRows(db) {
 
 function defaultAiToolAllowed(role, tool) {
   if (role === 'super_admin') return 1
-  if (role === 'admin') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees', 'get_projects', 'get_system_stats', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
-  if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats', 'parse_finance_transaction', 'create_transaction'].includes(tool) ? 1 : 0
+  if (role === 'admin') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees', 'get_projects', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
+  if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction'].includes(tool) ? 1 : 0
   if (role === 'warehouse') return ['get_products', 'get_system_stats'].includes(tool) ? 1 : 0
   if (role === 'engineering') return ['get_projects', 'get_products', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
   return ['get_system_stats', 'get_projects'].includes(tool) ? 1 : 0

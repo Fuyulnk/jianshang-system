@@ -82,6 +82,77 @@
       </div>
     </el-card>
 
+    <!-- 项目利润粗算 -->
+    <el-card class="page-card project-profit-card">
+      <div class="page-header">
+        <div>
+          <h2>项目利润粗算</h2>
+          <p class="page-desc">从工费、材料回库、成本核算和财务归档单据汇总，不替代财务人工确认</p>
+        </div>
+        <el-button :icon="Refresh" @click="fetchData" :loading="loading">刷新</el-button>
+      </div>
+      <el-row :gutter="16" class="analysis-metrics">
+        <el-col :span="6">
+          <div class="analysis-metric">
+            <span>交付核算收入</span>
+            <strong>{{ formatMoney(projectFinance.totals.revenue_amount) }}</strong>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="analysis-metric">
+            <span>成本合计</span>
+            <strong class="expense">{{ formatMoney(projectFinance.totals.total_cost) }}</strong>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="analysis-metric">
+            <span>毛利润</span>
+            <strong :class="projectFinance.totals.gross_profit >= 0 ? 'income' : 'expense'">{{ formatMoney(projectFinance.totals.gross_profit) }}</strong>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="analysis-metric">
+            <span>毛利率 / 尾款</span>
+            <strong>{{ formatRate(projectFinance.totals.profit_rate) }} · {{ formatMoney(projectFinance.totals.unpaid_amount) }}</strong>
+          </div>
+        </el-col>
+      </el-row>
+      <el-table :data="projectFinance.projects" stripe v-loading="loading" style="width: 100%">
+        <el-table-column prop="project_name" label="项目" min-width="170" />
+        <el-table-column prop="customer" label="客户" width="110" />
+        <el-table-column label="收入" width="120" align="right">
+          <template #default="{ row }">{{ formatMoney(row.revenue_amount) }}</template>
+        </el-table-column>
+        <el-table-column label="成本" width="120" align="right">
+          <template #default="{ row }">{{ formatMoney(row.total_cost) }}</template>
+        </el-table-column>
+        <el-table-column label="毛利" width="120" align="right">
+          <template #default="{ row }">
+            <span :class="row.gross_profit >= 0 ? 'income' : 'expense'">{{ formatMoney(row.gross_profit) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="毛利率" width="100" align="right">
+          <template #default="{ row }">{{ formatRate(row.profit_rate) }}</template>
+        </el-table-column>
+        <el-table-column label="尾款" width="120" align="right">
+          <template #default="{ row }">{{ formatMoney(row.unpaid_amount) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" min-width="180">
+          <template #default="{ row }">
+            <div class="tag-list">
+              <el-tag :type="row.payment_status === 'paid' ? 'success' : 'warning'" size="small">{{ paymentLabel(row.payment_status) }}</el-tag>
+              <el-tag v-for="warning in row.warnings" :key="warning" type="danger" size="small">{{ warning }}</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="router.push(`/main/projects/${row.project_id}`)">查看</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- 供货收款待办 -->
     <el-card class="page-card supply-todo-card">
       <div class="page-header">
@@ -213,6 +284,19 @@ const totals = ref({ total_assets: 0, total_income: 0, total_expense: 0, account
 const incomeCategories = ref([])
 const expenseCategories = ref([])
 const supplyTodos = ref([])
+const projectFinance = ref({
+  totals: {
+    project_count: 0,
+    revenue_amount: 0,
+    total_cost: 0,
+    gross_profit: 0,
+    unpaid_amount: 0,
+    profit_rate: 0,
+    pending_finance_count: 0,
+    negative_profit_count: 0
+  },
+  projects: []
+})
 const analysis = ref({
   this_month: { income: 0, expense: 0, net: 0, count: 0, income_change_percent: 0, expense_change_percent: 0 },
   last_month: { income: 0, expense: 0, net: 0, count: 0 },
@@ -236,19 +320,30 @@ function formatPercent(v) {
   return `${n > 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 
+function formatRate(v) {
+  const n = Number(v) || 0
+  return `${(n * 100).toFixed(1)}%`
+}
+
+function paymentLabel(status) {
+  return { paid: '已收齐', partial: '有尾款', pending: '待确认' }[status] || '待确认'
+}
+
 async function fetchData() {
   loading.value = true
   try {
-    const [overviewRes, catRes, analysisRes, supplyRes] = await Promise.all([
+    const [overviewRes, catRes, analysisRes, supplyRes, projectFinanceRes] = await Promise.all([
       fetch('/api/finance/overview', { headers: { Authorization: `Bearer ${token()}` } }),
       fetch('/api/finance/categories', { headers: { Authorization: `Bearer ${token()}` } }),
       fetch('/api/finance/analysis', { headers: { Authorization: `Bearer ${token()}` } }),
-      fetch('/api/supply-orders?status=ordered', { headers: { Authorization: `Bearer ${token()}` } })
+      fetch('/api/supply-orders?status=ordered', { headers: { Authorization: `Bearer ${token()}` } }),
+      fetch('/api/finance/project-profit-summary', { headers: { Authorization: `Bearer ${token()}` } })
     ])
     const overview = await overviewRes.json()
     const cats = await catRes.json()
     const nextAnalysis = await analysisRes.json()
     const supply = await supplyRes.json()
+    const nextProjectFinance = await projectFinanceRes.json()
 
     if (overview.success) {
       accounts.value = overview.data.accounts
@@ -260,6 +355,7 @@ async function fetchData() {
     }
     if (nextAnalysis.success) analysis.value = nextAnalysis.data
     if (supply.success) supplyTodos.value = supply.data || []
+    if (nextProjectFinance.success) projectFinance.value = nextProjectFinance.data
   } finally {
     loading.value = false
   }
@@ -331,7 +427,8 @@ onMounted(fetchData)
 .page-desc { margin: 4px 0 0; font-size: 13px; color: var(--text-tertiary); }
 
 .analysis-card { margin-bottom: 20px; }
-.supply-todo-card { margin-bottom: 20px; }
+.supply-todo-card,
+.project-profit-card { margin-bottom: 20px; }
 .header-actions {
   display: flex;
   flex-wrap: wrap;
@@ -386,6 +483,11 @@ onMounted(fetchData)
   color: var(--text-secondary);
   line-height: 1.8;
   font-size: 13px;
+}
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 @media (max-width: 900px) {

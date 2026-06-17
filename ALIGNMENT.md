@@ -173,6 +173,80 @@
 
 ## 对接记录
 
+### 2026-06-17 Codex：补充验证预算与多 Agent 分工规则
+
+- 任务：根据用户反馈，把“避免重复全量检查、减少额度浪费、明确 Codex/Claude/Hermes 分工”的规则写入协作文档。
+- 修改文件：
+  - `/Users/fuyulnk./Projects/AGENTS.md`：新增 Projects 级通用协作规则，包含长期目标、额度与多 Agent 分工、验证预算、Olleey 使用边界、简尚系统默认方向。
+  - `AGENTS.md`：更新简尚系统内协作规则，把 Codex 从默认“视觉与交互负责人”调整为“复杂工程判断负责人”；新增“验证预算与增量检查”规则。
+- 新规则重点：非 UI 专项不反复做截图级视觉精修；单点修复后按影响面增量验证；重复审计和兼容性检查优先交给 Claude/DeepSeek；Hermes 继续负责安全和质量稽核。
+- 验证：仅文档规则改动，已核对文件内容和 git 状态；未运行前端构建或后端语法检查。
+- 提交/部署状态：未提交，未上传服务器。
+
+### 2026-06-17 Codex：六步路线推进补写对接记录（账号/闭环/仓库/财务/资料链/AI）
+
+- 任务：按用户指定的 6 步总路线一次性推进：账号/权限压力测试、项目闭环真实岗位试跑、仓库线重做、财务线打通、总监表格字段映射、AI 口径和边界同步；完成后做联动缺口审视。
+- 提交/部署状态：未提交，未上传服务器，等待用户审查和明确交代提交人。
+
+**已完成范围：**
+- 账号/权限：用临时库验证工程、仓库、财务、待分配账号；多人并发接口检查未发现身份串号；pending 用户被限制在待分配/基础引导范围。
+- 项目闭环：用真实岗位账号从项目流转跑到归档，不再只靠超级管理员代跑；工费、成本、财务节点仍必须通过对应单据确认推进。
+- 仓库线：新增 `inventory_movements`、`material_losses`、产品 `is_test`；出库扣库存、回库加库存、差异写损耗；产品页新增测试材料筛选和库存流水抽屉。
+- 财务线：新增 `/api/finance/project-profit-summary`，财务总览新增项目利润粗算，展示交付收入、成本、毛利、毛利率、尾款和异常提醒；未做自动入账，避免隐藏写入财务流水。
+- 总监表格/资料链：8 类表补字段映射，区分“进系统结构化”和“先作为附件保留”；资料链节点返回缺失/已有/多版本、上传人和更新时间。
+- AI：库存工具补规格、展示名、测试材料和低库存状态；新增只读 `get_project_profit_summary`，默认给 super_admin/admin/finance；AI 口径继续区分门店交底和班组交底，并按项目权限过滤。
+
+**验证记录：**
+- `node --check`：`products.js`、`material-requests.js`、`finance.js`、`project-imports.js`、`ai.js`、`toolRegistry.js`、`index.js` 通过。
+- `npm run build`：`frontend-new` 构建通过，仅保留既有 Vite 大 chunk 警告。
+- 临时库接口验证：仓库出库/回库/损耗/库存流水通过；财务项目利润汇总通过；资料链字段映射和版本元数据通过。
+
+**遗留/待审：**
+- AI 新工具代码层和权限联动已检查，但最后一次临时服务重启因 Codex 额度限制未做运行时验证。
+- `ALIGNMENT.md` 之外的源码改动仍在本地工作树，需用户审查后再决定是否提交。
+
+### 2026-06-16 Codex：仓库出库联动 + 库存流水系统（Claude 初审 + Hermes 审计）
+
+- 任务：实现库存流水追踪、出库/回库库存联动、项目利润自动汇总。
+- 改动统计：14 文件，+1116/-44。
+
+**新增功能：**
+- `inventory_movements` 表 + `material_losses` 表 — 库存全流水追溯
+- 出库确认时自动扣库存 + 记流水
+- 回库确认时自动加库存 + 记流水 + 损耗记录
+- 新增/编辑产品时自动记初始入库/调整流水
+- `POST /api/products/:id/stock-adjustment` — 手动库存调整接口
+- `GET /api/products/:id/movements` — 单产品流水
+- `GET /api/inventory-movements` — 全局流水
+- `GET /api/finance/project-profit-summary` — 项目利润汇总（从单据链自动算）
+- 产品 `is_test` 标记（测试材料过滤）
+- AI 工具 `get_project_profit_summary`
+- 前端：利润总览面板、产品流水抽屉、测试材料筛选
+
+**Claude 初审发现：**
+- P2-1：`material-requests.js` 的 `recordInventoryMovement` 用 `roundMoney`（2位）记库存数量，与 `products.js` 的 `roundQty`（4位）不一致 → 已修复
+- P2-2：`applyMaterialReturnInventory` 回库后数量用 `roundMoney` 计算 → 已改 `roundQty`
+- P2-3：`normalizeReturnItems` 差值计算用 `roundMoney` → 已改 `roundQty`
+
+**Hermes 审计（P2 3 个，均未修复，记录备查）：**
+- P2-1：库存调整接口（stock-adjustment）无审批流程；有操作日志可追溯，当前不补审批
+- P2-2：利润汇总未限制项目数量；实际已限制 200 → 80，当前规模下无问题
+- P2-3：全局库存流水接口限 300 条无分页；后续项目数增加后加分页
+
+**验证：** `node --check` 通过，18 文件语法检查均通过。
+**部署状态：** 未提交，未上传服务器。
+
+### 2026-06-15 Claude：门店交底/班组交底口径修正提交 + 部署
+
+- 任务：将 Codex 门店交底/班组交底口径修正提交 Git 并部署服务器。
+- 提交：`75e8139` → `main`，已推 GitHub。
+- 构建：`npm run build` 通过（仅既有 Vite 大 chunk 警告）。
+- 备份：`/root/jianshang-system-backup-20260615-1745.tgz`。
+- 上传范围：`backend/src/` + `backend/public/`，未动 `data/`、`node_modules/`。
+- PM2 重启成功，`online`。
+- `/health` 正常，线上资源 `index-Obe7p7O_.js`/`index-3iTXtAFA.css` 与本地一致。
+- 本轮为纯提交部署，无新增代码逻辑。
+
 ### 2026-06-15 Claude：补修 ProjectDetail 遗留旧标签
 
 - 任务：Codex 省额度模式下漏了 `ProjectDetail.vue` 的阶段标签"复尺交底/出库"，改为"班组交底/出库"。

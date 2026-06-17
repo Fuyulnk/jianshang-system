@@ -945,9 +945,11 @@ function roundMoneyValue(value) {
         </div>
 
         <div class="chain-evidence">
+          <span v-if="node.document_version_count > 1">多版本：{{ node.document_version_count }} 版，最新 {{ node.document_versions?.[0]?.uploader_name || '未知人员' }} 更新</span>
+          <span v-else-if="node.document_version_count === 1">已有：{{ node.document_versions?.[0]?.source_file_name || '系统表格' }}</span>
           <span v-if="node.attachments?.length">附件：{{ node.attachments.map(file => file.original_name).slice(0, 2).join('、') }}</span>
           <span v-else-if="node.status === '按需'">当前项目未触发该节点。</span>
-          <span v-else>可先查看空表，系统会带入已有项目字段。</span>
+          <span v-else-if="!node.document_version_count">缺失：可先查看空表，系统会带入已有项目字段。</span>
         </div>
 
         <div class="node-actions">
@@ -985,6 +987,23 @@ function roundMoneyValue(value) {
           >
             {{ isPptFile(file) ? 'PPT' : isImageFile(file) ? '图片' : '文件' }} · {{ file.original_name }}
           </button>
+        </div>
+
+        <div class="mapping-panel">
+          <div>
+            <strong>进系统结构化</strong>
+            <span>{{ activeNode.field_mapping?.structured?.join('、') || '暂无映射' }}</span>
+          </div>
+          <div>
+            <strong>先作为附件保留</strong>
+            <span>{{ activeNode.field_mapping?.attachment_only?.join('、') || '暂无附件字段' }}</span>
+          </div>
+          <div v-if="activeNode.document_versions?.length" class="version-list">
+            <strong>版本记录</strong>
+            <span v-for="version in activeNode.document_versions" :key="version.id">
+              #{{ version.id }} · {{ version.source_file_name || '系统表格' }} · {{ version.uploader_name || '未知人员' }} · {{ version.updated_at || version.created_at }}
+            </span>
+          </div>
         </div>
 
         <div class="sheet-block">
@@ -1443,6 +1462,8 @@ function roundMoneyValue(value) {
 }
 
 .chain-evidence {
+  display: grid;
+  gap: 3px;
   min-height: 34px;
   color: var(--text-tertiary);
   font-size: 12px;
@@ -1595,6 +1616,37 @@ function roundMoneyValue(value) {
 .attachment-chip:hover {
   border-color: var(--color-primary);
   color: var(--color-primary);
+}
+
+.mapping-panel {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-primary) 5%, var(--bg-card));
+}
+
+.mapping-panel div {
+  display: grid;
+  gap: 4px;
+}
+
+.mapping-panel strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.mapping-panel span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.version-list {
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-light);
 }
 
 .survey-image-section {

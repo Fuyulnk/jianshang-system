@@ -65,7 +65,38 @@ db.exec(`CREATE TABLE IF NOT EXISTS products (
   price_unit TEXT DEFAULT '',
   stock REAL DEFAULT 0,
   min_stock REAL DEFAULT 0,
+  is_test INTEGER DEFAULT 0,
   updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+)`)
+
+db.exec(`CREATE TABLE IF NOT EXISTS inventory_movements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  project_id INTEGER DEFAULT 0,
+  material_request_id INTEGER DEFAULT 0,
+  movement_type TEXT NOT NULL,
+  quantity_delta REAL DEFAULT 0,
+  quantity_before REAL DEFAULT 0,
+  quantity_after REAL DEFAULT 0,
+  unit TEXT DEFAULT '',
+  reason TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  created_by INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+)`)
+
+db.exec(`CREATE TABLE IF NOT EXISTS material_losses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER DEFAULT 0,
+  material_request_id INTEGER DEFAULT 0,
+  product_id INTEGER DEFAULT 0,
+  product_name TEXT DEFAULT '',
+  quantity REAL DEFAULT 0,
+  unit TEXT DEFAULT '',
+  reason TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  created_by INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT (datetime('now', 'localtime'))
 )`)
 
 db.exec(`CREATE TABLE IF NOT EXISTS supply_orders (

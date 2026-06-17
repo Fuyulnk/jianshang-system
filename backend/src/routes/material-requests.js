@@ -77,7 +77,7 @@ export default function materialRequestRoutes(server, db) {
         ? db.prepare('SELECT id, name, category, unit, stock, unit_price FROM products WHERE id = ?').get(item.product_id)
         : null
       if (item.product_id && !product) return { success: false, message: `产品 ${item.product_id} 不存在` }
-      checkedItems.push({ ...item, product })
+      checkedItems.push(mergeProductDefaults(item, product))
     }
 
     const note = cleanText(request.body?.note)
@@ -158,7 +158,7 @@ export default function materialRequestRoutes(server, db) {
     if (!items.length) return { success: false, message: '出库申请没有材料明细' }
 
     const note = cleanText(request.body?.note)
-    const productStmt = db.prepare('SELECT id, name, stock FROM products WHERE id = ?')
+    const productStmt = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?')
     const deductStockStmt = db.prepare(`
       UPDATE products
       SET stock = stock - ?, updated_at = datetime('now', 'localtime')
@@ -175,6 +175,19 @@ export default function materialRequestRoutes(server, db) {
           const current = productStmt.get(item.product_id)
           throw new Error(`产品「${current?.name || item.product_name}」库存不足，当前 ${current?.stock ?? 0}，申请 ${quantity}`)
         }
+        recordInventoryMovement(db, {
+          product_id: item.product_id,
+          project_id: project.id,
+          material_request_id: requestId,
+          movement_type: 'out',
+          quantity_delta: -quantity,
+          quantity_before: product.stock,
+          quantity_after: Number(product.stock || 0) - quantity,
+          unit: product.unit || item.unit || '',
+          reason: '项目出库',
+          note: `${project.name || '项目'} 出库：${item.product_name}`,
+          created_by: request.user.userId
+        })
       }
       db.prepare(`
         UPDATE material_requests
@@ -231,9 +244,18 @@ export default function materialRequestRoutes(server, db) {
     const originalItems = db.prepare('SELECT * FROM material_request_items WHERE request_id = ? ORDER BY id ASC').all(latestRequest.id)
     const returnItems = normalizeReturnItems(request.body?.items, originalItems)
     if (!returnItems.length) return { success: false, message: '请至少保留一项回库明细' }
+    const invalid = returnItems.find(item => item.difference_quantity < 0)
+    if (invalid) return { success: false, message: `「${invalid.product_name}」实际用量和回库数量不能大于出库数量` }
     const note = cleanText(request.body?.note) || '材料回库已确认'
 
     const tx = db.transaction(() => {
+      applyMaterialReturnInventory(db, {
+        project,
+        requestRow: latestRequest,
+        items: returnItems,
+        note,
+        userId: request.user.userId
+      })
       updateMaterialReturnDocument(db, project, latestRequest, returnItems, note, request.user.userId)
       const statusResult = db.prepare(`
         UPDATE projects
@@ -311,7 +333,7 @@ function normalizeReturnItems(items, originalItems) {
       out_quantity: outQuantity,
       usage_quantity: usageQuantity,
       return_quantity: returnQuantity,
-      difference_quantity: roundMoney(outQuantity - usageQuantity - returnQuantity),
+      difference_quantity: roundQty(outQuantity - usageQuantity - returnQuantity),
       unit_price: toNumber(item.unit_price || sourceItem.unit_price),
       amount: roundMoney(usageQuantity * toNumber(item.unit_price || sourceItem.unit_price)),
       remark: cleanText(item.remark || sourceItem.remark || sourceItem.note)
@@ -379,7 +401,23 @@ function normalizeItems(items) {
       note: cleanText(item.note),
       remark: cleanText(item.remark || item.note)
     }
-  }).filter(item => item.product_name && item.out_quantity > 0)
+  }).filter(item => (item.product_name || item.product_id) && item.out_quantity > 0)
+}
+
+function mergeProductDefaults(item, product) {
+  if (!product) return item
+  const unitPrice = item.unit_price || toNumber(product.unit_price)
+  const usageQuantity = item.usage_quantity || item.out_quantity
+  return {
+    ...item,
+    product,
+    product_id: product.id,
+    product_name: item.product_name || product.name,
+    category: item.category || product.category || '',
+    unit: item.unit || product.unit || '',
+    unit_price: unitPrice,
+    amount: item.amount || roundMoney(usageQuantity * unitPrice)
+  }
 }
 
 function normalizeGroup(value) {
@@ -417,6 +455,11 @@ function sumByGroup(items, group) {
 function roundMoney(value) {
   const n = Number(value || 0)
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0
+}
+
+function roundQty(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) ? Math.round(n * 10000) / 10000 : 0
 }
 
 function upsertMaterialOutDocument(db, project, requestRow, items, userId) {
@@ -540,6 +583,81 @@ function updateMaterialReturnDocument(db, project, requestRow, items, note, user
   return result.lastInsertRowid
 }
 
+function applyMaterialReturnInventory(db, { project, requestRow, items, note, userId }) {
+  const productStmt = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?')
+  const addStockStmt = db.prepare(`
+    UPDATE products
+    SET stock = stock + ?, updated_at = datetime('now', 'localtime')
+    WHERE id = ?
+  `)
+  const updateItemStmt = db.prepare(`
+    UPDATE material_request_items
+    SET usage_quantity = ?, return_quantity = ?, amount = ?, remark = ?
+    WHERE id = ?
+  `)
+  const lossStmt = db.prepare(`
+    INSERT INTO material_losses (
+      project_id, material_request_id, product_id, product_name,
+      quantity, unit, reason, note, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  for (const item of items) {
+    if (item.id) {
+      updateItemStmt.run(item.usage_quantity, item.return_quantity, item.amount, item.remark || '', item.id)
+    }
+    if (item.product_id && item.return_quantity > 0) {
+      const product = productStmt.get(item.product_id)
+      if (!product) throw new Error(`产品「${item.product_name}」不存在，不能回库`)
+      const before = toNumber(product.stock)
+      const after = roundQty(before + item.return_quantity)
+      addStockStmt.run(item.return_quantity, item.product_id)
+      recordInventoryMovement(db, {
+        product_id: item.product_id,
+        project_id: project.id,
+        material_request_id: requestRow.id,
+        movement_type: 'return',
+        quantity_delta: item.return_quantity,
+        quantity_before: before,
+        quantity_after: after,
+        unit: product.unit || item.unit || '',
+        reason: '项目回库',
+        note: note || `${project.name || '项目'} 回库：${item.product_name}`,
+        created_by: userId
+      })
+    }
+    if (item.difference_quantity > 0) {
+      lossStmt.run(
+        project.id,
+        requestRow.id,
+        item.product_id || 0,
+        item.product_name || '',
+        item.difference_quantity,
+        item.unit || '',
+        '回库差异',
+        item.remark || note || '',
+        userId || 0
+      )
+      if (item.product_id) {
+        const product = productStmt.get(item.product_id)
+        recordInventoryMovement(db, {
+          product_id: item.product_id,
+          project_id: project.id,
+          material_request_id: requestRow.id,
+          movement_type: 'loss',
+          quantity_delta: 0,
+          quantity_before: product?.stock || 0,
+          quantity_after: product?.stock || 0,
+          unit: product?.unit || item.unit || '',
+          reason: '损耗记录',
+          note: `损耗 ${formatQty(item.difference_quantity)} ${item.unit || ''}：${item.product_name}`,
+          created_by: userId
+        })
+      }
+    }
+  }
+}
+
 function groupLabel(group) {
   return { material: '材料清单', auxiliary: '辅材损耗', tool: '工具', transport: '运输费' }[group] || '材料清单'
 }
@@ -561,4 +679,30 @@ function toNumber(value) {
 
 function cleanText(value) {
   return String(value || '').trim()
+}
+
+function recordInventoryMovement(db, movement) {
+  db.prepare(`
+    INSERT INTO inventory_movements (
+      product_id, project_id, material_request_id, movement_type,
+      quantity_delta, quantity_before, quantity_after, unit, reason, note, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    movement.product_id,
+    movement.project_id || 0,
+    movement.material_request_id || 0,
+    movement.movement_type,
+    roundQty(movement.quantity_delta),
+    roundQty(movement.quantity_before),
+    roundQty(movement.quantity_after),
+    movement.unit || '',
+    movement.reason || '',
+    movement.note || '',
+    movement.created_by || 0
+  )
+}
+
+function formatQty(value) {
+  const n = Number(value || 0)
+  return Number.isInteger(n) ? String(n) : n.toFixed(2)
 }

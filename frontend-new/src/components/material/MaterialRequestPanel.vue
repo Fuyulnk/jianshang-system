@@ -75,7 +75,8 @@ function emptyRow(group) {
 
 function productLabel(item) {
   const sku = item?.sku_label || `${productDisplayName(item)}｜${item.unit || '单位未填'}｜${formatQty(item.stock)}`
-  return `${sku}${item.category ? ` / ${item.category}` : ''}`
+  const testMark = item?.is_test ? ' / 测试材料' : ''
+  return `${sku}${item.category ? ` / ${item.category}` : ''}${testMark}`
 }
 
 function productDisplayName(item) {
@@ -419,7 +420,12 @@ onMounted(() => {
                 placeholder="选库存"
                 @change="applyProduct(row, $event)"
               >
-                <el-option v-for="product in products" :key="product.id" :label="productLabel(product)" :value="product.id" />
+                <el-option v-for="product in products" :key="product.id" :label="productLabel(product)" :value="product.id">
+                  <div class="product-option">
+                    <span>{{ productLabel(product) }}</span>
+                    <el-tag v-if="product.is_test" size="small" type="info">测试</el-tag>
+                  </div>
+                </el-option>
               </el-select>
               <el-input v-model="row.product_name" placeholder="也可手填材料名" @blur="applyManualName(row)" />
             </div>
@@ -595,6 +601,12 @@ onMounted(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+}
+.product-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .summary-grid {
   display: grid;

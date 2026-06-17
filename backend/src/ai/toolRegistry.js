@@ -36,7 +36,7 @@ export const AI_TOOL_REGISTRY = [
   {
     name: 'get_products',
     label: '查看库存产品',
-    desc: '查询产品名称、分类、单位、库存和最低库存',
+    desc: '查询产品名称、规格、分类、单位、库存、测试材料标记和低库存状态',
     tier: 'L1',
     risk_level: 'low',
     action_type: 'tool_read',
@@ -63,6 +63,21 @@ export const AI_TOOL_REGISTRY = [
       properties: {
         phase: { type: 'number', description: '阶段编号 1=门店交底/勘察 2=复尺出库 3=施工验收 4=回库核算 5=财务归档 6=售后处理' },
         status: { type: 'string', description: '工单状态，如 handover_received、survey_pending、cost_checked、archived' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'get_project_profit_summary',
+    label: '查看项目利润粗算',
+    desc: '查询财务可见的项目收入、成本、毛利、尾款和异常提醒',
+    tier: 'L1',
+    risk_level: 'medium',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: '返回项目数量，默认20，最多50' }
       },
       required: []
     }
@@ -186,7 +201,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance', 'warehouse', 'engineering', 'employee'],
-    tools: ['get_projects', 'get_products', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'],
+    tools: ['get_projects', 'get_products', 'get_system_stats', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
     base_prompt: '你是简尚总助手。优先查询系统事实，再用简洁中文解释流程和下一步。写入动作必须先让用户确认。'
   },
   {
@@ -197,7 +212,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance'],
-    tools: ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats', 'parse_finance_transaction', 'create_transaction'],
+    tools: ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction'],
     base_prompt: '你是简尚财务助手。财务消息先解析成草稿，用户明确确认后才能写入流水。不要猜账户余额和金额，必须查系统数据。'
   },
   {
@@ -219,7 +234,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance', 'warehouse', 'engineering', 'employee'],
-    tools: ['get_projects', 'get_products', 'parse_project_handover', 'create_project_workorder'],
+    tools: ['get_projects', 'get_products', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
     base_prompt: '你是简尚项目助手。重点回答项目在哪一步、缺什么、下一步谁处理。AI 只能检查和生成草稿，不能绕过人工确认。'
   }
 ]

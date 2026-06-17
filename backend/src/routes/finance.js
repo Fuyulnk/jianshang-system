@@ -244,4 +244,145 @@ export default function financeRoutes(server, db) {
       }
     }
   })
+
+  server.get('/api/finance/project-profit-summary', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+
+    const projects = db.prepare(`
+      SELECT id, name, customer, status, total_amount, deposit_amount, settlement_amount, updated_at
+      FROM projects
+      WHERE status IN ('material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived')
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 200
+    `).all()
+    const docs = getLatestFinanceDocs(db, projects.map(item => item.id))
+    const rows = projects.map(project => buildProjectProfitRow(project, docs[project.id] || {}))
+    const activeRows = rows.filter(row => row.revenue_amount || row.total_cost || row.gross_profit || row.unpaid_amount)
+    const totals = activeRows.reduce((sum, row) => {
+      sum.revenue_amount += row.revenue_amount
+      sum.total_cost += row.total_cost
+      sum.gross_profit += row.gross_profit
+      sum.unpaid_amount += row.unpaid_amount
+      if (row.payment_status !== 'paid') sum.pending_finance_count += 1
+      if (row.gross_profit < 0) sum.negative_profit_count += 1
+      return sum
+    }, {
+      project_count: activeRows.length,
+      revenue_amount: 0,
+      total_cost: 0,
+      gross_profit: 0,
+      unpaid_amount: 0,
+      pending_finance_count: 0,
+      negative_profit_count: 0
+    })
+    totals.revenue_amount = roundMoney(totals.revenue_amount)
+    totals.total_cost = roundMoney(totals.total_cost)
+    totals.gross_profit = roundMoney(totals.gross_profit)
+    totals.unpaid_amount = roundMoney(totals.unpaid_amount)
+    totals.profit_rate = totals.revenue_amount ? Number((totals.gross_profit / totals.revenue_amount).toFixed(4)) : 0
+
+    return {
+      success: true,
+      data: {
+        totals,
+        projects: rows.slice(0, 80)
+      }
+    }
+  })
+}
+
+function getLatestFinanceDocs(db, projectIds) {
+  if (!projectIds.length) return {}
+  const placeholders = projectIds.map(() => '?').join(',')
+  const rows = db.prepare(`
+    SELECT *
+    FROM project_documents
+    WHERE project_id IN (${placeholders})
+      AND document_type IN ('material_io', 'labor_settlement', 'cost_check', 'finance_settlement')
+    ORDER BY project_id ASC, document_type ASC, id DESC
+  `).all(...projectIds)
+  const map = {}
+  for (const row of rows) {
+    if (!map[row.project_id]) map[row.project_id] = {}
+    if (!map[row.project_id][row.document_type]) {
+      map[row.project_id][row.document_type] = {
+        ...row,
+        confirmed_data: parseJson(row.confirmed_data, {})
+      }
+    }
+  }
+  return map
+}
+
+function buildProjectProfitRow(project, docs) {
+  const material = docs.material_io?.confirmed_data?.summary || {}
+  const labor = docs.labor_settlement?.confirmed_data?.summary || {}
+  const cost = docs.cost_check?.confirmed_data?.summary || {}
+  const finance = docs.finance_settlement?.confirmed_data?.summary || {}
+
+  const revenueAmount = firstMoney(
+    finance.delivery_revenue,
+    cost.revenue_amount,
+    project.settlement_amount,
+    finance.contract_amount,
+    project.total_amount
+  )
+  const laborFee = firstMoney(labor.labor_fee, cost.labor_fee)
+  const materialFee = firstMoney(material.material_fee, cost.material_fee)
+  const auxiliaryFee = firstMoney(material.auxiliary_fee, cost.auxiliary_fee)
+  const toolFee = firstMoney(material.tool_fee, cost.tool_fee)
+  const transportFee = firstMoney(material.transport_fee, cost.transport_fee)
+  const otherFee = firstMoney(cost.other_fee)
+  const autoTotalCost = roundMoney(laborFee + materialFee + auxiliaryFee + toolFee + transportFee + otherFee)
+  const totalCost = firstMoney(cost.total_cost, autoTotalCost)
+  const grossProfit = roundMoney(revenueAmount - totalCost)
+  const profitRate = revenueAmount ? Number((grossProfit / revenueAmount).toFixed(4)) : 0
+  const receivedAmount = firstMoney(finance.received_amount, project.deposit_amount)
+  const unpaidAmount = firstMoney(finance.unpaid_amount, Math.max(revenueAmount - receivedAmount, 0))
+  const warnings = []
+  if (cost.total_cost && autoTotalCost && Math.abs(Number(cost.total_cost) - autoTotalCost) > 0.01) {
+    warnings.push('成本表合计与自动汇总不一致')
+  }
+  if (revenueAmount && !docs.finance_settlement) warnings.push('缺财务结算/归档凭证')
+  if (grossProfit < 0) warnings.push('毛利为负')
+  if (unpaidAmount > 0) warnings.push('存在尾款/未收')
+
+  return {
+    project_id: project.id,
+    project_name: project.name,
+    customer: project.customer,
+    status: project.status,
+    revenue_amount: roundMoney(revenueAmount),
+    labor_fee: roundMoney(laborFee),
+    material_fee: roundMoney(materialFee),
+    auxiliary_fee: roundMoney(auxiliaryFee),
+    tool_fee: roundMoney(toolFee),
+    transport_fee: roundMoney(transportFee),
+    total_cost: roundMoney(totalCost),
+    gross_profit: roundMoney(grossProfit),
+    profit_rate: profitRate,
+    received_amount: roundMoney(receivedAmount),
+    unpaid_amount: roundMoney(unpaidAmount),
+    payment_status: finance.payment_status || (unpaidAmount > 0 ? 'partial' : revenueAmount ? 'paid' : 'pending'),
+    finance_note: finance.finance_note || '',
+    warnings,
+    updated_at: project.updated_at
+  }
+}
+
+function firstMoney(...values) {
+  for (const value of values) {
+    const n = Number(value)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return 0
+}
+
+function parseJson(value, fallback) {
+  try {
+    return value ? JSON.parse(value) : fallback
+  } catch {
+    return fallback
+  }
 }

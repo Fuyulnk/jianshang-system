@@ -1027,17 +1027,60 @@ const DELIVERY_NODE_RULES = [
   }
 ]
 
+const DELIVERY_FIELD_MAPPINGS = {
+  survey_initial: {
+    structured: ['客户', '电话', '地址', '勘察日期', '勘察结论', '是否需要复尺', '现场问题清单'],
+    attachment_only: ['现场图片原图', '工勘 PPT 版式', '图片备注细节']
+  },
+  survey_recheck: {
+    structured: ['复尺日期', '复尺结论', '整改/复核结果', '是否可进场'],
+    attachment_only: ['复尺图片', '二次勘察 PPT', '现场补充说明']
+  },
+  briefing: {
+    structured: ['客户', '电话', '地址', '施工空间', '工艺/材料', '施工面积', '班组长', '交底日期', '合同报价'],
+    attachment_only: ['原始交底表格式', '门店备注长文本', '签字/图片页']
+  },
+  material_io: {
+    structured: ['材料名', '规格', '单位', '出库数量', '实际用量', '回库数量', '差异', '单价', '金额'],
+    attachment_only: ['原始出库/回库表', '仓库备注', '签字或拍照凭证']
+  },
+  completion_inspection: {
+    structured: ['验收日期', '质检结论', '整改项', '是否通过', '是否触发售后'],
+    attachment_only: ['完工图片', '验收 PPT', '客户签字页']
+  },
+  labor_settlement: {
+    structured: ['开工时间', '完工时间', '班组长', '工期', '施工面积', '人工费合计', '点工/包工说明'],
+    attachment_only: ['班组签字', '原始工费表版式', '补充结算依据']
+  },
+  cost_check: {
+    structured: ['交付核算收入', '人工费', '材料费', '辅材费', '工具费', '运输费', '成本合计', '毛利润', '利润率'],
+    attachment_only: ['成本表原件', '计算过程补充页', '异常说明附件']
+  },
+  finance_settlement: {
+    structured: ['合同报价', '交付核算收入', '已收款', '未收/尾款', '收款状态', '归档状态', '财务备注'],
+    attachment_only: ['收款凭证', '发票/对账附件', '归档凭证原件']
+  }
+}
+
 function buildDeliveryChain(db, project) {
   const docs = db.prepare(`
-    SELECT d.*, a.original_name as source_file_name
+    SELECT d.*, a.original_name as source_file_name,
+           cu.username as created_by_username, cu.real_name as created_by_real_name,
+           uu.username as updated_by_username, uu.real_name as updated_by_real_name
     FROM project_documents d
     LEFT JOIN attachments a ON a.id = d.source_attachment_id
+    LEFT JOIN users cu ON cu.id = d.created_by
+    LEFT JOIN users uu ON uu.id = d.updated_by
     WHERE d.project_id = ?
     ORDER BY d.id DESC
   `).all(project.id)
   const latestDocs = {}
+  const docVersions = {}
   for (const row of docs) {
-    if (!latestDocs[row.document_type]) latestDocs[row.document_type] = formatProjectDocument(row)
+    const formatted = formatProjectDocument(row)
+    if (!docVersions[row.document_type]) docVersions[row.document_type] = []
+    docVersions[row.document_type].push(formatted)
+    if (!latestDocs[row.document_type]) latestDocs[row.document_type] = formatted
   }
   const attachments = db.prepare(`
     SELECT id, original_name, mime_type, size, created_at
@@ -1050,7 +1093,7 @@ function buildDeliveryChain(db, project) {
   const needRecheck = !!latestDocs.survey_recheck
     || latestDocs.survey_initial?.confirmed_data?.survey?.need_recheck
     || /需要二次|需二次|需要复勘|需复勘|复勘待确认|整改待复核|问题待复核/.test(conditionNote)
-  const nodes = DELIVERY_NODE_RULES.map(rule => buildDeliveryNode(rule, project, latestDocs[rule.key], attachments, finance, needRecheck))
+  const nodes = DELIVERY_NODE_RULES.map(rule => buildDeliveryNode(rule, project, latestDocs[rule.key], attachments, finance, needRecheck, docVersions[rule.key] || []))
   const requiredNodes = nodes.filter(node => !node.optional || node.required_now)
   return {
     project_id: project.id,
@@ -1067,7 +1110,7 @@ function buildDeliveryChain(db, project) {
   }
 }
 
-function buildDeliveryNode(rule, project, doc, attachments, finance, needRecheck) {
+function buildDeliveryNode(rule, project, doc, attachments, finance, needRecheck, versions = []) {
   const linkedIds = documentAttachmentIds(doc)
   const seen = new Set()
   const files = attachments.filter(file => {
@@ -1096,6 +1139,16 @@ function buildDeliveryNode(rule, project, doc, attachments, finance, needRecheck
     attachment_count: files.length,
     attachments: files.slice(0, 8),
     document: doc || null,
+    document_version_count: versions.length,
+    document_versions: versions.slice(0, 6).map(version => ({
+      id: version.id,
+      status: version.status,
+      source_file_name: version.source_file_name || '',
+      uploader_name: version.updated_by_name || version.created_by_name || '',
+      updated_at: version.updated_at,
+      created_at: version.created_at
+    })),
+    field_mapping: DELIVERY_FIELD_MAPPINGS[rule.key] || { structured: [], attachment_only: [] },
     table_data: confirmedData,
     summary: summarizeDeliveryNode(rule.key, confirmedData, finance),
     differences: differenceCount
@@ -1387,7 +1440,7 @@ function normalizeBriefingForm(input = {}) {
 
 function upsertProjectDocument(db, { projectId, documentType, sourceAttachmentId, parsedData, confirmedData, warnings, userId }) {
   const existing = db.prepare(`
-    SELECT id FROM project_documents
+    SELECT id, source_attachment_id FROM project_documents
     WHERE project_id = ? AND document_type = ?
     ORDER BY id DESC
     LIMIT 1
@@ -1395,7 +1448,10 @@ function upsertProjectDocument(db, { projectId, documentType, sourceAttachmentId
   const parsed = JSON.stringify(parsedData || {})
   const confirmed = JSON.stringify(confirmedData || {})
   const warningText = JSON.stringify(Array.isArray(warnings) ? warnings : [])
-  if (existing) {
+  const hasNewSourceVersion = existing
+    && sourceAttachmentId
+    && Number(sourceAttachmentId) !== Number(existing.source_attachment_id || 0)
+  if (existing && !hasNewSourceVersion) {
     db.prepare(`
       UPDATE project_documents
       SET source_attachment_id = COALESCE(NULLIF(?, 0), source_attachment_id),
@@ -1445,7 +1501,10 @@ function formatProjectDocument(row) {
     ...row,
     parsed_data: parseJson(row.parsed_data, {}),
     confirmed_data: parseJson(row.confirmed_data, {}),
-    warnings: parseJson(row.warnings, [])
+    warnings: parseJson(row.warnings, []),
+    created_by_name: row.created_by_real_name || row.created_by_username || '',
+    updated_by_name: row.updated_by_real_name || row.updated_by_username || '',
+    source_file_name: row.source_file_name || ''
   }
 }
 

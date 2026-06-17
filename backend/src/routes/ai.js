@@ -144,7 +144,14 @@ function executeTool(name, args, db, user) {
     }
 
     case 'get_products': {
-      const data = db.prepare('SELECT id, name, category, unit, stock, min_stock FROM products ORDER BY id').all()
+      const data = db.prepare('SELECT id, name, category, spec, unit, unit_price, price_unit, stock, min_stock, is_test FROM products ORDER BY name ASC, spec ASC, id ASC').all()
+        .map(product => ({
+          ...product,
+          display_name: productDisplayName(product),
+          sku_label: productSkuLabel(product),
+          stock_status: Number(product.stock || 0) <= Number(product.min_stock || 0) ? 'low' : 'normal',
+          is_test: product.is_test ? 1 : 0
+        }))
       return JSON.stringify({ success: true, data })
     }
 
@@ -194,6 +201,15 @@ function executeTool(name, args, db, user) {
           next_step: projectNextStep(canonicalProjectStatus(p.status))
         }))
       return JSON.stringify({ success: true, count: data.length, data })
+    }
+
+    case 'get_project_profit_summary': {
+      if (!canAccessModule(db, user, 'finance', 'can_view')) {
+        return JSON.stringify({ success: false, message: '没有查看项目利润粗算的权限' })
+      }
+      const limit = Math.min(Math.max(Number(args.limit || 20), 1), 50)
+      const data = buildAiProjectProfitSummary(db, limit)
+      return JSON.stringify({ success: true, ...data })
     }
 
     case 'get_system_stats': {
@@ -342,6 +358,117 @@ function parseFinanceTransactionDraft(rawText, db) {
       ...(!account ? ['未匹配到账户，请人工选择'] : [])
     ]
   }
+}
+
+function productDisplayName(item) {
+  const name = String(item?.name || '').trim()
+  const spec = String(item?.spec || '').trim()
+  if (!spec || name.includes(spec)) return name
+  return `${name}${spec}`
+}
+
+function productSkuLabel(item) {
+  const unit = String(item?.unit || '').trim()
+  const stock = formatQty(item?.stock || 0)
+  return `${productDisplayName(item)}${unit ? `｜${unit}` : ''}｜${stock}`
+}
+
+function formatQty(value) {
+  const n = Number(value || 0)
+  return Number.isInteger(n) ? String(n) : n.toFixed(2)
+}
+
+function buildAiProjectProfitSummary(db, limit) {
+  const projects = db.prepare(`
+    SELECT id, name, customer, status, total_amount, deposit_amount, settlement_amount, updated_at
+    FROM projects
+    WHERE status IN ('material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived')
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(limit)
+  const docs = getLatestProjectFinanceDocs(db, projects.map(item => item.id))
+  const rows = projects.map(project => projectProfitRow(project, docs[project.id] || {}))
+  const totals = rows.reduce((sum, row) => {
+    sum.revenue_amount += row.revenue_amount
+    sum.total_cost += row.total_cost
+    sum.gross_profit += row.gross_profit
+    sum.unpaid_amount += row.unpaid_amount
+    if (row.warnings.length) sum.warning_count += 1
+    return sum
+  }, { project_count: rows.length, revenue_amount: 0, total_cost: 0, gross_profit: 0, unpaid_amount: 0, warning_count: 0 })
+  totals.revenue_amount = roundMoney(totals.revenue_amount)
+  totals.total_cost = roundMoney(totals.total_cost)
+  totals.gross_profit = roundMoney(totals.gross_profit)
+  totals.unpaid_amount = roundMoney(totals.unpaid_amount)
+  totals.profit_rate = totals.revenue_amount ? Number((totals.gross_profit / totals.revenue_amount).toFixed(4)) : 0
+  return { totals, data: rows }
+}
+
+function getLatestProjectFinanceDocs(db, projectIds) {
+  if (!projectIds.length) return {}
+  const rows = db.prepare(`
+    SELECT *
+    FROM project_documents
+    WHERE project_id IN (${projectIds.map(() => '?').join(',')})
+      AND document_type IN ('material_io', 'labor_settlement', 'cost_check', 'finance_settlement')
+    ORDER BY project_id ASC, document_type ASC, id DESC
+  `).all(...projectIds)
+  const map = {}
+  for (const row of rows) {
+    if (!map[row.project_id]) map[row.project_id] = {}
+    if (!map[row.project_id][row.document_type]) {
+      map[row.project_id][row.document_type] = parseJsonSafe(row.confirmed_data, {})
+    }
+  }
+  return map
+}
+
+function projectProfitRow(project, docs) {
+  const material = docs.material_io?.summary || {}
+  const labor = docs.labor_settlement?.summary || {}
+  const cost = docs.cost_check?.summary || {}
+  const finance = docs.finance_settlement?.summary || {}
+  const revenue = firstMoney(finance.delivery_revenue, cost.revenue_amount, project.settlement_amount, finance.contract_amount, project.total_amount)
+  const laborFee = firstMoney(labor.labor_fee, cost.labor_fee)
+  const materialFee = firstMoney(material.material_fee, cost.material_fee)
+  const auxiliaryFee = firstMoney(material.auxiliary_fee, cost.auxiliary_fee)
+  const toolFee = firstMoney(material.tool_fee, cost.tool_fee)
+  const transportFee = firstMoney(material.transport_fee, cost.transport_fee)
+  const autoCost = roundMoney(laborFee + materialFee + auxiliaryFee + toolFee + transportFee + firstMoney(cost.other_fee))
+  const totalCost = firstMoney(cost.total_cost, autoCost)
+  const grossProfit = roundMoney(revenue - totalCost)
+  const unpaidAmount = firstMoney(finance.unpaid_amount, Math.max(revenue - firstMoney(finance.received_amount, project.deposit_amount), 0))
+  const warnings = []
+  if (grossProfit < 0) warnings.push('毛利为负')
+  if (unpaidAmount > 0) warnings.push('存在尾款/未收')
+  if (revenue && !docs.finance_settlement) warnings.push('缺财务结算/归档凭证')
+  return {
+    project_id: project.id,
+    project_name: project.name,
+    customer: project.customer,
+    status: canonicalProjectStatus(project.status),
+    status_label: projectStatusMeta(project.status).label,
+    revenue_amount: roundMoney(revenue),
+    total_cost: roundMoney(totalCost),
+    gross_profit: roundMoney(grossProfit),
+    profit_rate: revenue ? Number((grossProfit / revenue).toFixed(4)) : 0,
+    unpaid_amount: roundMoney(unpaidAmount),
+    payment_status: finance.payment_status || (unpaidAmount > 0 ? 'partial' : revenue ? 'paid' : 'pending'),
+    warnings
+  }
+}
+
+function firstMoney(...values) {
+  for (const value of values) {
+    const n = Number(value)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return 0
+}
+
+function roundMoney(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0
 }
 
 function loadFinanceAccountAliases(db) {

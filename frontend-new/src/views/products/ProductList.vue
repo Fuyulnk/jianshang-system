@@ -6,13 +6,21 @@
           <h2>产品库存</h2>
           <p class="page-desc">按“产品｜规格/包装｜库存单位｜当前库存”管理仓库物料</p>
         </div>
-        <el-button type="primary" @click="showAdd = true">+ 新增产品</el-button>
+        <div class="header-actions">
+          <el-checkbox v-model="showTestMaterials">显示测试材料</el-checkbox>
+          <el-button type="primary" @click="showAdd = true">+ 新增产品</el-button>
+        </div>
       </div>
 
-      <el-table :data="list" stripe v-loading="loading" style="width: 100%">
+      <el-table :data="filteredList" stripe v-loading="loading" style="width: 100%">
         <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column label="产品名称" min-width="160">
-          <template #default="{ row }">{{ productDisplayName(row) }}</template>
+        <el-table-column label="产品名称" min-width="180">
+          <template #default="{ row }">
+            <div class="product-name-cell">
+              <span>{{ productDisplayName(row) }}</span>
+              <el-tag v-if="row.is_test" size="small" type="info">测试材料</el-tag>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column prop="category" label="分类" width="120" />
         <el-table-column prop="spec" label="规格/包装" width="120" />
@@ -33,8 +41,9 @@
             <el-tag v-else type="success" size="small">正常</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120">
+        <el-table-column label="操作" width="150">
           <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="openMovements(row)">流水</el-button>
             <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -116,12 +125,38 @@
         <el-form-item label="最低库存">
           <el-input-number v-model="addForm.min_stock" :min="0" style="width: 100%" />
         </el-form-item>
+        <el-form-item label="测试材料">
+          <el-checkbox v-model="addForm.is_test">仅用于试录、培训或演示</el-checkbox>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAdd = false">取消</el-button>
         <el-button type="primary" @click="handleAdd" :loading="saving">确定</el-button>
       </template>
     </el-dialog>
+
+    <el-drawer
+      v-model="movementDrawer"
+      :title="movementTitle"
+      size="520px"
+      destroy-on-close
+    >
+      <div v-loading="movementLoading" class="movement-list">
+        <article v-for="item in movements" :key="item.id" class="movement-card">
+          <div class="movement-main">
+            <strong>{{ item.movement_label }}</strong>
+            <el-tag :type="Number(item.quantity_delta) < 0 ? 'danger' : Number(item.quantity_delta) > 0 ? 'success' : 'info'" size="small">
+              {{ formatSignedQty(item.quantity_delta) }} {{ item.unit || selectedProduct?.unit || '' }}
+            </el-tag>
+          </div>
+          <p>{{ item.reason || '库存记录' }}<span v-if="item.project_name"> · {{ item.project_name }}</span></p>
+          <p class="movement-stock">库存：{{ formatQty(item.quantity_before) }} → {{ formatQty(item.quantity_after) }}</p>
+          <p v-if="item.note" class="movement-note">{{ item.note }}</p>
+          <time>{{ item.created_at }}<span v-if="item.operator_name"> · {{ item.operator_name }}</span></time>
+        </article>
+        <el-empty v-if="!movementLoading && !movements.length" description="暂无库存流水" :image-size="80" />
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -135,6 +170,11 @@ const list = ref([])
 const loading = ref(false)
 const showAdd = ref(false)
 const saving = ref(false)
+const showTestMaterials = ref(true)
+const movementDrawer = ref(false)
+const movementLoading = ref(false)
+const selectedProduct = ref(null)
+const movements = ref([])
 const addForm = ref(defaultProductForm())
 const presetCategories = ['诺瓦艺术漆', '本杰明艺术漆', '艺术漆辅料', '基层材料', '工具耗材', '施工工具', '劳保用品', '设备配件', '其他']
 const presetUnits = ['kg', 'g', 'ml', 'L', '桶', '罐', '支', '把', '套', '份', '个', '颗', '箱', '卷', '米', '平方']
@@ -146,6 +186,8 @@ const userRole = computed(() => {
   } catch { return '' }
 })
 const canHandleMaterialRequests = computed(() => ['super_admin', 'admin', 'warehouse'].includes(userRole.value))
+const filteredList = computed(() => showTestMaterials.value ? list.value : list.value.filter(item => !item.is_test))
+const movementTitle = computed(() => selectedProduct.value ? `${productDisplayName(selectedProduct.value)}｜库存流水` : '库存流水')
 
 const productMemory = computed(() => {
   return list.value
@@ -192,12 +234,18 @@ function productSearchText(item) {
 }
 
 function defaultProductForm() {
-  return { name: '', category: '', spec: '', unit: '桶', unit_price: 0, price_unit: '桶', stock: 0, min_stock: 0 }
+  return { name: '', category: '', spec: '', unit: '桶', unit_price: 0, price_unit: '桶', stock: 0, min_stock: 0, is_test: false }
 }
 
 function formatQty(value) {
   const n = Number(value || 0)
   return Number.isInteger(n) ? String(n) : n.toFixed(2)
+}
+
+function formatSignedQty(value) {
+  const n = Number(value || 0)
+  if (n === 0) return '0'
+  return `${n > 0 ? '+' : ''}${formatQty(n)}`
 }
 
 async function fetchList() {
@@ -233,6 +281,25 @@ async function handleAdd() {
     }
   } finally {
     saving.value = false
+  }
+}
+
+async function openMovements(row) {
+  selectedProduct.value = row
+  movementDrawer.value = true
+  movementLoading.value = true
+  movements.value = []
+  try {
+    const res = await fetch(`/api/products/${row.id}/movements`, {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json()
+    if (json.success) movements.value = json.data || []
+    else ElMessage.error(json.message || '库存流水加载失败')
+  } catch {
+    ElMessage.error('库存流水加载失败')
+  } finally {
+    movementLoading.value = false
   }
 }
 
@@ -284,6 +351,55 @@ onMounted(fetchList)
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.header-actions,
+.product-name-cell,
+.movement-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-actions {
+  justify-content: flex-end;
+}
+
+.product-name-cell {
+  flex-wrap: wrap;
+}
+
+.movement-list {
+  display: grid;
+  gap: 10px;
+}
+
+.movement-card {
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.movement-main {
+  justify-content: space-between;
+}
+
+.movement-card p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.movement-card time {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.movement-stock {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .product-suggestion strong {
