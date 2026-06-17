@@ -81,6 +81,7 @@ try { db.prepare("UPDATE users SET role = 'super_admin' WHERE username = 'fuyuln
 try { db.exec('ALTER TABLE employees ADD COLUMN employee_code TEXT') } catch {}
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_employee_id_unique ON users(employee_id) WHERE employee_id > 0') } catch {}
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_code_unique ON employees(employee_code) WHERE employee_code IS NOT NULL AND employee_code != ''") } catch {}
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_participant ON conversation_participants(conversation_id, user_id)') } catch {}
 try {
   const employeesWithoutCode = db.prepare(`
     SELECT id FROM employees

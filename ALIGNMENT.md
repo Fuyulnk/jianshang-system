@@ -173,6 +173,27 @@
 
 ## 对接记录
 
+### 2026-06-17 Claude：修复聊天群人数虚高（重复插入 + 查询口径）
+
+- 问题：财务群显示 81 人，实际只有 2 人。
+- 根因：`conversation_participants` 表无唯一约束，`INSERT OR IGNORE` 不生效。每次 PM2 重启跑 `ensureDefaultGroups()` 重复插入所有人。前端 `COUNT(*)` 统计了重复行。
+- 修复：
+  - 线上库清理重复数据（`DELETE` 保留每组最早 rowid）
+  - 新增唯一索引 `idx_conv_participant(conversation_id, user_id)` → 已加入 `index.js` 迁移
+  - `member_count` 查询改 `COUNT(DISTINCT user_id)` → `chat.js`
+- 影响：仅聊天群人数显示修正，不影响消息收发。
+- 验证：`node --check` 通过，服务器已 `pm2 restart`，`/health` 正常。
+
+### 2026-06-17 Claude：仓库出库联动 + 流水系统 提交部署
+
+- 任务：将 Codex 六步路线推进 + Claude 精度修复合并提交并部署上线。
+- 提交：`c1e6d18` → `main`，已推 GitHub。
+- 构建：`npm run build` 通过（仅既有 Vite 大 chunk 警告）。
+- 备份：`/root/jianshang-system-backup-20260617-0946.tgz`。
+- 上传范围：`backend/src/` + `backend/public/`，未动 `data/`、`node_modules/`。
+- PM2 重启成功，`online`。
+- `/health` 正常，线上资源 `index-CJ_xzhP9.js`/`index-DirdNWef.css` 与本地一致。
+
 ### 2026-06-17 Codex：补充验证预算与多 Agent 分工规则
 
 - 任务：根据用户反馈，把“避免重复全量检查、减少额度浪费、明确 Codex/Claude/Hermes 分工”的规则写入协作文档。

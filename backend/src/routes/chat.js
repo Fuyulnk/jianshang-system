@@ -30,7 +30,7 @@ export default function chatRoutes(server, db, realtime = {}) {
       SELECT c.*,
         (SELECT CASE WHEN message_type = 'file' THEN '[文件] ' || content ELSE content END FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_message,
         (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_time,
-        (SELECT COUNT(*) FROM conversation_participants WHERE conversation_id = c.id) as member_count
+        (SELECT COUNT(DISTINCT user_id) FROM conversation_participants WHERE conversation_id = c.id) as member_count
       FROM conversations c
       WHERE c.id IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ?)
       ORDER BY last_time DESC
