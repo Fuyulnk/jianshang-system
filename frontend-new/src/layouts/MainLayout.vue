@@ -45,6 +45,10 @@
             <el-icon><TrendCharts /></el-icon>
             <span>财务总览</span>
           </el-menu-item>
+          <el-menu-item index="/main/finance/ledger" v-if="hasFinanceAccess">
+            <el-icon><Document /></el-icon>
+            <span>入账登记表</span>
+          </el-menu-item>
           <el-menu-item index="/main/products" v-if="hasPerm('products')">
             <el-icon><Goods /></el-icon>
             <span>产品库存</span>
@@ -303,7 +307,10 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.main-layout { height: 100vh; }
+.main-layout {
+  min-height: 100dvh;
+  height: 100dvh;
+}
 
 .assignment-alert {
   margin-bottom: 14px;
@@ -519,7 +526,7 @@ onUnmounted(() => {
 
 .content {
   background: var(--bg-page);
-  min-height: calc(100vh - var(--header-height));
+  min-height: calc(100dvh - var(--header-height));
   padding: 24px;
   transition: padding 0.25s ease;
   overflow-y: auto;

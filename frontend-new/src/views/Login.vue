@@ -349,85 +349,86 @@ function backToLogin() {
 <template>
   <main class="login-shell">
     <div class="paint-texture"></div>
-    <div class="workspace-ghost" aria-hidden="true" inert>
-      <div class="ghost-sidebar">
-        <div class="ghost-logo-line">
-          <img src="/jianshang-logo.jpeg" alt="" />
-          <strong>简尚系统</strong>
-        </div>
-        <div class="ghost-nav-list">
-          <div v-for="(item, index) in mockMenu" :key="item.label" :class="['ghost-nav', { active: index === 0 }]">
-            <el-icon class="nav-icon"><component :is="item.icon" /></el-icon>
-            <span>{{ item.label }}</span>
+    <div class="login-stage-wrap">
+      <div class="workspace-ghost" aria-hidden="true" inert>
+        <div class="ghost-sidebar">
+          <div class="ghost-logo-line">
+            <img src="/jianshang-logo.jpeg" alt="" />
+            <strong>简尚系统</strong>
           </div>
-        </div>
-        <div class="ghost-summary">
-          <strong>今日待办</strong>
-          <p v-for="item in mockSummary" :key="item.label"><span>{{ item.label }}</span><b>{{ item.value }}</b></p>
-        </div>
-      </div>
-      <div class="ghost-content">
-        <div class="ghost-header">
-          <h3>交付工作台</h3>
-          <span>{{ ghostDate }}</span>
-        </div>
-        <div class="ghost-welcome">
-          <strong>今日项目流转</strong>
-          <span>门店交底、仓库、财务在同一条单据链里协作</span>
-        </div>
-        <div class="ghost-stat-row">
-          <div v-for="item in mockStats" :key="item.label" class="ghost-stat">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-            <small>{{ item.meta }}</small>
-          </div>
-        </div>
-        <div class="ghost-chart">
-          <h4>工单推进</h4>
-          <div class="chart-grid"></div>
-          <span class="chart-line"></span>
-        </div>
-        <div class="ghost-progress">
-          <h4>关键节点</h4>
-          <div v-for="item in mockProgress" :key="item.name" class="progress-row">
-            <span>{{ item.name }}</span>
-            <i><b :style="{ width: item.width }"></b></i>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <section class="auth-stage">
-      <aside class="brand-panel">
-        <div class="brand-mark">
-          <img class="brand-logo" src="/jianshang-logo.jpeg" alt="简尚涂装" />
-        </div>
-        <div class="brand-copy">
-          <h1>简尚系统</h1>
-          <p class="subtitle">艺术涂料 · 施工交付管理平台</p>
-          <div class="mode-switch brand-mode-switch" v-if="mode !== 'submitted'">
-            <button type="button" :class="{ active: mode === 'login' }" @click="switchMode('login')">登录</button>
-            <button type="button" :class="{ active: mode === 'register' }" @click="switchMode('register')">申请账号</button>
-          </div>
-        </div>
-
-        <div class="brand-features">
-          <div class="feature-item">
-            <el-icon><Monitor /></el-icon>
-            <div>
-              <strong>轻科技办公</strong>
-              <span>项目、订单、配送全流程协同</span>
+          <div class="ghost-nav-list">
+            <div v-for="(item, index) in mockMenu" :key="item.label" :class="['ghost-nav', { active: index === 0 }]">
+              <el-icon class="nav-icon"><component :is="item.icon" /></el-icon>
+              <span>{{ item.label }}</span>
             </div>
           </div>
-          <div class="feature-item">
-            <el-icon><Check /></el-icon>
-            <div>
-              <strong>先分配再启用</strong>
-              <span>企业级安全与权限管理</span>
+          <div class="ghost-summary">
+            <strong>今日待办</strong>
+            <p v-for="item in mockSummary" :key="item.label"><span>{{ item.label }}</span><b>{{ item.value }}</b></p>
+          </div>
+        </div>
+        <div class="ghost-content">
+          <div class="ghost-header">
+            <h3>交付工作台</h3>
+            <span>{{ ghostDate }}</span>
+          </div>
+          <div class="ghost-welcome">
+            <strong>今日项目流转</strong>
+            <span>门店交底、仓库、财务在同一条单据链里协作</span>
+          </div>
+          <div class="ghost-stat-row">
+            <div v-for="item in mockStats" :key="item.label" class="ghost-stat">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+              <small>{{ item.meta }}</small>
+            </div>
+          </div>
+          <div class="ghost-chart">
+            <h4>工单推进</h4>
+            <div class="chart-grid"></div>
+            <span class="chart-line"></span>
+          </div>
+          <div class="ghost-progress">
+            <h4>关键节点</h4>
+            <div v-for="item in mockProgress" :key="item.name" class="progress-row">
+              <span>{{ item.name }}</span>
+              <i><b :style="{ width: item.width }"></b></i>
             </div>
           </div>
         </div>
-      </aside>
+      </div>
+
+      <section class="auth-stage">
+        <aside class="brand-panel">
+          <div class="brand-mark">
+            <img class="brand-logo" src="/jianshang-logo.jpeg" alt="简尚涂装" />
+          </div>
+          <div class="brand-copy">
+            <h1>简尚系统</h1>
+            <p class="subtitle">艺术涂料 · 施工交付管理平台</p>
+            <div class="mode-switch brand-mode-switch" v-if="mode !== 'submitted'">
+              <button type="button" :class="{ active: mode === 'login' }" @click="switchMode('login')">登录</button>
+              <button type="button" :class="{ active: mode === 'register' }" @click="switchMode('register')">申请账号</button>
+            </div>
+          </div>
+
+          <div class="brand-features">
+            <div class="feature-item">
+              <el-icon><Monitor /></el-icon>
+              <div>
+                <strong>轻科技办公</strong>
+                <span>项目、订单、配送全流程协同</span>
+              </div>
+            </div>
+            <div class="feature-item">
+              <el-icon><Check /></el-icon>
+              <div>
+                <strong>先分配再启用</strong>
+                <span>企业级安全与权限管理</span>
+              </div>
+            </div>
+          </div>
+        </aside>
 
       <section :class="['auth-panel', { 'register-panel': mode === 'register' }]">
         <Transition :name="authTransitionName">
@@ -590,7 +591,8 @@ function backToLogin() {
           <p v-if="errorMsg" class="error-msg">{{ errorMsg }}</p>
         </Transition>
       </section>
-    </section>
+      </section>
+    </div>
     <p class="login-copyright">◎ 2026 简尚系统 · 艺术涂料施工交付管理平台</p>
   </main>
 </template>
@@ -598,17 +600,26 @@ function backToLogin() {
 <style scoped>
 .login-shell {
   position: relative;
-  min-height: 100vh;
-  overflow: hidden;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: 48px clamp(34px, 12vw, 180px) 48px 40px;
+  justify-content: center;
+  padding: 48px 28px;
   color: var(--text-primary);
   background:
     linear-gradient(112deg, rgba(255,255,255,0.05), rgba(255,255,255,0.18)),
     url('/login-paint-bg.png') center / cover no-repeat,
     #eef3f7;
+}
+
+.login-stage-wrap {
+  position: relative;
+  z-index: 2;
+  width: min(100%, 1460px);
+  height: min(760px, calc(100dvh - 96px));
+  min-height: 560px;
 }
 
 .paint-texture {
@@ -632,11 +643,11 @@ function backToLogin() {
 
 .workspace-ghost {
   position: absolute;
-  left: clamp(20px, 1.8vw, 28px);
-  top: clamp(56px, 5.8vh, 64px);
-  width: min(65vw, 966px);
-  height: min(76vh, 804px);
-  max-height: calc(100vh - 108px);
+  z-index: 1;
+  left: 0;
+  top: clamp(18px, 3.2vh, 34px);
+  width: min(64%, 930px);
+  height: calc(100% - 42px);
   display: grid;
   grid-template-columns: minmax(128px, 18%) 1fr;
   gap: 12px;
@@ -646,6 +657,7 @@ function backToLogin() {
   background: transparent;
   box-shadow: none;
   isolation: isolate;
+  overflow: hidden;
   transform: perspective(1150px) rotateY(8.5deg) rotateX(1.5deg) translateX(-4px);
   transform-origin: left center;
   animation: ghostFloat 11s ease-in-out infinite;
@@ -656,7 +668,7 @@ function backToLogin() {
   content: '';
   position: absolute;
   inset: 0;
-  z-index: -1;
+  z-index: 0;
   border-radius: inherit;
   border: 1px solid rgba(255,255,255,0.62);
   background:
@@ -667,6 +679,12 @@ function backToLogin() {
     0 22px 78px rgba(74,92,132,0.1),
     inset 0 1px 0 rgba(255,255,255,0.7);
   backdrop-filter: blur(14px) saturate(1.05);
+}
+
+.ghost-sidebar,
+.ghost-content {
+  position: relative;
+  z-index: 1;
 }
 
 .ghost-sidebar,
@@ -929,11 +947,13 @@ function backToLogin() {
 }
 
 .auth-stage {
-  position: relative;
-  z-index: 2;
-  width: min(55.7vw, 828px);
-  height: min(76vh, 728px);
-  min-height: 540px;
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  top: clamp(38px, 5.2vh, 58px);
+  width: clamp(720px, 54vw, 828px);
+  height: calc(100% - clamp(46px, 6vh, 68px));
+  min-height: 520px;
   display: grid;
   grid-template-columns: 41% 59%;
   border-radius: 24px;
@@ -1551,21 +1571,64 @@ function backToLogin() {
   background: rgba(255,255,255,0.03);
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1280px) {
   .login-shell {
-    padding: 92px 18px 26px;
-    align-items: flex-start;
+    padding-right: 28px;
+    padding-left: 28px;
+  }
+  .login-stage-wrap {
+    width: min(100%, 1040px);
   }
   .workspace-ghost {
-    width: 92vw;
+    width: min(62%, 720px);
+    opacity: 0.56;
+  }
+  .auth-stage {
+    width: min(72%, 760px);
+  }
+}
+
+@media (max-height: 760px) and (min-width: 981px) {
+  .login-shell {
+    align-items: flex-start;
+    padding-top: 36px;
+    padding-bottom: 72px;
+  }
+  .login-stage-wrap {
+    height: 660px;
+  }
+  .auth-stage {
+    min-height: 520px;
+    height: calc(100% - 40px);
+  }
+}
+
+@media (max-width: 980px) {
+  .login-shell {
+    align-items: flex-start;
+    padding: 92px 18px 26px;
+  }
+  .login-stage-wrap {
+    width: min(100%, 720px);
+    height: auto;
+    min-height: 0;
+  }
+  .workspace-ghost {
+    width: min(96vw, 680px);
     height: 500px;
     left: -70px;
-    top: 90px;
+    top: 18px;
     opacity: 0.42;
   }
   .auth-stage {
-    grid-template-columns: 1fr;
+    position: relative;
+    right: auto;
+    top: auto;
+    width: min(92vw, 720px);
+    height: auto;
     min-height: auto;
+    margin: 0 auto;
+    grid-template-columns: 1fr;
   }
   .brand-panel {
     border-radius: 24px 24px 0 0;

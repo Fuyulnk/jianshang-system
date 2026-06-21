@@ -5,9 +5,11 @@ const STATUS_LABELS = {
   handover_received: { phase: 1, label: '门店交底待核对', phaseLabel: '门店交底/勘察' },
   survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '门店交底/勘察' },
   survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '门店交底/勘察' },
-  recheck_done: { phase: 2, label: '复尺完成待班组交底', phaseLabel: '复尺/班组交底/出库' },
-  briefing_done: { phase: 2, label: '班组交底完成待出库', phaseLabel: '复尺/班组交底/出库' },
-  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/班组交底/出库' },
+  recheck_done: { phase: 2, label: '复尺完成待收款单', phaseLabel: '复尺/收款/班组交底' },
+  pre_entry_payment_pending: { phase: 2, label: '待项目结算收款单', phaseLabel: '复尺/收款/班组交底' },
+  payment_received: { phase: 2, label: '进场款已收，待班组交底', phaseLabel: '复尺/收款/班组交底' },
+  briefing_done: { phase: 2, label: '班组交底完成待出库', phaseLabel: '班组交底/出库' },
+  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '班组交底/出库' },
   material_out: { phase: 3, label: '已出库待进场', phaseLabel: '进场/施工/验收' },
   in_progress: { phase: 3, label: '施工中', phaseLabel: '进场/施工/验收' },
   inspection_done: { phase: 3, label: '验收完成待回库', phaseLabel: '进场/施工/验收' },
@@ -26,6 +28,7 @@ const ROLE_FOCUS = {
   finance: {
     label: '财务',
     groups: [
+      { key: 'payment_request', label: '待收款单/进场款', statuses: ['recheck_done', 'pre_entry_payment_pending'] },
       { key: 'labor', label: '待工费结算', statuses: ['material_returned'] },
       { key: 'cost', label: '待成本核算', statuses: ['labor_settled'] },
       { key: 'finance', label: '待财务结算', statuses: ['cost_checked'] },
@@ -45,7 +48,7 @@ const ROLE_FOCUS = {
     groups: [
       { key: 'survey', label: '待首勘', statuses: ['handover_received', 'survey_pending'] },
       { key: 'recheck', label: '待二勘/复尺', statuses: ['survey_done'] },
-      { key: 'briefing', label: '待班组交底', statuses: ['recheck_done'] },
+      { key: 'briefing', label: '待班组交底', statuses: ['payment_received'] },
       { key: 'onsite', label: '施工中/待收尾验收', statuses: ['material_out', 'in_progress'] },
     ]
   },
@@ -252,8 +255,10 @@ function missingProjectFields(project) {
     if (!hasText(project.condition_note, 8)) missing.push('复尺记录')
   }
   if (status === 'recheck_done') {
-    if (!project.briefing_date) missing.push('班组交底日期')
-    if (!project.assignee_user_id && !project.team_leader && !hasCrewMembers(project)) missing.push('施工负责人/班组')
+    missing.push('项目结算收款单')
+  }
+  if (status === 'pre_entry_payment_pending') {
+    missing.push('项目结算收款单/进场款确认')
   }
   if (status === 'material_out') {
     if (!project.start_date) missing.push('开工日期')

@@ -19,7 +19,9 @@ export const AI_TOOL_REGISTRY = [
       type: 'object',
       properties: {
         days: { type: 'number', description: '近N天的交易，默认30' },
-        type: { type: 'string', enum: ['income', 'expense'], description: '交易类型' }
+        type: { type: 'string', enum: ['income', 'expense'], description: '交易类型' },
+        query: { type: 'string', description: '按账户、分类、摘要或对方关键词搜索' },
+        limit: { type: 'number', description: '返回数量，默认100，最多300' }
       },
       required: []
     }
@@ -40,7 +42,14 @@ export const AI_TOOL_REGISTRY = [
     tier: 'L1',
     risk_level: 'low',
     action_type: 'tool_read',
-    schema: { type: 'object', properties: {}, required: [] }
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '材料名称、规格、分类或单位关键词，如 霞光沙 5L' },
+        limit: { type: 'number', description: '返回数量，默认100，最多300' }
+      },
+      required: []
+    }
   },
   {
     name: 'get_employees',
@@ -49,7 +58,15 @@ export const AI_TOOL_REGISTRY = [
     tier: 'L1',
     risk_level: 'medium',
     action_type: 'tool_read',
-    schema: { type: 'object', properties: {}, required: [] }
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '员工姓名、手机号、部门、岗位或账号关键词' },
+        status: { type: 'string', description: '员工状态，如 active' },
+        limit: { type: 'number', description: '返回数量，默认100，最多300' }
+      },
+      required: []
+    }
   },
   {
     name: 'get_projects',
@@ -61,10 +78,27 @@ export const AI_TOOL_REGISTRY = [
     schema: {
       type: 'object',
       properties: {
-        phase: { type: 'number', description: '阶段编号 1=门店交底/勘察 2=复尺出库 3=施工验收 4=回库核算 5=财务归档 6=售后处理' },
-        status: { type: 'string', description: '工单状态，如 handover_received、survey_pending、cost_checked、archived' }
+        phase: { type: 'number', description: '阶段编号 1=门店交底/勘察 2=复尺/收款/班组交底 3=施工验收 4=回库核算 5=财务归档 6=售后处理' },
+        status: { type: 'string', description: '工单状态，如 handover_received、survey_pending、cost_checked、archived' },
+        query: { type: 'string', description: '项目名、客户、电话或地址关键词' },
+        limit: { type: 'number', description: '返回数量，默认100，最多300' }
       },
       required: []
+    }
+  },
+  {
+    name: 'get_project_documents',
+    label: '查看项目资料链',
+    desc: '查询当前用户可见项目的单据缺失、已有、多版本和上传确认情况',
+    tier: 'L1',
+    risk_level: 'medium',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: '项目 ID' }
+      },
+      required: ['project_id']
     }
   },
   {
@@ -201,7 +235,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance', 'warehouse', 'engineering', 'employee'],
-    tools: ['get_projects', 'get_products', 'get_system_stats', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
+    tools: ['get_projects', 'get_project_documents', 'get_products', 'get_system_stats', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
     base_prompt: '你是简尚总助手。优先查询系统事实，再用简洁中文解释流程和下一步。写入动作必须先让用户确认。'
   },
   {
@@ -223,7 +257,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'warehouse', 'engineering'],
-    tools: ['get_products', 'get_system_stats'],
+    tools: ['get_products', 'get_projects', 'get_project_documents', 'get_system_stats'],
     base_prompt: '你是简尚仓库助手。回答产品、分类、规格、单位和库存时必须以系统查询结果为准。'
   },
   {
@@ -234,7 +268,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance', 'warehouse', 'engineering', 'employee'],
-    tools: ['get_projects', 'get_products', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
+    tools: ['get_projects', 'get_project_documents', 'get_products', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
     base_prompt: '你是简尚项目助手。重点回答项目在哪一步、缺什么、下一步谁处理。AI 只能检查和生成草稿，不能绕过人工确认。'
   }
 ]

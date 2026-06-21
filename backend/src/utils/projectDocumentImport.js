@@ -118,6 +118,7 @@ export function parseDeliveryDocument(documentType = '', fileName = '', fileData
     const parsed = parseBriefingDocument(fileName, fileData)
     return { ...parsed, document_label: deliveryDocumentLabel(documentType) }
   }
+  if (documentType === 'project_payment_request') return parseProjectPaymentRequestDocument(fileName, fileData)
   if (documentType === 'material_io') return parseMaterialIoDocument(fileName, fileData)
   if (documentType === 'labor_settlement') return parseLaborSettlementDocument(fileName, fileData)
   if (documentType === 'cost_check') return parseCostCheckDocument(fileName, fileData)
@@ -162,6 +163,40 @@ export function emptyDeliveryDocument(documentType = '', project = {}) {
   }
   if (documentType === 'material_io') {
     return { ...base, items: [], summary: { material_fee: 0, auxiliary_fee: 0, tool_fee: 0, transport_fee: 0, total_cost: 0 } }
+  }
+  if (documentType === 'project_payment_request') {
+    const contractAmount = Number(project.total_amount || project.settlement_amount || 0)
+    return {
+      ...base,
+      payment_request: {
+        request_no: '',
+        project_code: '',
+        designer: '',
+        salesperson: clean(project.order_taker),
+        sales_phone: '',
+        expected_start_date: clean(project.start_date),
+        expected_duration: '',
+        entry_method: '',
+        total_area: 0,
+        needs_recheck: '',
+        car_plate_report_required: '',
+        director_signed: false,
+        store_notified: false,
+        pre_entry_payment_confirmed: false,
+        payment_confirmed_at: '',
+        payment_confirmed_by: '',
+        note: ''
+      },
+      summary: {
+        contract_amount: contractAmount,
+        pre_entry_ratio: 0.9,
+        pre_entry_amount: roundMoney(contractAmount * 0.9),
+        tail_ratio: 0.1,
+        tail_amount: roundMoney(contractAmount * 0.1),
+        received_amount: 0,
+        payment_status: 'pending'
+      }
+    }
   }
   if (documentType === 'labor_settlement') {
     return { ...base, items: [], summary: { start_date: clean(project.start_date), end_date: clean(project.end_date), total_area: 0, labor_fee: 0, work_note: '' } }
@@ -257,6 +292,81 @@ function parseCostCheckDocument(fileName = '', fileData = '') {
     summary: parsed.summary,
     confirmed_data: parsed,
     warnings: parsed.summary.total_cost ? [] : ['未识别到成本合计，请人工确认。']
+  }
+}
+
+function parseProjectPaymentRequestDocument(fileName = '', fileData = '') {
+  if (!looksLikeSpreadsheet(fileName)) {
+    return {
+      document_type: 'project_payment_request',
+      document_label: '项目结算收款单',
+      items: [],
+      warnings: ['项目结算收款单只支持 CSV / XLS / XLSX']
+    }
+  }
+  const workbook = XLSX.read(decodeData(fileData), { type: 'buffer' })
+  const sheetName = workbook.SheetNames[0] || ''
+  const rows = sheetName ? XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', blankrows: false, raw: false }) : []
+  const textLines = rows.map(row => row.map(clean).filter(Boolean).join(' ')).filter(Boolean)
+  const contractAmount = extractPaymentAmount(textLines, [/结算.*金额/, /付款.*金额/, /合同.*金额/, /总金额/, /合计/])
+  const preEntryAmount = extractPaymentAmount(textLines, [/90%/, /进场款/, /进度款/, /首款/, /预付款/])
+  const tailAmount = extractPaymentAmount(textLines, [/10%/, /尾款/, /质保款/])
+  const receivedAmount = extractPaymentAmount(textLines, [/已收/, /收到/, /收款确认/])
+  const normalizedPreEntry = preEntryAmount || (contractAmount ? roundMoney(contractAmount * 0.9) : 0)
+  const normalizedTail = tailAmount || (contractAmount ? roundMoney(contractAmount * 0.1) : 0)
+  const confirmedData = {
+    project: {
+      project_name: findValue(rows, '项目名称') || findValue(rows, '项目') || '',
+      customer: findValue(rows, '客户姓名') || findValue(rows, '客户'),
+      phone: normalizePhone(findValue(rows, '客户电话') || findValue(rows, '电话')),
+      address: findValue(rows, '详细地址') || findValue(rows, '项目地址'),
+      source: findValue(rows, '单源') || '',
+      order_taker: findValue(rows, '销售顾问') || findValue(rows, '接单人')
+    },
+    payment_request: {
+      request_no: findValue(rows, '编号') || findValue(rows, '单号'),
+      project_code: findProjectCode(textLines),
+      designer: findValue(rows, '设计师'),
+      salesperson: findValue(rows, '销售顾问'),
+      sales_phone: normalizePhone(findValue(rows, '销售电话')),
+      expected_start_date: normalizeDate(findValue(rows, '预计开工时间')),
+      expected_duration: findValue(rows, '预计总工期'),
+      entry_method: findValue(rows, '进入方式'),
+      total_area: normalizeNumber(findValue(rows, '施工总面积')),
+      needs_recheck: findValue(rows, '是否复尺'),
+      car_plate_report_required: findValue(rows, '车牌是否需要报备'),
+      director_signed: /签字|已签|兰姐/.test(textLines.join(' ')),
+      store_notified: /门店|派发|通知/.test(textLines.join(' ')),
+      pre_entry_payment_confirmed: /已收|到账|收款确认|已付/.test(textLines.join(' ')),
+      payment_confirmed_at: '',
+      payment_confirmed_by: '',
+      note: textLines.filter(line => /备注|说明|财务|收款|付款|尾款/.test(line)).slice(0, 8).join('\n')
+    },
+    summary: {
+      contract_amount: contractAmount,
+      pre_entry_ratio: 0.9,
+      pre_entry_amount: normalizedPreEntry,
+      tail_ratio: 0.1,
+      tail_amount: normalizedTail,
+      received_amount: receivedAmount,
+      payment_status: receivedAmount >= normalizedPreEntry && normalizedPreEntry > 0 ? 'pre_entry_paid' : 'pending'
+    }
+  }
+  const warnings = []
+  if (!confirmedData.project.customer) warnings.push('未识别到客户姓名')
+  if (!confirmedData.project.address) warnings.push('未识别到项目地址')
+  if (!confirmedData.summary.contract_amount) warnings.push('未识别到结算总金额，请财务人工确认。')
+  if (!confirmedData.summary.pre_entry_amount) warnings.push('未识别到进场前 90% 收款金额，请财务人工确认。')
+  return {
+    document_type: 'project_payment_request',
+    document_label: '项目结算收款单',
+    file_name: fileName,
+    sheet_name: sheetName,
+    fields: [],
+    items: [],
+    summary: confirmedData.summary,
+    confirmed_data: confirmedData,
+    warnings
   }
 }
 
@@ -754,6 +864,7 @@ function deliveryDocumentLabel(documentType) {
     survey_initial: '首次工勘表',
     survey_recheck: '二次勘察表',
     briefing: '班组交底单',
+    project_payment_request: '项目结算收款单',
     material_io: '材料出库单',
     completion_inspection: '完工验收质检表',
     labor_settlement: '施工班组工费结算单',
@@ -818,6 +929,25 @@ function normalizeNumber(value) {
   const text = clean(value)
   const match = text.match(/-?\d+(?:\.\d+)?/)
   return match ? Number(match[0]) : 0
+}
+
+function extractPaymentAmount(lines, patterns) {
+  for (const pattern of patterns) {
+    const line = lines.find(item => pattern.test(item))
+    if (!line) continue
+    const numbers = Array.from(line.matchAll(/(?:￥|¥)?\s*([0-9][0-9,]*(?:\.\d+)?)/g))
+      .filter(match => line.slice(match.index + match[0].length, match.index + match[0].length + 1) !== '%')
+      .map(match => Number(String(match[1]).replace(/[,]/g, '')))
+      .filter(value => Number.isFinite(value) && value > 10)
+    if (numbers.length) return roundMoney(Math.max(...numbers))
+  }
+  return 0
+}
+
+function findProjectCode(lines) {
+  const line = lines.find(item => /\bJSTZ\b|编号|单号/i.test(item)) || ''
+  const match = line.match(/\b[A-Z]{2,}\s*\d{2}[-\s]?\d{2}[-\s]?\d{2}\b/i) || line.match(/\b[A-Z]{2,}\d{6,}\b/i)
+  return clean(match?.[0] || '')
 }
 
 function roundMoney(value) {

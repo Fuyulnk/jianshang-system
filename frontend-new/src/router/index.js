@@ -16,6 +16,7 @@ import ProjectList from '../views/projects/ProjectList.vue'
 import ProjectDetail from '../views/projects/ProjectDetail.vue'
 import ProjectSupplyList from '../views/projects/ProjectSupplyList.vue'
 import FinanceOverview from '../views/finance/FinanceOverview.vue'
+import FinanceLedger from '../views/finance/FinanceLedger.vue'
 import FileCenter from '../views/files/FileCenter.vue'
 import { getAuthToken, clearAuthSession } from '../utils/authSession'
 
@@ -48,7 +49,8 @@ const routes = [
       { path: 'projects/construction', name: 'Projects', component: ProjectList, meta: { title: '施工项目工单' } },
       { path: 'projects/supply', name: 'ProjectSupplyList', component: ProjectSupplyList, meta: { title: '项目供货单' } },
       { path: 'projects/:id', name: 'ProjectDetail', component: ProjectDetail, meta: { title: '工单详情' } },
-      { path: 'finance/overview', name: 'FinanceOverview', component: FinanceOverview, meta: { title: '财务总览' } }
+      { path: 'finance/overview', name: 'FinanceOverview', component: FinanceOverview, meta: { title: '财务总览' } },
+      { path: 'finance/ledger', name: 'FinanceLedger', component: FinanceLedger, meta: { title: '入账登记表' } }
     ]
   }
 ]

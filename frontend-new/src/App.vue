@@ -15,7 +15,7 @@
 
 #app {
   width: 100%;
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   padding: 0;
   font-family: var(--font-family);

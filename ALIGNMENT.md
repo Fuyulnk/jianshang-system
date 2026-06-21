@@ -102,6 +102,9 @@
 - `handoff/2026-06-13-project-document-field-mapping-v1.md`：8 类项目单据字段映射，区分结构化入库字段和先作为附件保留的内容。
 - `handoff/2026-06-13-project-library-from-folder-v1.md`：从桌面“施工项目管理总表”文件夹生成的简尚 AI 项目库 V1 说明，包含目录级索引、字段口径和导入边界。
 - `handoff/2026-06-13-real-project-smoke-run-v1.md`：线上测试项目从交接跑到归档的真实闭环试跑报告，包含项目 ID、资料链结果、库存影响和卡点分级。
+- `handoff/2026-06-18-database-framework-api-v1.md`：数据库框架与接口整理 V1 对接，记录数据域、迁移记录、事实服务、AI 读取口、固定模板导出和 V2 建议。
+- `handoff/2026-06-18-original-template-export-v1.md`：原表格格式导出 V1 对接，记录入账登记表、项目结算收款单按原 Excel 格式导出的实现边界。
+- `handoff/2026-06-17-project-payment-ledger-flow-v1.md`：项目结算收款单、财务入账登记表、出库导入、复尺跳过等流程调整对接。
 - `outputs/project-library-v1/`：项目库 V1 生成物，含 `project_library_seed.csv`、`project_library_seed.json`、`project_document_inventory.json`。
 - `handoff/animation-tasks.md`：历史遗留的动画任务记录，目前不是主线，除非用户明确要求再处理。
 - `CLAUDE.md`：项目协作规则和 Claude 侧约定。
@@ -173,7 +176,108 @@
 
 ## 对接记录
 
-### 2026-06-17 Claude：账号/财务 V1 低额度收口复测 ✅
+### 2026-06-21 Claude：V2 数据库迁移整理（schema 集中化）
+
+- 任务：将散落在 `index.js` 的 100+ 行 `try/catch` 建表/补字段逻辑集中到迁移模块。
+- 新增文件：`backend/src/db/migrations/v2-schema-cleanup.js`
+- 组织方式：按用户表、员工表、项目表、项目状态、材料表、产品表、聊天表、库存流水、财务入账、AI 表、索引、数据修复 12 个模块分组。
+- 入口：`index.js` 启动时调用 `runV2Cleanup(db)`，自动记录版本到 `schema_versions`。
+- 旧代码保留未删除（`try/catch` 静默跳过已存在的列，无副作用）。
+- 验证：本地后端启动成功，`/health` 正常，`schema_versions` 正确记录 `20260621_v2_schema_cleanup` ✅
+- 部署状态：未提交，未上传服务器。
+
+### 2026-06-18 Codex：数据库框架与接口整理 V1
+
+- 任务：按“继续 SQLite、预留可换 PostgreSQL”的方向，先搭数据库分层、迁移记录、事实服务和 AI 读取口，不做清库、不大迁移、不做模板管理库页面。
+- 修改文件：
+  - `backend/src/domain/businessDictionaries.js`、`backend/src/domain/dataCatalog.js`：新增 6 个数据域、部门职位、项目状态、单据类型、材料单位、财务分类、AI 工具类型字典，并补表清单、接口清单、字段归属清单、业务字典清单。
+  - `backend/src/utils/orgOptions.js`：员工自注册/建档岗位选项改为从统一部门职位字典派生，继续只暴露普通岗位。
+  - `backend/src/db/schemaVersions.js`、`backend/src/index.js`：新增 `schema_versions` 迁移记录表并写入 `20260618_database_framework_v1`。
+  - `backend/src/services/businessFacts.js`、`backend/src/services/projectDocumentChain.js`：新增库存、项目、项目单据、资料链展示、财务、交易、员工、账户、系统概况事实服务。
+  - `backend/src/routes/ai.js`、`backend/src/ai/toolRegistry.js`：AI 只读工具改走事实服务，新增 `get_project_documents`，并补 `query/limit/status/type` 查询参数和工具耗时审计。
+  - `backend/src/routes/ai.js`：`executeTool` 增加内部命名导出，便于本地脚本直接验证 AI 工具读取口；不新增公网接口，不改变聊天 API 行为。
+  - `backend/src/routes/products.js`、`employees.js`、`transactions.js`、`projects.js`：补最小搜索/返回口径统一。
+  - `backend/src/domain/documentTemplateConfig.js`、`backend/src/db/documentTemplates.js`、`backend/src/services/documentTemplateService.js`、`backend/src/routes/finance.js`、`backend/src/routes/project-imports.js`：固定两张内置模板（项目结算收款单、入账登记表），导出优先原附件，缺原附件时回退系统模板；模板相关 DDL 从 `index.js` 迁到 db 模块；`/api/projects/:id/delivery-chain` 运行路径切到资料链服务。
+  - `handoff/2026-06-18-database-framework-api-v1.md`：本轮详细对接和 V2 建议。
+- 验证：
+  - 相关后端文件 `node --check` 通过。
+  - 真实 SQLite 只读冒烟：库存、项目、项目单据、财务、员工、系统概况事实服务可读。
+  - 真实 SQLite 资料链展示服务冒烟：项目 #4 返回 9 个节点，并保留前端依赖的 `metrics / finance / table_data / document_version_count`。
+  - 空库迁移/模板种子冒烟：`schema_versions` 可创建并写入框架版本；2 个固定模板、22 条映射可创建。
+  - 临时空 HOME 启动当前后端通过：`/health` 返回 ok，默认 `fuyulnk/123456` 登录成功且角色为 `super_admin`。
+  - 内存库模板模块冒烟：`ensureSystemDocumentTemplates` 可独立创建 2 个模板、22 条映射和 `document_exports` 表。
+  - 多角色事实服务抽查：超管/管理员全可读；财务可读项目/财务但不可读员工档案；仓库不可读财务/员工；普通员工不可读无关项目单据/财务/员工。
+  - 本地 HTTP 多角色只读抽查：`fuyulnk` 全可读；`caiwu` 财务可读但员工 403；`cangku` 财务/员工 403；`yuangong` 访问无关项目 #4 资料链 404/无权限。`/api/products?query=霞光沙` 返回 SKU 展示字段。
+  - 内存库多规格搜索验证：造数 `霞光沙 1L/5L` 后，`inventoryFacts(query='霞光沙')` 返回 `霞光沙1L｜桶｜20`、`霞光沙5L｜桶｜15`；真实库当前仍只有一条匹配 SKU。
+  - 字典派生验证：部门职位字典可返回工程部、财务部、仓库、样板开发；`管理层/总监` 不在自注册合法组合内；AI 工具分级包含 L1-L5，写入动作 `tool_write` 要求确认。
+  - 本地登录 HTTP 冒烟：已有后端 `127.0.0.1:3001` `/health` 正常；`POST /api/login` 使用 `fuyulnk/123456` 登录成功并返回 `super_admin` token；已有前端 `127.0.0.1:5173` 可返回登录页 HTML。
+  - AI 工具读取口直连验证：通过内部 `executeTool` 调用真实 SQLite，`get_products` 返回 `display_name/sku_label`，`get_projects` 返回 `status_label/next_step`，`get_project_documents` 返回 10 个资料链节点，`get_project_profit_summary` 返回项目利润粗算 totals；普通员工调用无关项目资料链返回“没有查看项目单据的权限”。
+  - AI 聊天端到端 mock 验证：使用临时 HOME 空库、临时后端端口和本地假模型服务覆盖 `AI_ENDPOINT`，完整走 `/api/ai/chat -> get_products 工具调用 -> 工具结果回填 -> SSE 回复`，返回 `查到了，霞光沙5L｜桶｜15。`；同时验证 `ai_audit_logs` 记录工具调用和聊天审计。
+  - `npm --prefix frontend-new run build` 通过；仅有既有 Vite 大 chunk 警告。2026-06-21 清理/迁移后已复跑通过。
+  - 本地真实库仅写入非业务种子：`schema_versions`、`document_templates`、`document_template_mappings`，未改项目/库存/流水业务行。
+- 注意事项：
+  - 已完成本地登录 HTTP 冒烟；未做浏览器人工页面操作级冒烟。
+  - 已做本地假模型端到端验证；未做真实 DeepSeek 端到端调用，原因是会外发真实业务工具结果并产生模型费用。上线前如需最终模型验收，应使用脱敏测试库或专门测试项目再跑。
+  - 未提交，未上传服务器。
+  - `backend/data/document-templates/*.xlsx` 被 `.gitignore` 忽略，模板文件后续部署要单独同步或在服务器受控目录种子化，不能误删 `backend/data/`。
+  - V2 计划及完成进度：
+    - ✅ **库存出入库写入服务** — `services/inventoryCommands.js` 已抽离，`deductStock`/`addStock`/`recordInventoryMovement`/`upsertMaterialIoDocument` 等 6 个函数导出；路由改用服务调用，旧死代码已清除
+    - ✅ **Schema 迁移集中化** — `db/migrations/v2-schema-cleanup.js`，12 个模块将 `index.js` 散落的 100+ 行建表/补字段逻辑集中管理，`schema_versions` 自动记录
+    - ❌ **项目单据链写入服务** — 待抽离
+    - ❌ **财务写入服务** — 待抽离
+    - ❌ **模板部署策略** — 待做
+    - ❌ **多角色接口权限回归** — 待做
+    - ❌ **脱敏测试库跑真实模型** — 待做
+
+### 2026-06-18 Codex：原表格格式导出 V1
+
+- 任务：把“导出必须以真实业务表格为原型”落成底座，不再用系统临时拼普通数据表代替原 Excel 格式。
+- 修改文件：
+  - `backend/src/utils/xlsxTemplateExport.js`：新增 xlsx 原文件补丁器，只写指定单元格，保留原工作簿样式、合并、列宽、打印设置等。
+  - `backend/src/index.js`：新增模板库/映射/导出日志表，`finance_ledger_workbooks` 增加 `source_file_path`。
+  - `backend/src/routes/finance.js`、`frontend-new/src/views/finance/FinanceLedger.vue`：入账登记表导入时保存原始文件副本，新增“导出原格式”接口和按钮。
+  - `backend/src/routes/project-imports.js`、`frontend-new/src/components/projects/ProjectDocumentSummary.vue`：项目资料链新增原格式导出接口和按钮；当前优先支持带 `.xlsx` 原始附件的项目结算收款单。
+  - `handoff/2026-06-18-original-template-export-v1.md`：本轮对接记录。
+- 验证：
+  - `node --check backend/src/utils/xlsxTemplateExport.js`
+  - `node --check backend/src/routes/finance.js`
+  - `node --check backend/src/routes/project-imports.js`
+  - `node --check backend/src/index.js`
+  - `npm --prefix frontend-new run build`
+  - 真实 `A2025年入账登记表.xlsx` 和 `项目结算收款单（墙固）...xlsx` 做 xlsx 补丁冒烟，写入后可读回。
+- 注意事项：
+  - 第一阶段仅支持 `.xlsx` 原格式写回，旧 `.xls` 需另存为 `.xlsx` 后重新导入。
+  - 系统新增/编辑的网页备注还未写回 Excel 原生批注；原文件已有批注会保留。
+  - 未完成登录冒烟检查：本轮未启动本地前后端完整登录，只做相关后端语法、前端构建和 xlsx 补丁冒烟。
+  - 未提交，未上传服务器。
+
+### 2026-06-17 Claude：Codex 项目结算收款单/出库导入/入账登记表 初审 ✅
+
+- 任务：Codex 完成项目结算收款单节点、复尺跳过、出库导入草稿、入账登记表、登录页自适应。Claude 初审。
+- 改动：17 文件，+1303/-103。含 2 新文件（`FinanceLedger.vue`、`handoff/2026-06-17-project-payment-ledger-flow-v1.md`）。
+- **初审结论：结构正确，权限齐全，无 P0/P1。推荐 Hermes 终审。**
+- 语法检查：所有修改的后端文件 `node --check` 通过 ✅
+- 前端构建：`npm run build` 通过 ✅（仅既有 Vite chunk 警告）
+
+**代码审查摘要：**
+
+| 模块 | 文件 | 审查结论 |
+|------|------|---------|
+| 状态机 | `projects.js`、`index.js` | 新增 `pre_entry_payment_pending`/`payment_received` 状态，旧状态别名兼容 ✅ |
+| 收款单 | `project-imports.js` | `authMiddleware` + `canAccessModule` + `canAccessProjectRecord` 三层校验 ✅ |
+| 复尺跳过 | `projects.js` | `survey_done` → `pre_entry_payment_pending`，需 `condition_note`（跳过原因）✅ |
+| 出库导入 | `material-requests.js` | 仅 `briefing_done` 项目可导入，草稿不扣库存 ✅ |
+| 入账登记表 | `finance.js` | `requireFinanceAccess` 保护全部 5 个接口 ✅ |
+| 入账表结构 | `index.js` | 5 张 `finance_ledger_*` 表，`CREATE TABLE IF NOT EXISTS` ✅ |
+| AI 耗时 | `ai.js`、`project-imports.js` | 本地模板优先 + 耗时分段日志 ✅ |
+| 登录页 | `Login.vue` | `100vh` → `100dvh`，`clamp()` 自适应，允许纵向滚动 ✅ |
+
+**未提交，未上传服务器。Hermes 终审后可统一提交部署。**
+
+**Hermes 终审结果（3 个 P2）：**
+- P2-1 `buildCreateFailureMessage` 暴露数据库错误 → ✅ 已修复，改为"请联系管理员"
+- P2-2 `recheck_done` 状态不可达 → ⏭ 不修，保留兼容旧数据
+- P2-3 `confirm-step` 未校验 `canAccessModule` → ⏭ 不修，角色白名单已够用，设计如此
 
 - 任务：统一口径后对 4 类账号做最小复测，确认权限隔离与凭证存储正确。
 - 口径修正：全文 `window.name` → `sessionStorage`；补测结果覆盖旧记录。

@@ -18,7 +18,7 @@
           <p class="page-desc">门店/渠道交底后，由简尚承接施工交付；重点看资料是否齐、下一步卡在哪里。</p>
         </div>
         <div class="header-actions">
-          <el-button v-if="canCreateProjects" @click="showImport = true">导入门店交底单</el-button>
+          <el-button v-if="canImportProjects" @click="showImport = true">导入门店交底单</el-button>
           <el-button v-if="canCreateProjects" type="primary" @click="openCreateForm">新建工单</el-button>
         </div>
       </div>
@@ -264,11 +264,12 @@ const userRole = computed(() => {
   } catch { return '' }
 })
 const canCreateProjects = computed(() => ['super_admin', 'admin'].includes(userRole.value))
+const canImportProjects = computed(() => ['super_admin', 'admin', 'finance'].includes(userRole.value))
 const canDeleteProjects = computed(() => ['super_admin', 'admin'].includes(userRole.value))
 
 const phaseOptions = [
   { value: '1', label: '门店交底/勘察' },
-  { value: '2', label: '复尺出库' },
+  { value: '2', label: '复尺/收款/班组交底' },
   { value: '3', label: '施工验收' },
   { value: '4', label: '回库核算' },
   { value: '5', label: '财务归档' },
@@ -294,9 +295,9 @@ const boardStats = computed(() => [
   },
   {
     key: 'prepare',
-    label: '待班组交底/出库',
-    count: list.value.filter(row => ['recheck_done', 'briefing_done', 'material_requested'].includes(row.status)).length,
-    desc: '班组交底完成后才能申请出库',
+    label: '待收款/交底/出库',
+    count: list.value.filter(row => ['recheck_done', 'pre_entry_payment_pending', 'payment_received', 'briefing_done', 'material_requested'].includes(row.status)).length,
+    desc: '收款单确认后才能班组交底和出库',
     tone: 'primary'
   },
   {
@@ -384,7 +385,7 @@ function computeStats(data) {
   stats.value = [
     { key: 'all', label: '全部工单', count: counts.all, active: !phaseFilter.value },
     { key: '1', label: '门店交底/勘察', count: counts['1'], active: phaseFilter.value === '1' },
-    { key: '2', label: '复尺出库', count: counts['2'], active: phaseFilter.value === '2' },
+    { key: '2', label: '复尺/收款/交底', count: counts['2'], active: phaseFilter.value === '2' },
     { key: '3', label: '施工验收', count: counts['3'], active: phaseFilter.value === '3' },
     { key: '4', label: '回库核算', count: counts['4'], active: phaseFilter.value === '4' },
     { key: '5', label: '财务归档', count: counts['5'], active: phaseFilter.value === '5' },

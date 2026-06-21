@@ -4,6 +4,7 @@ import { parseFinanceTransactionDraft } from '../utils/financeParser.js'
 
 function buildTransactionFilter(query = {}) {
   const { account_id, account_type, type, category, start_date, end_date } = query
+  const keyword = String(query.query || query.keyword || '').trim()
   const conditions = []
   const params = []
 
@@ -22,6 +23,11 @@ function buildTransactionFilter(query = {}) {
   if (category) {
     conditions.push('t.category = ?')
     params.push(category)
+  }
+  if (keyword) {
+    conditions.push('(t.category LIKE ? OR t.description LIKE ? OR t.party LIKE ? OR t.proxy LIKE ? OR a.name LIKE ?)')
+    const like = `%${keyword}%`
+    params.push(like, like, like, like, like)
   }
   if (start_date) {
     conditions.push('t.created_at >= ?')

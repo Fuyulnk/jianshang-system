@@ -378,13 +378,7 @@ async function saveActiveNode() {
   if (!activeNode.value) return
   saving.value = true
   try {
-    const body = {
-      parsed_data: activeNode.value.parsed_data || activeNode.value.document?.parsed_data || {},
-      confirmed_data: activeData.value,
-      warnings: activeNode.value.parsed_data?.warnings || activeNode.value.document?.warnings || [],
-      source_attachment_id: activeNode.value.document?.source_attachment_id || 0,
-      file: activeNode.value.pending_file || null
-    }
+    const body = buildActiveNodePayload()
     const json = await requestJson(`/api/projects/${props.project.id}/delivery-chain/${activeNode.value.key}/save`, body)
     chain.value = json.data.chain
     emit('chain-updated', json.data.chain)
@@ -397,6 +391,16 @@ async function saveActiveNode() {
   }
 }
 
+function buildActiveNodePayload() {
+  return {
+    parsed_data: activeNode.value.parsed_data || activeNode.value.document?.parsed_data || {},
+    confirmed_data: activeData.value,
+    warnings: activeNode.value.parsed_data?.warnings || activeNode.value.document?.warnings || [],
+    source_attachment_id: activeNode.value.document?.source_attachment_id || 0,
+    file: activeNode.value.pending_file || null
+  }
+}
+
 async function downloadFirstAttachment(node) {
   const file = preferredAttachment(node)
   if (!file) {
@@ -406,29 +410,62 @@ async function downloadFirstAttachment(node) {
   await downloadAttachment(file)
 }
 
+async function exportOriginalDocument(node) {
+  if (!node?.key) return
+  try {
+    const fallbackName = `${props.project?.name || props.project?.customer || '项目'}-${node.label || '单据'}-原格式导出.xlsx`
+    await downloadFile(`/api/projects/${props.project.id}/delivery-chain/${node.key}/export`, fallbackName)
+  } catch (err) {
+    ElMessage.error(err.message || '原格式导出失败')
+  }
+}
+
 async function downloadAttachment(file) {
   try {
-    const res = await fetch(`/api/files/${file.id}/download`, {
+    await downloadFile(`/api/files/${file.id}/download`, file.original_name || '项目附件')
+  } catch (err) {
+    ElMessage.error(err.message || '附件下载失败')
+  }
+}
+
+async function downloadFile(url, fallbackName) {
+  try {
+    const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token()}` }
     })
-    if (!res.ok) throw new Error('下载失败')
+    if (!res.ok) {
+      let message = '下载失败'
+      try {
+        const json = await res.json()
+        message = json.message || message
+      } catch {}
+      throw new Error(message)
+    }
     const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
+    const disposition = res.headers.get('Content-Disposition') || ''
+    const matched = disposition.match(/filename\*=UTF-8''([^;]+)/)
+    const fileName = matched ? decodeURIComponent(matched[1]) : fallbackName
+    const objectUrl = URL.createObjectURL(blob)
     const link = document.createElement('a')
-    link.href = url
-    link.download = file.original_name || '项目附件'
+    link.href = objectUrl
+    link.download = fileName
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+    URL.revokeObjectURL(objectUrl)
   } catch (err) {
-    ElMessage.error(err.message || '附件下载失败')
+    throw err
   }
 }
 
 function preferredAttachment(node) {
   const files = Array.isArray(node?.attachments) ? node.attachments : []
   return files.find(file => isPptFile(file)) || files[0]
+}
+
+function canExportOriginal(node) {
+  const files = Array.isArray(node?.attachments) ? node.attachments : []
+  return files.some(file => /\.xlsx$/i.test(file.original_name || ''))
 }
 
 function isPptFile(file) {
@@ -569,6 +606,11 @@ async function confirmDeliveryStep(node = activeNode.value) {
   }
   saving.value = true
   try {
+    if (activeNode.value?.key === node.key) {
+      const saved = await requestJson(`/api/projects/${props.project.id}/delivery-chain/${activeNode.value.key}/save`, buildActiveNodePayload())
+      chain.value = saved.data.chain
+      emit('chain-updated', saved.data.chain)
+    }
     const json = await requestJson(`/api/projects/${props.project.id}/delivery-chain/${node.key}/confirm-step`, {})
     chain.value = json.data.chain
     emit('chain-updated', json.data.chain)
@@ -672,13 +714,14 @@ function canConfirmNode(node) {
   if (!node) return false
   if (props.currentStepKey && node.key !== props.currentStepKey) return false
   if (node.key === 'material_io' && props.project?.status !== 'inspection_done') return false
-  return ['survey_initial', 'survey_recheck', 'briefing', 'material_io', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'].includes(node.key)
+  return ['survey_initial', 'survey_recheck', 'project_payment_request', 'briefing', 'material_io', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'].includes(node.key)
 }
 
 function confirmButtonLabel(node) {
   return {
     survey_initial: '确认工勘完成',
     survey_recheck: '确认复尺完成',
+    project_payment_request: '确认进场款已收',
     briefing: '确认班组交底完成',
     material_io: '确认回库完成',
     completion_inspection: '确认验收完成',
@@ -734,6 +777,10 @@ function normalizeDocumentData(node, data) {
       contract_amount: summary.contract_amount || data.finance?.estimated_total_amount || props.project?.total_amount || 0,
       delivery_revenue: summary.delivery_revenue || summary.revenue_amount || props.project?.settlement_amount || 0,
       received_amount: summary.received_amount || props.project?.deposit_amount || 0,
+      pre_entry_amount: summary.pre_entry_amount || 0,
+      pre_entry_ratio: summary.pre_entry_ratio || 0.9,
+      tail_amount: summary.tail_amount || 0,
+      tail_ratio: summary.tail_ratio || 0.1,
       unpaid_amount: summary.unpaid_amount || 0,
       finance_note: summary.finance_note || '',
       revenue_amount: summary.revenue_amount || summary.delivery_revenue || 0,
@@ -759,6 +806,25 @@ function normalizeDocumentData(node, data) {
       payment_status: summary.payment_status || 'pending',
       archive_status: summary.archive_status || 'pending'
     },
+    payment_request: {
+      request_no: data.payment_request?.request_no || '',
+      project_code: data.payment_request?.project_code || '',
+      designer: data.payment_request?.designer || '',
+      salesperson: data.payment_request?.salesperson || props.project?.order_taker || '',
+      sales_phone: data.payment_request?.sales_phone || '',
+      expected_start_date: data.payment_request?.expected_start_date || props.project?.start_date || '',
+      expected_duration: data.payment_request?.expected_duration || '',
+      entry_method: data.payment_request?.entry_method || '',
+      total_area: data.payment_request?.total_area || summary.total_area || 0,
+      needs_recheck: data.payment_request?.needs_recheck || '',
+      car_plate_report_required: data.payment_request?.car_plate_report_required || '',
+      director_signed: !!data.payment_request?.director_signed,
+      store_notified: !!data.payment_request?.store_notified,
+      pre_entry_payment_confirmed: !!data.payment_request?.pre_entry_payment_confirmed || summary.payment_status === 'pre_entry_paid',
+      payment_confirmed_at: data.payment_request?.payment_confirmed_at || '',
+      payment_confirmed_by: data.payment_request?.payment_confirmed_by || '',
+      note: data.payment_request?.note || ''
+    },
     survey: {
       survey_date: data.survey?.survey_date || props.project?.survey_date || '',
       surveyor: data.survey?.surveyor || '',
@@ -780,6 +846,14 @@ function normalizeDocumentData(node, data) {
   }
   if (key === 'briefing') {
     normalized.summary.revenue_amount = normalized.summary.revenue_amount || construction.total_amount || data.finance?.estimated_total_amount || 0
+  }
+  if (key === 'project_payment_request') {
+    if (!normalized.summary.contract_amount) normalized.summary.contract_amount = props.project?.total_amount || 0
+    if (!normalized.summary.pre_entry_amount && normalized.summary.contract_amount) normalized.summary.pre_entry_amount = roundMoneyValue(normalized.summary.contract_amount * 0.9)
+    if (!normalized.summary.tail_amount && normalized.summary.contract_amount) normalized.summary.tail_amount = roundMoneyValue(normalized.summary.contract_amount * 0.1)
+    if (normalized.payment_request.pre_entry_payment_confirmed && normalized.summary.payment_status === 'pending') {
+      normalized.summary.payment_status = 'pre_entry_paid'
+    }
   }
   return normalized
 }
@@ -961,6 +1035,7 @@ function roundMoneyValue(value) {
           <el-button v-if="canConfirmNode(node)" size="small" type="success" :icon="DocumentChecked" @click="confirmDeliveryStep(node)">{{ confirmButtonLabel(node) }}</el-button>
           <el-button v-if="actionVisible(node, 'generate_ppt')" size="small" text @click="openPptUpload(node)">上传PPT</el-button>
           <el-button v-if="node.attachments?.length" size="small" text :icon="Download" @click="downloadFirstAttachment(node)">下载</el-button>
+          <el-button v-if="canExportOriginal(node)" size="small" text :icon="Download" @click="exportOriginalDocument(node)">导出原格式</el-button>
         </div>
       </article>
     </div>
@@ -1025,7 +1100,7 @@ function roundMoneyValue(value) {
             <label>日期<el-input v-model="activeData.survey.survey_date" placeholder="2026-04-08" /></label>
             <label>勘察/质检人<el-input v-model="activeData.survey.surveyor" /></label>
             <label>联系电话<el-input v-model="activeData.survey.surveyor_phone" /></label>
-            <label>工勘结论<el-select v-model="activeData.survey.entry_judgment" style="width:100%"><el-option label="无需复尺，进入交底" value="ready" /><el-option label="需要复尺/整改复核" value="conditional" /><el-option label="暂不具备进场条件" value="blocked" /></el-select></label>
+            <label>工勘结论<el-select v-model="activeData.survey.entry_judgment" style="width:100%"><el-option label="无需复尺，进入收款单" value="ready" /><el-option label="需要复尺/整改复核" value="conditional" /><el-option label="暂不具备进场条件" value="blocked" /></el-select></label>
             <label>需要二次勘察<el-switch v-model="activeData.survey.need_recheck" /></label>
             <label>触发整改/售后<el-switch v-model="activeData.survey.repair_required" /></label>
             <label class="wide">勘察/质检结论<el-input v-model="activeData.survey.conclusion" type="textarea" :rows="4" /></label>
@@ -1174,6 +1249,39 @@ function roundMoneyValue(value) {
               </div>
             </el-tab-pane>
           </el-tabs>
+        </div>
+
+        <div v-if="activeNode.key === 'project_payment_request'" class="sheet-block">
+          <div class="sheet-title">项目结算收款单</div>
+          <div class="finance-note">
+            财务根据工勘/复尺结果制作收款单，交总监打印签字后通知门店收取进场前 90% 款项；尾款 10% 留到完工内检后再收。
+          </div>
+          <div class="info-grid">
+            <label>收款单号<el-input v-model="activeData.payment_request.request_no" placeholder="如 JSTZ 26-05-25" /></label>
+            <label>项目编号<el-input v-model="activeData.payment_request.project_code" /></label>
+            <label>设计师<el-input v-model="activeData.payment_request.designer" /></label>
+            <label>销售顾问/门店接单人<el-input v-model="activeData.payment_request.salesperson" /></label>
+            <label>销售电话<el-input v-model="activeData.payment_request.sales_phone" /></label>
+            <label>预计开工<el-input v-model="activeData.payment_request.expected_start_date" placeholder="2026-01-01" /></label>
+            <label>预计工期<el-input v-model="activeData.payment_request.expected_duration" /></label>
+            <label>施工面积<DecimalCellInput v-model="activeData.payment_request.total_area" /></label>
+            <label class="wide">收款/签字备注<el-input v-model="activeData.payment_request.note" type="textarea" :rows="3" placeholder="打印签字、门店收款、凭证位置等" /></label>
+          </div>
+          <div class="money-grid finance-grid">
+            <label>结算总金额<DecimalCellInput v-model="activeData.summary.contract_amount" /></label>
+            <label>进场前90%<DecimalCellInput v-model="activeData.summary.pre_entry_amount" /></label>
+            <label>尾款10%<DecimalCellInput v-model="activeData.summary.tail_amount" /></label>
+            <label>已收款<DecimalCellInput v-model="activeData.summary.received_amount" /></label>
+            <label>收款状态<el-select v-model="activeData.summary.payment_status" style="width:100%"><el-option label="待确认" value="pending" /><el-option label="进场款已收" value="pre_entry_paid" /><el-option label="部分到账" value="partial" /></el-select></label>
+            <label>总监已签字<el-switch v-model="activeData.payment_request.director_signed" /></label>
+            <label>已通知门店收款<el-switch v-model="activeData.payment_request.store_notified" /></label>
+            <label>90%进场款已确认
+              <el-switch
+                v-model="activeData.payment_request.pre_entry_payment_confirmed"
+                @change="activeData.summary.payment_status = activeData.payment_request.pre_entry_payment_confirmed ? 'pre_entry_paid' : 'pending'"
+              />
+            </label>
+          </div>
         </div>
 
         <div v-if="activeNode.key === 'briefing'" class="sheet-block">

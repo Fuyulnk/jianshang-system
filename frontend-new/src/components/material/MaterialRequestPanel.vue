@@ -24,6 +24,8 @@ const products = ref([])
 const requests = ref([])
 const loading = ref(false)
 const saving = ref(false)
+const importing = ref(false)
+const importInput = ref(null)
 const note = ref('')
 const transportFee = ref(0)
 const returnNote = ref('')
@@ -52,6 +54,7 @@ const auxiliaryTotal = computed(() => sumGroup('auxiliary'))
 const toolTotal = computed(() => sumGroup('tool'))
 const toolLossTotal = computed(() => roundMoney(toolTotal.value * 0.1))
 const requestTotal = computed(() => roundMoney(materialTotal.value + auxiliaryTotal.value + toolLossTotal.value + toNumber(transportFee.value)))
+const unmatchedRows = computed(() => groups.flatMap(group => rows[group.key]).filter(row => row.product_name && !Number(row.product_id || 0)))
 
 function token() {
   return getAuthToken()
@@ -69,7 +72,10 @@ function emptyRow(group) {
     usage_quantity: '',
     unit_price: 0,
     amount: 0,
-    remark: ''
+    remark: '',
+    imported_name: '',
+    match_status: '',
+    match_message: ''
   }
 }
 
@@ -157,6 +163,8 @@ function applyProduct(row, productId) {
   row.category = product.category || row.category || ''
   row.unit = product.unit || row.unit || ''
   if (Number(product.unit_price || 0) > 0) row.unit_price = Number(product.unit_price)
+  row.match_status = 'matched'
+  row.match_message = `已匹配 ${productLabel(product)}`
   recalcRow(row)
 }
 
@@ -167,7 +175,12 @@ function applyManualName(row) {
   const product = products.value.find(item => productSearchText(item) === keyword)
     || products.value.find(item => productSearchText(item).includes(keyword))
   if (product) applyProduct(row, product.id)
-  else recalcRow(row)
+  else {
+    row.product_id = ''
+    row.match_status = 'unmatched'
+    row.match_message = '未匹配库存产品，请选择具体规格'
+    recalcRow(row)
+  }
 }
 
 function recalcRow(row) {
@@ -286,6 +299,10 @@ async function createRequest() {
     ElMessage.warning('请至少添加一项出库材料')
     return
   }
+  if (unmatchedRows.value.length) {
+    ElMessage.warning(`还有 ${unmatchedRows.value.length} 项未匹配库存产品，请先选择具体规格`)
+    return
+  }
   saving.value = true
   try {
     const res = await fetch(`/api/projects/${props.projectId}/material-requests`, {
@@ -315,6 +332,69 @@ async function createRequest() {
   } finally {
     saving.value = false
   }
+}
+
+function openImportDraft() {
+  if (!canCreate.value) return
+  importInput.value?.click()
+}
+
+async function onImportDraftFile(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  if (!/\.(csv|xls|xlsx|ppt|pptx)$/i.test(file.name)) {
+    ElMessage.warning('暂只支持 CSV / XLS / XLSX / PPT / PPTX')
+    return
+  }
+  importing.value = true
+  try {
+    const res = await fetch(`/api/projects/${props.projectId}/material-requests/import-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({
+        file_name: file.name,
+        file_data: await readAsDataUrl(file)
+      })
+    })
+    const json = await readJson(res)
+    if (!res.ok || !json.success) throw new Error(json.message || '材料出库单导入失败')
+    applyDraftRows(json.data?.grouped_items || {})
+    const warnings = json.data?.warnings || []
+    if (warnings.length) ElMessage.warning(warnings[0])
+    else ElMessage.success('已生成出库草稿，请核对后提交')
+  } catch (err) {
+    ElMessage.error(err.message || '材料出库单导入失败')
+  } finally {
+    importing.value = false
+  }
+}
+
+function applyDraftRows(grouped = {}) {
+  for (const group of groups) {
+    const incoming = Array.isArray(grouped[group.key]) ? grouped[group.key] : []
+    rows[group.key].splice(0, rows[group.key].length, ...(incoming.length ? incoming.map(row => normalizeDraftRow(row, group.key)) : [emptyRow(group.key)]))
+  }
+}
+
+function normalizeDraftRow(row, group) {
+  return {
+    ...emptyRow(group),
+    ...row,
+    item_group: group,
+    product_id: Number(row.product_id || 0) || '',
+    match_status: row.match_status || (row.product_id ? 'matched' : 'unmatched'),
+    match_message: row.match_message || (row.product_id ? '已匹配库存产品' : '未匹配库存产品，请选择具体规格')
+  }
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 }
 
 async function confirmRequest(item) {
@@ -372,6 +452,7 @@ onMounted(() => {
 
 <template>
   <el-card class="material-panel" shadow="never">
+    <input ref="importInput" class="hidden-input" type="file" accept=".csv,.xls,.xlsx,.ppt,.pptx" @change="onImportDraftFile" />
     <template #header>
       <div class="material-header">
         <span>{{ title }}</span>
@@ -391,7 +472,17 @@ onMounted(() => {
     <div v-if="canCreate && mode === 'project'" class="request-form">
       <div class="request-note">
         <el-input v-model="note" placeholder="出库说明，如施工面积、工艺、特殊材料要求" />
+        <el-button type="primary" plain :loading="importing" @click="openImportDraft">导入出库单</el-button>
       </div>
+
+      <el-alert
+        v-if="unmatchedRows.length"
+        class="request-guard"
+        type="warning"
+        :closable="false"
+        :title="`有 ${unmatchedRows.length} 项未匹配库存产品，提交前必须选择到具体规格。`"
+        show-icon
+      />
 
       <section v-for="group in groups" :key="group.key" class="material-group">
         <div class="group-head">
@@ -410,7 +501,7 @@ onMounted(() => {
             <span>备注</span>
             <span></span>
           </div>
-          <div class="warehouse-row" v-for="(row, index) in rows[group.key]" :key="`${group.key}-${index}`">
+          <div class="warehouse-row" :class="{ unmatched: row.product_name && !row.product_id }" v-for="(row, index) in rows[group.key]" :key="`${group.key}-${index}`">
             <el-input v-model="row.out_date" placeholder="2026.4.8" />
             <div class="product-cell">
               <el-select
@@ -428,6 +519,7 @@ onMounted(() => {
                 </el-option>
               </el-select>
               <el-input v-model="row.product_name" placeholder="也可手填材料名" @blur="applyManualName(row)" />
+              <small v-if="row.match_message" class="match-message">{{ row.match_message }}</small>
             </div>
             <el-input v-model="row.unit" placeholder="单位" />
             <el-input-number v-model="row.out_quantity" :min="0" :precision="2" controls-position="right" @change="recalcRow(row)" />
@@ -556,6 +648,9 @@ onMounted(() => {
 .request-note .el-input {
   flex: 1;
 }
+.hidden-input {
+  display: none;
+}
 .material-group {
   display: grid;
   gap: 8px;
@@ -587,6 +682,13 @@ onMounted(() => {
   min-width: 1130px;
   margin-bottom: 8px;
 }
+.warehouse-row.unmatched {
+  padding: 8px;
+  margin: 0 0 8px;
+  border: 1px solid color-mix(in srgb, #f59e0b 52%, var(--border-light));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #f59e0b 8%, var(--bg-card));
+}
 .warehouse-row.return-row {
   grid-template-columns: 220px 78px 112px 112px 112px 90px 220px;
   min-width: 960px;
@@ -601,6 +703,11 @@ onMounted(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+}
+.product-cell .match-message {
+  grid-column: 1 / -1;
+  color: #b45309;
+  font-size: 12px;
 }
 .product-option {
   display: flex;

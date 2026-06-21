@@ -31,6 +31,9 @@ import employeeDashboardRoutes from './routes/employee-dashboard.js'
 import fileRoutes from './routes/files.js'
 import { setAuthDb, resolveFreshUser } from './middleware/auth.js'
 import { AI_TOOL_REGISTRY, DEFAULT_AI_AGENTS } from './ai/toolRegistry.js'
+import { ensureSchemaVersions, recordFrameworkBaseline } from './db/schemaVersions.js'
+import { runV2Cleanup } from './db/migrations/v2-schema-cleanup.js'
+import { ensureSystemDocumentTemplates } from './db/documentTemplates.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -43,6 +46,7 @@ dotenv.config({ path: resolve(__dirname, '../.env') })
 // 确保数据库目录存在
 const dbPath = join(process.env.HOME || homedir(), 'fuyulnk', 'jianshang.db')
 const dbDir = dirname(dbPath)
+const documentTemplateDir = join(__dirname, '../data/document-templates')
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true })
 }
@@ -51,6 +55,9 @@ const db = new Database(dbPath)
 setAuthDb(db)
 ensureCoreTables(db)
 ensureProjectTables(db)
+ensureSchemaVersions(db)
+recordFrameworkBaseline(db)
+runV2Cleanup(db)
 
 // 初始化 JWT 配置（自动轮换密钥）
 initJwtConfig(db)
@@ -227,6 +234,74 @@ try {
     CREATE INDEX IF NOT EXISTS idx_project_documents_project_type ON project_documents(project_id, document_type, updated_at);
   `)
 } catch {}
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS finance_ledger_workbooks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      source_file_name TEXT DEFAULT '',
+      source_file_path TEXT DEFAULT '',
+      status TEXT DEFAULT 'active',
+      imported_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS finance_ledger_sheets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workbook_id INTEGER NOT NULL,
+      sheet_index INTEGER DEFAULT 0,
+      name TEXT NOT NULL,
+      row_count INTEGER DEFAULT 0,
+      col_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS finance_ledger_cells (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workbook_id INTEGER NOT NULL,
+      sheet_id INTEGER NOT NULL,
+      row_index INTEGER NOT NULL,
+      col_index INTEGER NOT NULL,
+      address TEXT NOT NULL,
+      value TEXT DEFAULT '',
+      raw_value TEXT DEFAULT '',
+      formula TEXT DEFAULT '',
+      number_format TEXT DEFAULT '',
+      updated_by INTEGER DEFAULT 0,
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(sheet_id, row_index, col_index)
+    );
+    CREATE TABLE IF NOT EXISTS finance_ledger_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workbook_id INTEGER NOT NULL,
+      sheet_id INTEGER NOT NULL,
+      row_index INTEGER NOT NULL,
+      col_index INTEGER NOT NULL,
+      address TEXT NOT NULL,
+      comment_text TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      updated_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(sheet_id, row_index, col_index)
+    );
+    CREATE TABLE IF NOT EXISTS finance_ledger_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workbook_id INTEGER NOT NULL,
+      sheet_id INTEGER DEFAULT 0,
+      address TEXT DEFAULT '',
+      action TEXT NOT NULL,
+      old_value TEXT DEFAULT '',
+      new_value TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_finance_ledger_cells_sheet ON finance_ledger_cells(sheet_id, row_index, col_index);
+    CREATE INDEX IF NOT EXISTS idx_finance_ledger_comments_sheet ON finance_ledger_comments(sheet_id, row_index, col_index);
+
+  `)
+  try { db.exec("ALTER TABLE finance_ledger_workbooks ADD COLUMN source_file_path TEXT DEFAULT ''") } catch {}
+} catch {}
+try { ensureSystemDocumentTemplates(db, documentTemplateDir) } catch {}
 // 升级上来的老用户标记已完成（仅一次）
 const migrated = db.prepare("SELECT value FROM app_config WHERE key = 'migrate_onboarding'").get()
 if (!migrated) {
@@ -374,7 +449,7 @@ if (toolCount === 0) {
     if (role.name === 'super_admin') {
       for (const t of allTools) stmt.run(role.id, t, 1)
     } else if (role.name === 'admin') {
-      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_products','get_employees','get_projects','get_system_stats','get_project_profit_summary','parse_finance_transaction','parse_project_handover','create_project_workorder'].includes(t) ? 1 : 0)
+      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_products','get_employees','get_projects','get_project_documents','get_system_stats','get_project_profit_summary','parse_finance_transaction','parse_project_handover','create_project_workorder'].includes(t) ? 1 : 0)
     } else if (role.name === 'finance') {
       for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_system_stats','get_project_profit_summary','parse_finance_transaction','create_transaction'].includes(t) ? 1 : 0)
     } else if (role.name === 'warehouse') {
@@ -1086,6 +1161,7 @@ function ensureCoreTables(db) {
   try { db.prepare("DELETE FROM role_permissions WHERE module = 'orders'").run() } catch {}
   migrateRolePermissionScopes(db)
   ensureOperationalProjectScopes(db)
+  ensureFinanceProjectCreatePermission(db)
 }
 
 function migrateRolePermissionScopes(db) {
@@ -1110,7 +1186,7 @@ function defaultPermission(role, module) {
   if (role === 'finance') {
     return {
       view: ['dashboard', 'accounts', 'transactions', 'projects', 'chat', 'finance'].includes(module) ? 1 : 0,
-      create: ['transactions', 'chat'].includes(module) ? 1 : 0,
+      create: ['transactions', 'projects', 'chat'].includes(module) ? 1 : 0,
       edit: ['transactions', 'projects', 'chat'].includes(module) ? 1 : 0,
       delete: 0,
       scope: ['accounts', 'transactions', 'finance', 'projects'].includes(module) ? 'all' : 'project_related'
@@ -1159,6 +1235,19 @@ function ensureOperationalProjectScopes(db) {
     .run(key, '1', String(Date.now()))
 }
 
+function ensureFinanceProjectCreatePermission(db) {
+  const key = 'ensure_finance_project_create_20260617'
+  if (db.prepare('SELECT value FROM app_config WHERE key = ?').get(key)) return
+  db.prepare(`
+    UPDATE role_permissions
+    SET can_create = 1, can_edit = 1, data_scope = 'all'
+    WHERE module = 'projects'
+      AND role_id IN (SELECT id FROM roles WHERE name = 'finance')
+  `).run()
+  db.prepare('INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(key, '1', String(Date.now()))
+}
+
 function ensureAiToolPermissionRows(db) {
   const allTools = AI_TOOL_REGISTRY.map(tool => tool.name)
   const roles = db.prepare('SELECT id, name FROM roles').all()
@@ -1173,11 +1262,11 @@ function ensureAiToolPermissionRows(db) {
 
 function defaultAiToolAllowed(role, tool) {
   if (role === 'super_admin') return 1
-  if (role === 'admin') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees', 'get_projects', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
-  if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction'].includes(tool) ? 1 : 0
-  if (role === 'warehouse') return ['get_products', 'get_system_stats'].includes(tool) ? 1 : 0
-  if (role === 'engineering') return ['get_projects', 'get_products', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
-  return ['get_system_stats', 'get_projects'].includes(tool) ? 1 : 0
+  if (role === 'admin') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees', 'get_projects', 'get_project_documents', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
+  if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_projects', 'get_project_documents', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction'].includes(tool) ? 1 : 0
+  if (role === 'warehouse') return ['get_products', 'get_projects', 'get_project_documents', 'get_system_stats'].includes(tool) ? 1 : 0
+  if (role === 'engineering') return ['get_projects', 'get_project_documents', 'get_products', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
+  return ['get_system_stats', 'get_projects', 'get_project_documents'].includes(tool) ? 1 : 0
 }
 
 function ensureAiToolRegistry(db) {

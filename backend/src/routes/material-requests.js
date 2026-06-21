@@ -1,5 +1,6 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule, canAccessProjectRecord } from '../utils/permissions.js'
+import { recordInventoryMovement, deductStock, updateMaterialRequestStatus, upsertMaterialIoDocument } from '../services/inventoryCommands.js'
 
 const STATUS_LABELS = {
   requested: '待仓库确认',
@@ -158,53 +159,27 @@ export default function materialRequestRoutes(server, db) {
     if (!items.length) return { success: false, message: '出库申请没有材料明细' }
 
     const note = cleanText(request.body?.note)
-    const productStmt = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?')
-    const deductStockStmt = db.prepare(`
-      UPDATE products
-      SET stock = stock - ?, updated_at = datetime('now', 'localtime')
-      WHERE id = ? AND stock >= ?
-    `)
     const tx = db.transaction(() => {
       for (const item of items) {
         if (!toInt(item.product_id)) continue
         const quantity = Number(item.quantity || 0)
-        const product = productStmt.get(item.product_id)
-        if (!product) throw new Error(`产品「${item.product_name}」不存在`)
-        const result = deductStockStmt.run(quantity, item.product_id, quantity)
-        if (!result.changes) {
-          const current = productStmt.get(item.product_id)
-          throw new Error(`产品「${current?.name || item.product_name}」库存不足，当前 ${current?.stock ?? 0}，申请 ${quantity}`)
-        }
+        const product = deductStock(db, item.product_id, quantity)
         recordInventoryMovement(db, {
-          product_id: item.product_id,
-          project_id: project.id,
-          material_request_id: requestId,
-          movement_type: 'out',
-          quantity_delta: -quantity,
-          quantity_before: product.stock,
-          quantity_after: Number(product.stock || 0) - quantity,
-          unit: product.unit || item.unit || '',
-          reason: '项目出库',
-          note: `${project.name || '项目'} 出库：${item.product_name}`,
-          created_by: request.user.userId
+          product_id: item.product_id, project_id: project.id, material_request_id: requestId,
+          movement_type: 'out', quantity_delta: -quantity,
+          quantity_before: product.stock, quantity_after: Number(product.stock || 0) - quantity,
+          unit: product.unit || item.unit || '', reason: '项目出库',
+          note: `${project.name || '项目'} 出库：${item.product_name}`, created_by: request.user.userId
         })
       }
-      db.prepare(`
-        UPDATE material_requests
-        SET status = 'confirmed', confirmed_by = ?, confirmed_at = datetime('now', 'localtime'),
-            confirm_note = ?, updated_at = datetime('now', 'localtime')
-        WHERE id = ?
-      `).run(request.user.userId, note, requestId)
+      updateMaterialRequestStatus(db, requestId, 'confirmed', request.user.userId, note)
+      upsertMaterialIoDocument(db, project, materialRequest, items, request.user.userId)
 
       const currentProjectStatus = canonicalProjectStatus(project.status)
       const nextStatus = ['briefing_done', 'material_requested'].includes(currentProjectStatus) ? 'material_out' : currentProjectStatus
-      db.prepare(`
-        UPDATE projects
-        SET status = ?, material_out_status = 'done', material_out_note = ?,
-            updated_at = datetime('now', 'localtime')
-        WHERE id = ?
-      `).run(nextStatus, note || `仓库已确认出库申请 #${requestId}`, project.id)
-      upsertMaterialOutDocument(db, project, materialRequest, items, request.user.userId)
+      db.prepare(`UPDATE projects SET status = ?, material_out_status = 'done', material_out_note = ?,
+          updated_at = datetime('now', 'localtime') WHERE id = ?`)
+        .run(nextStatus, note || `仓库已确认出库申请 #${requestId}`, project.id)
       addProjectLog(db, project.id, '材料出库', request.user.username,
         `仓库确认出库申请 #${requestId}，共 ${items.length} 项，出库合计 ${Number(materialRequest.total_amount || 0).toFixed(2)} 元${nextStatus !== currentProjectStatus ? '；工单进入已出库待进场' : ''}`)
     })
@@ -256,7 +231,7 @@ export default function materialRequestRoutes(server, db) {
         note,
         userId: request.user.userId
       })
-      updateMaterialReturnDocument(db, project, latestRequest, returnItems, note, request.user.userId)
+      upsertMaterialIoDocument(db, project, latestRequest, returnItems, request.user.userId)
       const statusResult = db.prepare(`
         UPDATE projects
         SET status = 'material_returned',
@@ -462,127 +437,6 @@ function roundQty(value) {
   return Number.isFinite(n) ? Math.round(n * 10000) / 10000 : 0
 }
 
-function upsertMaterialOutDocument(db, project, requestRow, items, userId) {
-  const toolFee = requestRow.tool_loss_total !== undefined && requestRow.tool_loss_total !== null && requestRow.tool_loss_total !== ''
-    ? requestRow.tool_loss_total
-    : Number(requestRow.tool_total || 0) * 0.1
-  const summary = {
-    material_fee: roundMoney(requestRow.material_total),
-    auxiliary_fee: roundMoney(requestRow.auxiliary_total),
-    tool_fee: roundMoney(toolFee),
-    transport_fee: roundMoney(requestRow.transport_fee),
-    total_cost: roundMoney(requestRow.total_amount)
-  }
-  const confirmedData = {
-    project: {
-      project_name: project.name || '',
-      customer: project.customer || '',
-      phone: project.phone || '',
-      address: project.address_detail || project.address || ''
-    },
-    items: items.map(item => ({
-      category: item.category || groupLabel(item.item_group),
-      item_group: item.item_group || 'material',
-      out_date: item.out_date || '',
-      material_name: item.product_name || '',
-      unit: item.unit || '',
-      out_quantity: Number(item.out_quantity || item.quantity || 0),
-      return_quantity: Number(item.return_quantity || 0),
-      usage_quantity: Number(item.usage_quantity || item.quantity || 0),
-      unit_price: Number(item.unit_price || 0),
-      amount: Number(item.amount || 0),
-      remark: item.remark || item.note || ''
-    })),
-    summary
-  }
-  const parsed = JSON.stringify({ source: 'material_request', request_id: requestRow.id })
-  const confirmed = JSON.stringify(confirmedData)
-  const existing = db.prepare(`
-    SELECT id FROM project_documents
-    WHERE project_id = ? AND document_type = 'material_io'
-    ORDER BY id DESC
-    LIMIT 1
-  `).get(project.id)
-  if (existing) {
-    db.prepare(`
-      UPDATE project_documents
-      SET status = 'confirmed', parsed_data = ?, confirmed_data = ?, warnings = '[]',
-          updated_by = ?, updated_at = datetime('now', 'localtime')
-      WHERE id = ?
-    `).run(parsed, confirmed, userId || 0, existing.id)
-    return existing.id
-  }
-  const result = db.prepare(`
-    INSERT INTO project_documents (
-      project_id, document_type, source_attachment_id, status,
-      parsed_data, confirmed_data, warnings, created_by, updated_by
-    ) VALUES (?, 'material_io', 0, 'confirmed', ?, ?, '[]', ?, ?)
-  `).run(project.id, parsed, confirmed, userId || 0, userId || 0)
-  return result.lastInsertRowid
-}
-
-function updateMaterialReturnDocument(db, project, requestRow, items, note, userId) {
-  const confirmedAt = new Date().toISOString()
-  const summary = {
-    material_fee: roundMoney(items.filter(item => item.item_group === 'material').reduce((sum, item) => sum + item.amount, 0)),
-    auxiliary_fee: roundMoney(items.filter(item => item.item_group === 'auxiliary').reduce((sum, item) => sum + item.amount, 0)),
-    tool_fee: roundMoney(items.filter(item => item.item_group === 'tool').reduce((sum, item) => sum + item.amount, 0)),
-    transport_fee: roundMoney(requestRow.transport_fee),
-    total_cost: roundMoney(items.reduce((sum, item) => sum + item.amount, 0) + Number(requestRow.transport_fee || 0))
-  }
-  const confirmedData = {
-    project: {
-      project_name: project.name || '',
-      customer: project.customer || '',
-      phone: project.phone || '',
-      address: project.address_detail || project.address || ''
-    },
-    items: items.map(item => ({
-      category: item.category || groupLabel(item.item_group),
-      item_group: item.item_group || 'material',
-      out_date: item.out_date || '',
-      material_name: item.product_name || '',
-      unit: item.unit || '',
-      out_quantity: Number(item.out_quantity || 0),
-      usage_quantity: Number(item.usage_quantity || 0),
-      return_quantity: Number(item.return_quantity || 0),
-      difference_quantity: Number(item.difference_quantity || 0),
-      unit_price: Number(item.unit_price || 0),
-      amount: Number(item.amount || 0),
-      remark: item.remark || ''
-    })),
-    summary,
-    return_note: note || '',
-    step_confirmed: true,
-    step_confirmed_at: confirmedAt,
-    step_confirmed_by: userId || 0
-  }
-  const parsed = JSON.stringify({ source: 'material_return', request_id: requestRow.id })
-  const confirmed = JSON.stringify(confirmedData)
-  const existing = db.prepare(`
-    SELECT id FROM project_documents
-    WHERE project_id = ? AND document_type = 'material_io'
-    ORDER BY id DESC
-    LIMIT 1
-  `).get(project.id)
-  if (existing) {
-    db.prepare(`
-      UPDATE project_documents
-      SET status = 'confirmed', parsed_data = ?, confirmed_data = ?, warnings = '[]',
-          updated_by = ?, updated_at = datetime('now', 'localtime')
-      WHERE id = ?
-    `).run(parsed, confirmed, userId || 0, existing.id)
-    return existing.id
-  }
-  const result = db.prepare(`
-    INSERT INTO project_documents (
-      project_id, document_type, source_attachment_id, status,
-      parsed_data, confirmed_data, warnings, created_by, updated_by
-    ) VALUES (?, 'material_io', 0, 'confirmed', ?, ?, '[]', ?, ?)
-  `).run(project.id, parsed, confirmed, userId || 0, userId || 0)
-  return result.lastInsertRowid
-}
-
 function applyMaterialReturnInventory(db, { project, requestRow, items, note, userId }) {
   const productStmt = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?')
   const addStockStmt = db.prepare(`
@@ -681,26 +535,6 @@ function cleanText(value) {
   return String(value || '').trim()
 }
 
-function recordInventoryMovement(db, movement) {
-  db.prepare(`
-    INSERT INTO inventory_movements (
-      product_id, project_id, material_request_id, movement_type,
-      quantity_delta, quantity_before, quantity_after, unit, reason, note, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    movement.product_id,
-    movement.project_id || 0,
-    movement.material_request_id || 0,
-    movement.movement_type,
-    roundQty(movement.quantity_delta),
-    roundQty(movement.quantity_before),
-    roundQty(movement.quantity_after),
-    movement.unit || '',
-    movement.reason || '',
-    movement.note || '',
-    movement.created_by || 0
-  )
-}
 
 function formatQty(value) {
   const n = Number(value || 0)

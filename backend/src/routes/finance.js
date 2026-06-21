@@ -1,5 +1,17 @@
 // 财务总览模块 — 照搬飞书资金总览表逻辑
+import * as XLSX from 'xlsx'
+import crypto from 'crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { dirname, extname, join } from 'path'
+import { fileURLToPath } from 'url'
 import { authMiddleware } from '../middleware/auth.js'
+import { patchXlsxCells } from '../utils/xlsxTemplateExport.js'
+import { getActiveDocumentTemplate } from '../services/documentTemplateService.js'
+
+const LARGE_LEDGER_BODY_LIMIT = 80 * 1024 * 1024
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+const LEDGER_SOURCE_DIR = join(__dirname, '../../data/finance-ledgers')
 
 function requireFinanceAccess(request, reply) {
   if (!['super_admin', 'admin', 'finance'].includes(request.user.role)) {
@@ -290,6 +302,280 @@ export default function financeRoutes(server, db) {
       }
     }
   })
+
+  server.get('/api/finance/ledger/workbooks', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+
+    const rows = db.prepare(`
+      SELECT w.*,
+             COUNT(DISTINCT s.id) as sheet_count,
+             COUNT(DISTINCT c.id) as cell_count,
+             COUNT(DISTINCT cm.id) as comment_count
+      FROM finance_ledger_workbooks w
+      LEFT JOIN finance_ledger_sheets s ON s.workbook_id = w.id
+      LEFT JOIN finance_ledger_cells c ON c.workbook_id = w.id
+      LEFT JOIN finance_ledger_comments cm ON cm.workbook_id = w.id AND COALESCE(cm.comment_text, '') != ''
+      GROUP BY w.id
+      ORDER BY w.id DESC
+      LIMIT 50
+    `).all()
+    return { success: true, data: rows }
+  })
+
+  server.get('/api/finance/ledger/workbooks/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const workbookId = toInt(request.params.id)
+    const workbook = db.prepare('SELECT * FROM finance_ledger_workbooks WHERE id = ?').get(workbookId)
+    if (!workbook) return reply.code(404).send({ success: false, message: '入账登记表不存在' })
+    const sheets = db.prepare('SELECT * FROM finance_ledger_sheets WHERE workbook_id = ? ORDER BY sheet_index ASC, id ASC').all(workbookId)
+    const requestedSheetId = toInt(request.query?.sheet_id)
+    const activeSheet = sheets.find(sheet => Number(sheet.id) === requestedSheetId) || sheets[0]
+    const cells = activeSheet
+      ? db.prepare('SELECT * FROM finance_ledger_cells WHERE sheet_id = ? ORDER BY row_index ASC, col_index ASC').all(activeSheet.id)
+      : []
+    const comments = activeSheet
+      ? db.prepare('SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, "") != "" ORDER BY row_index ASC, col_index ASC').all(activeSheet.id)
+      : []
+    return {
+      success: true,
+      data: {
+        workbook,
+        sheets,
+        active_sheet_id: activeSheet?.id || 0,
+        cells,
+        comments
+      }
+    }
+  })
+
+  server.post('/api/finance/ledger/workbooks/import', { bodyLimit: LARGE_LEDGER_BODY_LIMIT }, async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const { file_name = '', file_data = '' } = request.body || {}
+    if (!file_name || !file_data) return { success: false, message: '请选择入账登记表 Excel 文件' }
+    try {
+      const buffer = decodeData(file_data)
+      if (!buffer.length) return { success: false, message: '文件内容为空' }
+      const workbook = XLSX.read(buffer, {
+        type: 'buffer',
+        cellDates: false,
+        cellFormula: true,
+        cellNF: true,
+        cellText: true,
+        cellStyles: true
+      })
+      if (!workbook.SheetNames.length) return { success: false, message: 'Excel 内没有可读取的工作表' }
+
+      let workbookId = 0
+      let storedPath = ''
+      const tx = db.transaction(() => {
+        const created = db.prepare(`
+          INSERT INTO finance_ledger_workbooks (title, source_file_name, source_file_path, imported_by)
+          VALUES (?, ?, '', ?)
+        `).run(fileNameWithoutExt(file_name), safeText(file_name, 240), request.user.userId)
+        workbookId = created.lastInsertRowid
+        storedPath = saveLedgerSourceWorkbook(workbookId, file_name, buffer)
+        db.prepare('UPDATE finance_ledger_workbooks SET source_file_path = ? WHERE id = ?').run(storedPath, workbookId)
+        const insertSheet = db.prepare(`
+          INSERT INTO finance_ledger_sheets (workbook_id, sheet_index, name, row_count, col_count)
+          VALUES (?, ?, ?, ?, ?)
+        `)
+        const insertCell = db.prepare(`
+          INSERT INTO finance_ledger_cells (
+            workbook_id, sheet_id, row_index, col_index, address, value, raw_value, formula, number_format, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        const insertComment = db.prepare(`
+          INSERT INTO finance_ledger_comments (
+            workbook_id, sheet_id, row_index, col_index, address, comment_text, created_by, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+
+        workbook.SheetNames.forEach((sheetName, sheetIndex) => {
+          const sheet = workbook.Sheets[sheetName]
+          const range = safeDecodeRange(sheet?.['!ref'])
+          const sheetCreated = insertSheet.run(
+            workbookId,
+            sheetIndex,
+            safeText(sheetName, 120),
+            range.row_count,
+            range.col_count
+          )
+          const sheetId = sheetCreated.lastInsertRowid
+          for (const address of Object.keys(sheet || {})) {
+            if (address.startsWith('!')) continue
+            const cell = sheet[address] || {}
+            const pos = XLSX.utils.decode_cell(address)
+            const value = cell.w !== undefined ? String(cell.w) : cell.v !== undefined ? String(cell.v) : ''
+            const rawValue = cell.v === undefined ? '' : String(cell.v)
+            const comments = Array.isArray(cell.c) ? cell.c.map(item => fixMojibakeText(item.t || '')).filter(Boolean).join('\n') : ''
+            if (value !== '' || rawValue !== '' || cell.f || comments) {
+              insertCell.run(workbookId, sheetId, pos.r + 1, pos.c + 1, address, value, rawValue, cell.f || '', cell.z || '', request.user.userId)
+            }
+            if (comments) {
+              insertComment.run(workbookId, sheetId, pos.r + 1, pos.c + 1, address, safeText(comments, 2000), request.user.userId, request.user.userId)
+            }
+          }
+        })
+        db.prepare(`
+          INSERT INTO finance_ledger_logs (workbook_id, action, new_value, created_by)
+          VALUES (?, 'import_workbook', ?, ?)
+        `).run(workbookId, safeText(file_name, 240), request.user.userId)
+      })
+      tx()
+      const detail = buildLedgerWorkbookDetail(db, workbookId)
+      return { success: true, data: detail }
+    } catch (err) {
+      reply.code(400).send({ success: false, message: err.message || '入账登记表导入失败' })
+    }
+  })
+
+  server.get('/api/finance/ledger/workbooks/:id/export', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const workbookId = toInt(request.params.id)
+    const workbook = db.prepare('SELECT * FROM finance_ledger_workbooks WHERE id = ?').get(workbookId)
+    if (!workbook) return reply.code(404).send({ success: false, message: '入账登记表不存在' })
+    const template = workbook.source_file_path ? null : getActiveDocumentTemplate(db, 'finance_ledger')
+    const sourcePath = workbook.source_file_path
+      ? join(LEDGER_SOURCE_DIR, workbook.source_file_path)
+      : template?.source_file_path || ''
+    const sourceName = workbook.source_file_path
+      ? (workbook.source_file_name || workbook.source_file_path)
+      : (template?.source_file_name || template?.title || '入账登记表模板')
+    if (!sourcePath) return reply.code(400).send({ success: false, message: '这份入账登记表没有保存原始 Excel，也没有可用的系统固定模板。' })
+    if (!/\.xlsx$/i.test(sourceName || sourcePath || '')) {
+      return reply.code(400).send({ success: false, message: '原格式导出第一阶段只支持 .xlsx，旧版 .xls 请先另存为 .xlsx 后重新导入。' })
+    }
+    if (!existsSync(sourcePath)) return reply.code(404).send({ success: false, message: '原始 Excel 或系统固定模板文件已丢失。' })
+    try {
+      const sheets = db.prepare('SELECT * FROM finance_ledger_sheets WHERE workbook_id = ? ORDER BY sheet_index ASC').all(workbookId)
+      const sheetMap = new Map(sheets.map(sheet => [sheet.id, sheet]))
+      const cells = db.prepare('SELECT * FROM finance_ledger_cells WHERE workbook_id = ? ORDER BY sheet_id, row_index, col_index').all(workbookId)
+      const updates = cells.map(cell => {
+        const sheet = sheetMap.get(cell.sheet_id)
+        return {
+          sheetName: sheet?.name || '',
+          sheetIndex: Number(sheet?.sheet_index || 0),
+          address: cell.address,
+          value: cell.value
+        }
+      })
+      const output = patchXlsxCells(readFileSync(sourcePath), updates)
+      const fileName = `${fileNameWithoutExt(workbook.source_file_name || workbook.title || sourceName || '入账登记表')}-原格式导出.xlsx`
+      db.prepare(`
+        INSERT INTO finance_ledger_logs (workbook_id, action, new_value, created_by)
+        VALUES (?, 'export_workbook', ?, ?)
+      `).run(workbookId, safeText(fileName, 240), request.user.userId)
+      reply
+        .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        .header('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`)
+        .header('Content-Length', output.length)
+        .send(output)
+    } catch (err) {
+      reply.code(500).send({ success: false, message: err.message || '入账登记表原格式导出失败' })
+    }
+  })
+
+  server.put('/api/finance/ledger/cells/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const cellId = toInt(request.params.id)
+    let cell = cellId ? db.prepare('SELECT * FROM finance_ledger_cells WHERE id = ?').get(cellId) : null
+    if (!cell && cellId) return reply.code(404).send({ success: false, message: '单元格不存在' })
+    if (!cell) {
+      const sheetId = toInt(request.body?.sheet_id)
+      const sheet = db.prepare('SELECT * FROM finance_ledger_sheets WHERE id = ?').get(sheetId)
+      if (!sheet) return reply.code(404).send({ success: false, message: '工作表不存在' })
+      const rowIndex = Math.max(1, toInt(request.body?.row_index))
+      const colIndex = Math.max(1, toInt(request.body?.col_index))
+      const address = XLSX.utils.encode_cell({ r: rowIndex - 1, c: colIndex - 1 })
+      const created = db.prepare(`
+        INSERT INTO finance_ledger_cells (
+          workbook_id, sheet_id, row_index, col_index, address, value, raw_value, formula, number_format, updated_by
+        ) VALUES (?, ?, ?, ?, ?, '', '', '', '', ?)
+      `).run(sheet.workbook_id, sheet.id, rowIndex, colIndex, address, request.user.userId)
+      cell = db.prepare('SELECT * FROM finance_ledger_cells WHERE id = ?').get(created.lastInsertRowid)
+    }
+    const nextValue = safeText(request.body?.value ?? '', 5000)
+    db.prepare(`
+      UPDATE finance_ledger_cells
+      SET value = ?, raw_value = ?, formula = '', updated_by = ?, updated_at = datetime('now', 'localtime')
+      WHERE id = ?
+    `).run(nextValue, nextValue, request.user.userId, cell.id)
+    db.prepare(`
+      INSERT INTO finance_ledger_logs (workbook_id, sheet_id, address, action, old_value, new_value, created_by)
+      VALUES (?, ?, ?, 'update_cell', ?, ?, ?)
+    `).run(cell.workbook_id, cell.sheet_id, cell.address, cell.value || '', nextValue, request.user.userId)
+    return { success: true, data: db.prepare('SELECT * FROM finance_ledger_cells WHERE id = ?').get(cell.id) }
+  })
+
+  server.put('/api/finance/ledger/comments', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const sheetId = toInt(request.body?.sheet_id)
+    const sheet = db.prepare('SELECT * FROM finance_ledger_sheets WHERE id = ?').get(sheetId)
+    if (!sheet) return reply.code(404).send({ success: false, message: '工作表不存在' })
+    const address = safeText(request.body?.address || '', 20).toUpperCase()
+    const pos = address ? XLSX.utils.decode_cell(address) : {
+      r: Math.max(0, toInt(request.body?.row_index) - 1),
+      c: Math.max(0, toInt(request.body?.col_index) - 1)
+    }
+    const normalizedAddress = address || XLSX.utils.encode_cell(pos)
+    const rowIndex = pos.r + 1
+    const colIndex = pos.c + 1
+    const text = safeText(request.body?.comment_text || '', 2000)
+    const existing = db.prepare('SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND row_index = ? AND col_index = ?')
+      .get(sheet.id, rowIndex, colIndex)
+    if (existing) {
+      db.prepare(`
+        UPDATE finance_ledger_comments
+        SET comment_text = ?, updated_by = ?, updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+      `).run(text, request.user.userId, existing.id)
+      db.prepare(`
+        INSERT INTO finance_ledger_logs (workbook_id, sheet_id, address, action, old_value, new_value, created_by)
+        VALUES (?, ?, ?, 'update_comment', ?, ?, ?)
+      `).run(sheet.workbook_id, sheet.id, normalizedAddress, existing.comment_text || '', text, request.user.userId)
+      return { success: true, data: db.prepare('SELECT * FROM finance_ledger_comments WHERE id = ?').get(existing.id) }
+    }
+    const created = db.prepare(`
+      INSERT INTO finance_ledger_comments (
+        workbook_id, sheet_id, row_index, col_index, address, comment_text, created_by, updated_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(sheet.workbook_id, sheet.id, rowIndex, colIndex, normalizedAddress, text, request.user.userId, request.user.userId)
+    db.prepare(`
+      INSERT INTO finance_ledger_logs (workbook_id, sheet_id, address, action, new_value, created_by)
+      VALUES (?, ?, ?, 'create_comment', ?, ?)
+    `).run(sheet.workbook_id, sheet.id, normalizedAddress, text, request.user.userId)
+    return { success: true, data: db.prepare('SELECT * FROM finance_ledger_comments WHERE id = ?').get(created.lastInsertRowid) }
+  })
+}
+
+function buildLedgerWorkbookDetail(db, workbookId) {
+  const workbook = db.prepare('SELECT * FROM finance_ledger_workbooks WHERE id = ?').get(workbookId)
+  const sheets = db.prepare('SELECT * FROM finance_ledger_sheets WHERE workbook_id = ? ORDER BY sheet_index ASC, id ASC').all(workbookId)
+  const activeSheet = sheets[0]
+  const cells = activeSheet ? db.prepare('SELECT * FROM finance_ledger_cells WHERE sheet_id = ? ORDER BY row_index ASC, col_index ASC').all(activeSheet.id) : []
+  const comments = activeSheet ? db.prepare('SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, "") != "" ORDER BY row_index ASC, col_index ASC').all(activeSheet.id) : []
+  return {
+    workbook,
+    sheets,
+    active_sheet_id: activeSheet?.id || 0,
+    cells,
+    comments
+  }
+}
+
+function saveLedgerSourceWorkbook(workbookId, fileName, buffer) {
+  const originalName = safeFileName(fileName || 'ledger.xlsx')
+  const ext = extname(originalName).toLowerCase() || '.xlsx'
+  mkdirSync(LEDGER_SOURCE_DIR, { recursive: true })
+  const storedName = `${workbookId}_${Date.now()}_${crypto.randomBytes(5).toString('hex')}${ext}`
+  writeFileSync(join(LEDGER_SOURCE_DIR, storedName), buffer)
+  return storedName
 }
 
 function getLatestFinanceDocs(db, projectIds) {
@@ -299,7 +585,7 @@ function getLatestFinanceDocs(db, projectIds) {
     SELECT *
     FROM project_documents
     WHERE project_id IN (${placeholders})
-      AND document_type IN ('material_io', 'labor_settlement', 'cost_check', 'finance_settlement')
+      AND document_type IN ('project_payment_request', 'material_io', 'labor_settlement', 'cost_check', 'finance_settlement')
     ORDER BY project_id ASC, document_type ASC, id DESC
   `).all(...projectIds)
   const map = {}
@@ -317,6 +603,7 @@ function getLatestFinanceDocs(db, projectIds) {
 
 function buildProjectProfitRow(project, docs) {
   const material = docs.material_io?.confirmed_data?.summary || {}
+  const payment = docs.project_payment_request?.confirmed_data?.summary || {}
   const labor = docs.labor_settlement?.confirmed_data?.summary || {}
   const cost = docs.cost_check?.confirmed_data?.summary || {}
   const finance = docs.finance_settlement?.confirmed_data?.summary || {}
@@ -326,6 +613,7 @@ function buildProjectProfitRow(project, docs) {
     cost.revenue_amount,
     project.settlement_amount,
     finance.contract_amount,
+    payment.contract_amount,
     project.total_amount
   )
   const laborFee = firstMoney(labor.labor_fee, cost.labor_fee)
@@ -338,7 +626,7 @@ function buildProjectProfitRow(project, docs) {
   const totalCost = firstMoney(cost.total_cost, autoTotalCost)
   const grossProfit = roundMoney(revenueAmount - totalCost)
   const profitRate = revenueAmount ? Number((grossProfit / revenueAmount).toFixed(4)) : 0
-  const receivedAmount = firstMoney(finance.received_amount, project.deposit_amount)
+  const receivedAmount = firstMoney(finance.received_amount, payment.received_amount, project.deposit_amount)
   const unpaidAmount = firstMoney(finance.unpaid_amount, Math.max(revenueAmount - receivedAmount, 0))
   const warnings = []
   if (cost.total_cost && autoTotalCost && Math.abs(Number(cost.total_cost) - autoTotalCost) > 0.01) {
@@ -377,6 +665,58 @@ function firstMoney(...values) {
     if (Number.isFinite(n) && n > 0) return n
   }
   return 0
+}
+
+function decodeData(value = '') {
+  const text = String(value || '')
+  const base64 = text.includes(',') ? text.split(',').pop() : text
+  return Buffer.from(base64, 'base64')
+}
+
+function safeDecodeRange(ref) {
+  if (!ref) return { row_count: 1, col_count: 1 }
+  try {
+    const range = XLSX.utils.decode_range(ref)
+    return {
+      row_count: Math.max(1, range.e.r + 1),
+      col_count: Math.max(1, range.e.c + 1)
+    }
+  } catch {
+    return { row_count: 1, col_count: 1 }
+  }
+}
+
+function fileNameWithoutExt(value = '') {
+  const name = safeText(value, 240) || '入账登记表'
+  return name.replace(/\.[^.]+$/, '') || '入账登记表'
+}
+
+function toInt(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0
+}
+
+function safeText(value, max = 500) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
+}
+
+function safeFileName(name = '') {
+  return String(name || 'file')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180) || 'file'
+}
+
+function fixMojibakeText(value) {
+  const text = String(value || '')
+  if (!/[ÃÂäåæèé]/.test(text)) return text
+  try {
+    const fixed = Buffer.from(text, 'latin1').toString('utf8')
+    return /[\u4e00-\u9fa5]/.test(fixed) ? fixed : text
+  } catch {
+    return text
+  }
 }
 
 function parseJson(value, fallback) {

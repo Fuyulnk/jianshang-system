@@ -1,42 +1,24 @@
 // AI 聊天模块 - 调 DeepSeek API + 工具调用 + 流式返回
 import crypto from 'crypto'
 import { authMiddleware } from '../middleware/auth.js'
-import { canAccessModule, canAccessProjectRecord, requireAssignedAccount } from '../utils/permissions.js'
+import { canAccessModule, requireAssignedAccount } from '../utils/permissions.js'
 import { missingCoreFields, normalizeProjectDraft, parseProjectHandoverText } from '../utils/projectImport.js'
 import { parseFinanceTransactionDraft as parseFinanceTransactionDraftShared } from '../utils/financeParser.js'
 import { AI_TOOL_REGISTRY, buildToolSchemas, toolMeta } from '../ai/toolRegistry.js'
+import {
+  accountFacts,
+  employeeFacts,
+  financeFacts,
+  inventoryFacts,
+  projectDocumentFacts,
+  projectFacts,
+  systemStatsFacts,
+  todayFinanceSummaryFacts,
+  transactionFacts
+} from '../services/businessFacts.js'
 
 const KB_SERVER = 'http://127.0.0.1:18790'
-const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
-
-const PROJECT_STATUS_LABELS = {
-  handover_received: { phase: 1, label: '门店交底待核对', phaseLabel: '门店交底/勘察' },
-  survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '门店交底/勘察' },
-  survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '门店交底/勘察' },
-  recheck_done: { phase: 2, label: '复尺完成待班组交底', phaseLabel: '复尺/班组交底/出库' },
-  briefing_done: { phase: 2, label: '班组交底完成待出库', phaseLabel: '复尺/班组交底/出库' },
-  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/班组交底/出库' },
-  material_out: { phase: 3, label: '已出库待进场', phaseLabel: '进场/施工/验收' },
-  in_progress: { phase: 3, label: '施工中', phaseLabel: '进场/施工/验收' },
-  inspection_done: { phase: 3, label: '验收完成待回库', phaseLabel: '进场/施工/验收' },
-  material_returned: { phase: 4, label: '回库完成待工费结算', phaseLabel: '回库/工费/成本' },
-  labor_settled: { phase: 4, label: '工费结算完成待成本核算', phaseLabel: '回库/工费/成本' },
-  cost_checked: { phase: 4, label: '成本核算完成待财务结算', phaseLabel: '回库/工费/成本' },
-  finance_settled: { phase: 5, label: '财务结算完成待归档', phaseLabel: '财务/归档' },
-  archived: { phase: 5, label: '已归档', phaseLabel: '财务/归档' },
-  repair_requested: { phase: 6, label: '售后待安排', phaseLabel: '售后处理' },
-  repair_assigned: { phase: 6, label: '售后处理中', phaseLabel: '售后处理' },
-  repair_done: { phase: 6, label: '售后已完成', phaseLabel: '售后处理' },
-}
-
-const PROJECT_STATUS_ALIASES = {
-  info_confirmed: 'handover_received',
-  condition_met: 'recheck_done',
-  team_assigned: 'recheck_done',
-  completed: 'inspection_done',
-  settled: 'finance_settled',
-  closed: 'archived'
-}
+const AI_ENDPOINT = process.env.AI_ENDPOINT || 'https://api.deepseek.com/chat/completions'
 
 function getConfig(db) {
   const settings = getSystemSettings(db)
@@ -57,168 +39,45 @@ function getSystemSettings(db) {
   }
 }
 
-function canonicalProjectStatus(status) {
-  return PROJECT_STATUS_ALIASES[status] || status
-}
-
-function projectStatusMeta(status) {
-  const canonical = canonicalProjectStatus(status)
-  return PROJECT_STATUS_LABELS[canonical] || { phase: 0, label: status || '未知状态', phaseLabel: '' }
-}
-
-function projectStatusesForPhase(phase) {
-  const phaseNumber = Number(phase)
-  const statuses = new Set(
-    Object.entries(PROJECT_STATUS_LABELS)
-      .filter(([, meta]) => meta.phase === phaseNumber)
-      .map(([status]) => status)
-  )
-  for (const [legacy, target] of Object.entries(PROJECT_STATUS_ALIASES)) {
-    if (PROJECT_STATUS_LABELS[target]?.phase === phaseNumber) statuses.add(legacy)
-  }
-  return [...statuses]
-}
-
-function projectStatusesForFilter(status) {
-  const canonical = canonicalProjectStatus(status)
-  const statuses = new Set([canonical])
-  for (const [legacy, target] of Object.entries(PROJECT_STATUS_ALIASES)) {
-    if (target === canonical) statuses.add(legacy)
-  }
-  return [...statuses]
-}
-
-function projectNextStep(status) {
-  return {
-    handover_received: '安排首勘人员，补齐门店交底资料后进入待现场勘察。',
-    survey_pending: '首勘人员补齐工勘日期和现场记录，确认首次工勘结论。',
-    survey_done: '安排二勘/复尺人员，补齐复尺或开工条件复核记录。',
-    recheck_done: '确认班组交底单，补齐班组、施工负责人和班组交底日期。',
-    briefing_done: '仓库处理材料出库申请并确认出库。',
-    material_requested: '仓库核对库存，确认材料出库。',
-    material_out: '工程/施工负责人确认开工日期、预计完工日期和进场人员。',
-    in_progress: '收尾验收人员确认完工日期、验收日期和验收通过结论。',
-    inspection_done: '仓管填写并确认材料回库单。',
-    material_returned: '财务/工程确认施工班组工费结算单。',
-    labor_settled: '财务确认完工成本核算表。',
-    cost_checked: '财务确认财务结算/归档凭证，收款状态需为已收齐。',
-    finance_settled: '检查关键单据链完整后归档。',
-    archived: '主工程已归档；后续售后单独发起。',
-    repair_requested: '安排售后维修负责人。',
-    repair_assigned: '记录售后处理结果并关闭售后。',
-    repair_done: '售后已完成。'
-  }[status] || '按项目工单当前状态补齐缺失资料。'
-}
-
 const TOOLS = buildToolSchemas()
 
 // ====== 工具执行器 ======
-function executeTool(name, args, db, user) {
+export function executeTool(name, args, db, user) {
   switch (name) {
     case 'get_accounts': {
-      const data = db.prepare('SELECT id, name, type, initial_balance, current_balance FROM accounts ORDER BY id').all()
-      return JSON.stringify({ success: true, data })
+      return JSON.stringify(accountFacts(db, user))
     }
 
     case 'get_transactions': {
-      const days = args.days || 30
-      let sql = "SELECT t.*, a.name as account_name FROM transactions t LEFT JOIN accounts a ON t.account_id = a.id WHERE t.created_at >= datetime('now', 'localtime', '-' || ? || ' days')"
-      const params = [days]
-      if (args.type) {
-        sql += ' AND t.type = ?'
-        params.push(args.type)
-      }
-      sql += ' ORDER BY t.created_at DESC LIMIT 100'
-      const data = db.prepare(sql).all(...params)
-      return JSON.stringify({ success: true, count: data.length, data })
+      return JSON.stringify(transactionFacts(db, user, args))
     }
 
     case 'get_today_summary': {
-      const summary = db.prepare(`
-        SELECT
-          COUNT(*) as total_count,
-          COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END), 0) as total_income,
-          COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0) as total_expense
-        FROM transactions WHERE date(created_at) = date('now')
-      `).get()
-      return JSON.stringify({ success: true, data: summary })
+      return JSON.stringify(todayFinanceSummaryFacts(db, user))
     }
 
     case 'get_products': {
-      const data = db.prepare('SELECT id, name, category, spec, unit, unit_price, price_unit, stock, min_stock, is_test FROM products ORDER BY name ASC, spec ASC, id ASC').all()
-        .map(product => ({
-          ...product,
-          display_name: productDisplayName(product),
-          sku_label: productSkuLabel(product),
-          stock_status: Number(product.stock || 0) <= Number(product.min_stock || 0) ? 'low' : 'normal',
-          is_test: product.is_test ? 1 : 0
-        }))
-      return JSON.stringify({ success: true, data })
+      return JSON.stringify(inventoryFacts(db, user, args))
     }
 
     case 'get_employees': {
-      const data = db.prepare('SELECT id, name, department, position, phone, status FROM employees ORDER BY id').all()
-      return JSON.stringify({ success: true, data })
+      return JSON.stringify(employeeFacts(db, user, args))
     }
 
     case 'get_projects': {
-      let sql = `
-        SELECT p.id, p.name, p.customer, p.phone, p.address, p.status,
-               p.total_amount, p.deposit_amount, p.settlement_amount,
-               p.manager_user_id, p.assignee_user_id, p.survey_user_id, p.recheck_user_id, p.final_inspection_user_id,
-               p.crew_member_user_ids, p.created_by, p.created_at, p.updated_at,
-               mu.username as manager_username, mu.real_name as manager_real_name,
-               au.username as assignee_username, au.real_name as assignee_real_name
-        FROM projects p
-        LEFT JOIN users mu ON p.manager_user_id = mu.id
-        LEFT JOIN users au ON p.assignee_user_id = au.id
-        WHERE 1=1
-      `
-      const params = []
-      if (args.phase) {
-        const statuses = projectStatusesForPhase(args.phase)
-        if (statuses.length) {
-          sql += ` AND p.status IN (${statuses.map(() => '?').join(',')})`
-          params.push(...statuses)
-        }
-      }
-      if (args.status) {
-        const statuses = projectStatusesForFilter(args.status).filter(status => PROJECT_STATUS_LABELS[canonicalProjectStatus(status)])
-        if (statuses.length) {
-          sql += ` AND p.status IN (${statuses.map(() => '?').join(',')})`
-          params.push(...statuses)
-        }
-      }
-      sql += ' ORDER BY p.created_at DESC LIMIT 100'
-      const data = db.prepare(sql).all(...params)
-        .filter(project => canAccessProjectRecord(db, user, project))
-        .map(p => ({
-          ...p,
-          raw_status: p.status,
-          status: canonicalProjectStatus(p.status),
-          status_label: projectStatusMeta(p.status).label,
-          phase: projectStatusMeta(p.status).phase,
-          phase_label: projectStatusMeta(p.status).phaseLabel,
-          next_step: projectNextStep(canonicalProjectStatus(p.status))
-        }))
-      return JSON.stringify({ success: true, count: data.length, data })
+      return JSON.stringify(projectFacts(db, user, args))
+    }
+
+    case 'get_project_documents': {
+      return JSON.stringify(projectDocumentFacts(db, user, args.project_id))
     }
 
     case 'get_project_profit_summary': {
-      if (!canAccessModule(db, user, 'finance', 'can_view')) {
-        return JSON.stringify({ success: false, message: '没有查看项目利润粗算的权限' })
-      }
-      const limit = Math.min(Math.max(Number(args.limit || 20), 1), 50)
-      const data = buildAiProjectProfitSummary(db, limit)
-      return JSON.stringify({ success: true, ...data })
+      return JSON.stringify(financeFacts(db, user, args))
     }
 
     case 'get_system_stats': {
-      const accounts = db.prepare('SELECT COUNT(*) as c FROM accounts').get().c
-      const todayTx = db.prepare("SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE date(created_at) = date('now')").get().total
-      const products = db.prepare('SELECT COUNT(*) as c FROM products').get().c
-      const employees = db.prepare('SELECT COUNT(*) as c FROM employees WHERE status = ?').get('active')?.c || 0
-      return JSON.stringify({ success: true, data: { accounts, today_transactions: todayTx, products, employees } })
+      return JSON.stringify(systemStatsFacts(db, user))
     }
 
     case 'parse_finance_transaction': {
@@ -317,178 +176,6 @@ function executeTool(name, args, db, user) {
       return JSON.stringify({ success: true, id: result.lastInsertRowid, message: `已创建项目工单「${draft.name}」` })
     }
   }
-}
-
-function productDisplayName(item) {
-  const name = String(item?.name || '').trim()
-  const spec = String(item?.spec || '').trim()
-  if (!spec || name.includes(spec)) return name
-  return `${name}${spec}`
-}
-
-function productSkuLabel(item) {
-  const unit = String(item?.unit || '').trim()
-  const stock = formatQty(item?.stock || 0)
-  return `${productDisplayName(item)}${unit ? `｜${unit}` : ''}｜${stock}`
-}
-
-function formatQty(value) {
-  const n = Number(value || 0)
-  return Number.isInteger(n) ? String(n) : n.toFixed(2)
-}
-
-function buildAiProjectProfitSummary(db, limit) {
-  const projects = db.prepare(`
-    SELECT id, name, customer, status, total_amount, deposit_amount, settlement_amount, updated_at
-    FROM projects
-    WHERE status IN ('material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived')
-    ORDER BY updated_at DESC, id DESC
-    LIMIT ?
-  `).all(limit)
-  const docs = getLatestProjectFinanceDocs(db, projects.map(item => item.id))
-  const rows = projects.map(project => projectProfitRow(project, docs[project.id] || {}))
-  const totals = rows.reduce((sum, row) => {
-    sum.revenue_amount += row.revenue_amount
-    sum.total_cost += row.total_cost
-    sum.gross_profit += row.gross_profit
-    sum.unpaid_amount += row.unpaid_amount
-    if (row.warnings.length) sum.warning_count += 1
-    return sum
-  }, { project_count: rows.length, revenue_amount: 0, total_cost: 0, gross_profit: 0, unpaid_amount: 0, warning_count: 0 })
-  totals.revenue_amount = roundMoney(totals.revenue_amount)
-  totals.total_cost = roundMoney(totals.total_cost)
-  totals.gross_profit = roundMoney(totals.gross_profit)
-  totals.unpaid_amount = roundMoney(totals.unpaid_amount)
-  totals.profit_rate = totals.revenue_amount ? Number((totals.gross_profit / totals.revenue_amount).toFixed(4)) : 0
-  return { totals, data: rows }
-}
-
-function getLatestProjectFinanceDocs(db, projectIds) {
-  if (!projectIds.length) return {}
-  const rows = db.prepare(`
-    SELECT *
-    FROM project_documents
-    WHERE project_id IN (${projectIds.map(() => '?').join(',')})
-      AND document_type IN ('material_io', 'labor_settlement', 'cost_check', 'finance_settlement')
-    ORDER BY project_id ASC, document_type ASC, id DESC
-  `).all(...projectIds)
-  const map = {}
-  for (const row of rows) {
-    if (!map[row.project_id]) map[row.project_id] = {}
-    if (!map[row.project_id][row.document_type]) {
-      map[row.project_id][row.document_type] = parseJsonSafe(row.confirmed_data, {})
-    }
-  }
-  return map
-}
-
-function projectProfitRow(project, docs) {
-  const material = docs.material_io?.summary || {}
-  const labor = docs.labor_settlement?.summary || {}
-  const cost = docs.cost_check?.summary || {}
-  const finance = docs.finance_settlement?.summary || {}
-  const revenue = firstMoney(finance.delivery_revenue, cost.revenue_amount, project.settlement_amount, finance.contract_amount, project.total_amount)
-  const laborFee = firstMoney(labor.labor_fee, cost.labor_fee)
-  const materialFee = firstMoney(material.material_fee, cost.material_fee)
-  const auxiliaryFee = firstMoney(material.auxiliary_fee, cost.auxiliary_fee)
-  const toolFee = firstMoney(material.tool_fee, cost.tool_fee)
-  const transportFee = firstMoney(material.transport_fee, cost.transport_fee)
-  const autoCost = roundMoney(laborFee + materialFee + auxiliaryFee + toolFee + transportFee + firstMoney(cost.other_fee))
-  const totalCost = firstMoney(cost.total_cost, autoCost)
-  const grossProfit = roundMoney(revenue - totalCost)
-  const unpaidAmount = firstMoney(finance.unpaid_amount, Math.max(revenue - firstMoney(finance.received_amount, project.deposit_amount), 0))
-  const warnings = []
-  if (grossProfit < 0) warnings.push('毛利为负')
-  if (unpaidAmount > 0) warnings.push('存在尾款/未收')
-  if (revenue && !docs.finance_settlement) warnings.push('缺财务结算/归档凭证')
-  return {
-    project_id: project.id,
-    project_name: project.name,
-    customer: project.customer,
-    status: canonicalProjectStatus(project.status),
-    status_label: projectStatusMeta(project.status).label,
-    revenue_amount: roundMoney(revenue),
-    total_cost: roundMoney(totalCost),
-    gross_profit: roundMoney(grossProfit),
-    profit_rate: revenue ? Number((grossProfit / revenue).toFixed(4)) : 0,
-    unpaid_amount: roundMoney(unpaidAmount),
-    payment_status: finance.payment_status || (unpaidAmount > 0 ? 'partial' : revenue ? 'paid' : 'pending'),
-    warnings
-  }
-}
-
-function firstMoney(...values) {
-  for (const value of values) {
-    const n = Number(value)
-    if (Number.isFinite(n) && n > 0) return n
-  }
-  return 0
-}
-
-function roundMoney(value) {
-  const n = Number(value || 0)
-  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0
-}
-
-function loadFinanceAccountAliases(db) {
-  try {
-    return db.prepare(`
-      SELECT alias, account_name
-      FROM finance_account_aliases
-      WHERE enabled = 1
-      ORDER BY length(alias) DESC, id ASC
-    `).all()
-  } catch {
-    return []
-  }
-}
-
-function findAccountByName(accounts, targetName) {
-  const target = normalizeAccountName(targetName)
-  return accounts.find(item => {
-    const current = normalizeAccountName(item.name)
-    return item.name === targetName || current === target || current.includes(target) || target.includes(current)
-  }) || null
-}
-
-function normalizeAccountName(value) {
-  return String(value || '').replace(/[·\s　]/g, '')
-}
-
-function inferFinanceCategory(text, type) {
-  if (/退款|退货退款/.test(text)) return '退款'
-  if (/工资|结算工资/.test(text)) return type === 'income' ? '工资款' : '工人工资'
-  if (/预支|借支/.test(text)) return /差旅|出差/.test(text) ? '差旅' : '借支'
-  if (/报销/.test(text)) return '报销'
-  if (/货拉拉|打车|加油|停车|高速/.test(text)) return '交通费'
-  if (/手续费|代发/.test(text)) return '手续费'
-  if (/个税|社保|税费/.test(text)) return '税费'
-  if (/茶叶|招待|应酬/.test(text)) return '应酬费'
-  if (/货款|材料|涂料|底漆|面漆|结算单/.test(text)) return type === 'income' ? '货款' : '材料采购'
-  if (/返点|渠道返款/.test(text)) return '返点支出'
-  if (/装修|电线|工地/.test(text)) return type === 'income' ? '项目收入' : '装修费'
-  if (/生活费/.test(text)) return '生活费'
-  return type === 'income' ? '项目收入' : '其他'
-}
-
-function inferCounterparty(text) {
-  const patterns = [
-    /(?:给|付给|支付给|收到|收)([^，,。；;\s]{2,12})/,
-    /对方[:：]\s*([^，,。；;\s]{2,12})/
-  ]
-  for (const pattern of patterns) {
-    const match = text.match(pattern)
-    if (match?.[1]) return match[1].replace(/[0-9.]/g, '').trim()
-  }
-  return ''
-}
-
-function cleanFinanceDescription(text) {
-  return text
-    .replace(/[0-9]+(?:\.[0-9]{1,2})?/g, '')
-    .replace(/收入|收到|收款|支付|支出|付款|扣款/g, '')
-    .trim()
-    .slice(0, 120)
 }
 
 // ====== 知识库搜索 ======
@@ -769,13 +456,18 @@ async function handleAiChat(request, reply, db) {
         let args = {}
         try { args = JSON.parse(tc.function.arguments) } catch {}
         const meta = toolMeta(tc.function.name)
+        const toolStartedAt = Date.now()
         const resultData = executeTool(tc.function.name, args, db, user)
+        const parsedToolResult = parseJsonSafe(resultData, {})
         logAiAudit(db, user, {
           actionType: meta.action_type || 'tool_read',
           toolName: tc.function.name,
           requestSummary: args,
           resultSummary: resultData,
+          status: parsedToolResult.success === false ? 'failed' : 'ok',
+          errorMessage: parsedToolResult.success === false ? parsedToolResult.message || '工具调用失败' : '',
           model: config.model,
+          durationMs: Date.now() - toolStartedAt,
           agentId: agent.id,
           contextKey: ctxKey,
           riskLevel: meta.risk_level,

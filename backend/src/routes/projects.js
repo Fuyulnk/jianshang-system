@@ -6,9 +6,11 @@ const STATUS_LABELS = {
   handover_received: { phase: 1, label: '门店交底待核对', phaseLabel: '门店交底/勘察' },
   survey_pending: { phase: 1, label: '待现场勘察', phaseLabel: '门店交底/勘察' },
   survey_done: { phase: 1, label: '勘察完成待复尺', phaseLabel: '门店交底/勘察' },
-  recheck_done: { phase: 2, label: '复尺完成待班组交底', phaseLabel: '复尺/班组交底/出库' },
-  briefing_done: { phase: 2, label: '班组交底完成待出库', phaseLabel: '复尺/班组交底/出库' },
-  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '复尺/班组交底/出库' },
+  recheck_done: { phase: 2, label: '复尺完成待收款单', phaseLabel: '复尺/收款/班组交底' },
+  pre_entry_payment_pending: { phase: 2, label: '待财务处理项目结算收款单', phaseLabel: '复尺/收款/班组交底' },
+  payment_received: { phase: 2, label: '进场款已收，待班组交底', phaseLabel: '复尺/收款/班组交底' },
+  briefing_done: { phase: 2, label: '班组交底完成待出库', phaseLabel: '班组交底/出库' },
+  material_requested: { phase: 2, label: '已申请出库', phaseLabel: '班组交底/出库' },
   material_out: { phase: 3, label: '已出库待进场', phaseLabel: '进场/施工/验收' },
   in_progress: { phase: 3, label: '施工中', phaseLabel: '进场/施工/验收' },
   inspection_done: { phase: 3, label: '验收完成待回库', phaseLabel: '进场/施工/验收' },
@@ -24,8 +26,8 @@ const STATUS_LABELS = {
 
 const LEGACY_STATUS_ALIASES = {
   info_confirmed: 'handover_received',
-  condition_met: 'recheck_done',
-  team_assigned: 'recheck_done',
+  condition_met: 'pre_entry_payment_pending',
+  team_assigned: 'payment_received',
   completed: 'inspection_done',
   settled: 'finance_settled',
   closed: 'archived'
@@ -34,8 +36,10 @@ const LEGACY_STATUS_ALIASES = {
 const PROJECT_TRANSITIONS = {
   handover_received: { next: 'survey_pending', roles: ['super_admin', 'admin', 'engineering'], required: ['handover', 'survey_assignee'] },
   survey_pending: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], assignedOnly: true, required: ['survey'] },
-  survey_done: { next: 'recheck_done', roles: ['super_admin', 'admin', 'engineering'], assignedOnly: true, required: ['recheck_assignee', 'condition_note'] },
-  recheck_done: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee', 'briefing_date'] },
+  survey_done: { next: 'pre_entry_payment_pending', roles: ['super_admin', 'admin', 'engineering'], assignedOnly: true, required: ['recheck_assignee', 'condition_note'] },
+  recheck_done: { next: 'pre_entry_payment_pending', roles: ['super_admin', 'admin', 'engineering', 'finance'], required: ['condition_note'] },
+  pre_entry_payment_pending: { next: 'payment_received', roles: ['super_admin'], emergencyOnly: true },
+  payment_received: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee', 'briefing_date'] },
   material_out: { next: 'in_progress', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['start_date', 'expected_end_date', 'onsite_team'] },
   in_progress: { next: 'inspection_done', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['final_inspection_assignee', 'end_date', 'acceptance_date', 'construction_note', 'inspection_pass'] },
   inspection_done: { next: 'material_returned', roles: ['super_admin', 'admin', 'warehouse', 'engineering'], required: ['end_date', 'material_return'] },
@@ -52,7 +56,9 @@ const STATUS_HANDOFFS = {
   handover_received: { current: '总监/工程部', next: '工程部/监理' },
   survey_pending: { current: '工程部/监理', next: '总监/工程部' },
   survey_done: { current: '总监/工程部', next: '总监/工程部' },
-  recheck_done: { current: '总监/工程部', next: '仓管' },
+  recheck_done: { current: '财务', next: '总监签字/门店收款确认' },
+  pre_entry_payment_pending: { current: '财务', next: '总监签字/门店收款确认' },
+  payment_received: { current: '总监/工程部', next: '仓管' },
   briefing_done: { current: '仓管', next: '仓管确认出库后转工程/监理' },
   material_requested: { current: '仓管', next: '工程/监理' },
   material_out: { current: '工程/监理/施工负责人', next: '工程/监理' },
@@ -67,6 +73,7 @@ const STATUS_HANDOFFS = {
 
 const ARCHIVE_REQUIRED_DOCUMENTS = [
   ['survey_initial', '首次工勘表'],
+  ['project_payment_request', '项目结算收款单'],
   ['briefing', '班组交底单'],
   ['material_io', '材料回库单'],
   ['completion_inspection', '完工验收质检表'],
@@ -97,7 +104,7 @@ export default function projectRoutes(server, db) {
       SELECT id, name, assignee_user_id, crew_member_user_ids, status, start_date, expected_end_date
       FROM projects
       WHERE status IN (
-        'recheck_done', 'team_assigned', 'briefing_done', 'material_requested',
+        'recheck_done', 'team_assigned', 'pre_entry_payment_pending', 'payment_received', 'briefing_done', 'material_requested',
         'material_out', 'in_progress', 'inspection_done'
       )
       ORDER BY updated_at DESC
@@ -119,7 +126,9 @@ export default function projectRoutes(server, db) {
   server.get('/api/projects', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
     const userId = request.user.userId
-    const { status, phase, keyword } = request.query
+    const { status, phase } = request.query
+    const keyword = String(request.query.keyword || request.query.query || '').trim()
+    const limit = Math.min(Math.max(Number(request.query.limit || 200), 1), 300)
 
     if (!canProjectAccess(db, request.user, 'can_view')) {
       reply.code(403).send({ success: false, message: '无权限查看项目工单' })
@@ -187,13 +196,22 @@ export default function projectRoutes(server, db) {
       }
     }
 
-    sql += ' ORDER BY p.created_at DESC LIMIT 200'
-    const list = db.prepare(sql).all(...params)
+    sql += ' ORDER BY p.created_at DESC LIMIT ?'
+    const list = db.prepare(sql).all(...params, limit)
 
     // 附加状态标签
     const enriched = list.map(decorateProjectStatus)
 
-    return { success: true, data: enriched }
+    return {
+      success: true,
+      data: enriched,
+      meta: {
+        count: enriched.length,
+        query: keyword,
+        status: status || '',
+        phase: phase || ''
+      }
+    }
   })
 
   // 创建
@@ -423,8 +441,8 @@ function decorateProjectStatus(project) {
   const canonicalStatus = canonicalProjectStatus(rawStatus)
   const meta = { ...statusMeta(rawStatus) }
   const handoff = handoffForProject(project, canonicalStatus)
-  if (canonicalStatus === 'recheck_done' && /无需复尺|跳过复尺/.test(String(project.condition_note || ''))) {
-    meta.label = '无需复尺，待班组交底'
+  if (canonicalStatus === 'pre_entry_payment_pending' && /无需复尺|跳过复尺/.test(String(project.condition_note || ''))) {
+    meta.label = '无需复尺，待财务处理收款单'
   }
   return {
     ...project,
@@ -555,6 +573,8 @@ function handoffForProject(project, status) {
   if (status === 'handover_received') handoff.next = `首勘：${displayAssigned(project.survey_real_name, project.survey_username)}`
   if (status === 'survey_pending') handoff.current = `首勘：${displayAssigned(project.survey_real_name, project.survey_username)}`
   if (status === 'survey_done') handoff.current = `二勘/复尺：${displayAssigned(project.recheck_real_name, project.recheck_username)}`
+  if (status === 'recheck_done') handoff.current = '财务：制作项目结算收款单'
+  if (status === 'pre_entry_payment_pending') handoff.current = '财务：制作项目结算收款单并确认进场款'
   if (status === 'in_progress') handoff.next = `收尾验收：${displayAssigned(project.final_inspection_real_name, project.final_inspection_username)}`
   return handoff
 }

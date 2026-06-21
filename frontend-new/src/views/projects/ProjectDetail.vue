@@ -66,6 +66,16 @@
               <el-button v-if="currentDocumentKey" plain @click="openCurrentDocument">
                 打开当前单据
               </el-button>
+              <el-button
+                v-if="canSkipRecheck"
+                type="warning"
+                size="large"
+                plain
+                :loading="saving"
+                @click="skipSurveyRecheck"
+              >
+                无需复尺，直接进入收款单
+              </el-button>
               <el-button v-if="project.status === 'archived' && canStartRepair && !warrantyInfo.expired" type="warning" plain @click="advanceStatus('repair_requested')">
                 发起售后单
               </el-button>
@@ -188,7 +198,7 @@
               <strong>先核对门店交底资料。</strong>
               <span>客户、电话、地址、施工空间、材料意向、注意事项和门店接单人补齐后，才能安排现场勘察。</span>
             </div>
-            <el-form-item label="首勘人员">
+            <el-form-item label="首勘人员" required>
               <el-select v-model="editForm.survey_user_id" clearable filterable style="width:100%" placeholder="选择负责首勘的监理">
                 <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
               </el-select>
@@ -198,33 +208,51 @@
           <template v-else-if="project.status === 'survey_pending'">
             <el-row :gutter="16">
               <el-col :span="8">
-                <el-form-item label="首勘人员">
+                <el-form-item label="首勘人员" required>
                   <el-select v-model="editForm.survey_user_id" clearable filterable style="width:100%" placeholder="选择首勘人员">
                     <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
                   </el-select>
                 </el-form-item>
               </el-col>
-              <el-col :span="8"><el-form-item label="工勘日期"><el-input v-model="editForm.survey_date" placeholder="2026-01-01" /></el-form-item></el-col>
-              <el-col :span="8"><el-form-item label="工勘记录"><el-input v-model="editForm.survey_report" placeholder="现场面积、基层情况、特殊工艺等" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="工勘日期" required><el-input v-model="editForm.survey_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="工勘记录" required><el-input v-model="editForm.survey_report" placeholder="现场面积、基层情况、特殊工艺等" /></el-form-item></el-col>
             </el-row>
           </template>
 
           <template v-else-if="project.status === 'survey_done'">
-            <el-form-item label="二勘/复尺人员">
+            <div class="stage-hint">
+              <strong>当前在复尺判断节点。</strong>
+              <span>需要复尺时打开“二次勘察表”上传记录并确认；无需复尺时点击明亮按钮，填写原因后直接交给财务做项目结算收款单。</span>
+            </div>
+            <el-form-item label="二勘/复尺人员" required>
               <el-select v-model="editForm.recheck_user_id" clearable filterable style="width:100%" placeholder="选择负责二勘/复尺的监理">
                 <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
               </el-select>
             </el-form-item>
-            <el-form-item label="复尺/开工条件复核"><el-input v-model="editForm.condition_note" type="textarea" :rows="2" placeholder="复尺面积、现场是否具备进场条件、水电/保护/基层等情况" /></el-form-item>
+            <el-form-item label="复尺/开工条件复核" required><el-input v-model="editForm.condition_note" type="textarea" :rows="2" placeholder="复尺面积、现场是否具备进场条件、水电/保护/基层等情况" /></el-form-item>
           </template>
 
           <template v-else-if="project.status === 'recheck_done'">
+            <div class="stage-hint">
+              <strong>复尺已完成，等待财务处理项目结算收款单。</strong>
+              <span>请打开“项目结算收款单”，由财务核对 90% 进场款，确认后才能进入班组交底。</span>
+            </div>
+          </template>
+
+          <template v-else-if="project.status === 'pre_entry_payment_pending'">
+            <div class="stage-hint">
+              <strong>等待财务制作并确认项目结算收款单。</strong>
+              <span>财务根据工勘/复尺结果制作收款单，交总监打印签字，门店收取进场前 90% 款项后确认进入班组交底。</span>
+            </div>
+          </template>
+
+          <template v-else-if="project.status === 'payment_received'">
             <el-row :gutter="16">
               <el-col :span="8">
                 <el-form-item label="班组长"><el-input v-model="editForm.team_leader" placeholder="班组长姓名" /></el-form-item>
               </el-col>
               <el-col :span="8">
-                <el-form-item label="施工负责人">
+                <el-form-item label="施工负责人" required>
                   <el-select v-model="editForm.assignee_user_id" clearable filterable style="width:100%" placeholder="选择施工负责人">
                     <el-option v-for="u in assignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
                   </el-select>
@@ -244,7 +272,7 @@
                 </el-option>
               </el-select>
             </el-form-item>
-            <el-form-item label="班组交底日期"><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
+            <el-form-item label="班组交底日期" required><el-input v-model="editForm.briefing_date" placeholder="2026-01-01" /></el-form-item>
           </template>
 
           <template v-else-if="project.status === 'briefing_done'">
@@ -263,7 +291,7 @@
 
           <template v-else-if="project.status === 'material_out'">
             <el-row :gutter="16">
-              <el-col :span="8"><el-form-item label="实际进场/开工日期"><el-input v-model="editForm.start_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="实际进场/开工日期" required><el-input v-model="editForm.start_date" placeholder="2026-01-01" /></el-form-item></el-col>
               <el-col :span="8">
                 <el-form-item label="人员状态">
                   <el-select v-model="editForm.crew_status" style="width:100%">
@@ -275,12 +303,12 @@
                   </el-select>
                 </el-form-item>
               </el-col>
-              <el-col :span="8"><el-form-item label="预计完工"><el-input v-model="editForm.expected_end_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="预计完工" required><el-input v-model="editForm.expected_end_date" placeholder="2026-01-01" /></el-form-item></el-col>
             </el-row>
             <el-row :gutter="16">
               <el-col :span="8"><el-form-item label="班组长"><el-input v-model="editForm.team_leader" placeholder="班组长姓名" /></el-form-item></el-col>
               <el-col :span="8">
-                <el-form-item label="施工负责人">
+                <el-form-item label="施工负责人" required>
                   <el-select v-model="editForm.assignee_user_id" clearable filterable style="width:100%" placeholder="选择施工负责人">
                     <el-option v-for="u in assignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
                   </el-select>
@@ -300,10 +328,10 @@
           <template v-else-if="project.status === 'in_progress'">
             <el-alert class="stage-alert" type="info" :closable="false" show-icon title="施工过程记录 V1 先做轻量备注；照片打卡、水印相机和每日记录放到后续 V2。" />
             <el-row :gutter="16">
-              <el-col :span="8"><el-form-item label="完工日期"><el-input v-model="editForm.end_date" placeholder="2026-01-01" /></el-form-item></el-col>
-              <el-col :span="8"><el-form-item label="验收日期"><el-input v-model="editForm.acceptance_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="完工日期" required><el-input v-model="editForm.end_date" placeholder="2026-01-01" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="验收日期" required><el-input v-model="editForm.acceptance_date" placeholder="2026-01-01" /></el-form-item></el-col>
               <el-col :span="8">
-                <el-form-item label="验收结论">
+                <el-form-item label="验收结论" required>
                   <el-select v-model="inspectionResult" style="width:100%">
                     <el-option label="验收通过，允许进入回库" value="pass" />
                     <el-option label="需要整改，暂不回库" value="repair" />
@@ -311,12 +339,12 @@
                 </el-form-item>
               </el-col>
             </el-row>
-            <el-form-item label="收尾验收人员">
+            <el-form-item label="收尾验收人员" required>
               <el-select v-model="editForm.final_inspection_user_id" clearable filterable style="width:100%" placeholder="选择负责收尾验收的监理">
                 <el-option v-for="u in engineeringAssignees" :key="u.id" :label="userOptionLabel(u)" :value="u.id" />
               </el-select>
             </el-form-item>
-            <el-form-item label="施工/验收记录"><el-input v-model="editForm.construction_note" type="textarea" :rows="3" placeholder="施工进度、现场问题、整改说明、验收结论" /></el-form-item>
+            <el-form-item label="施工/验收记录" required><el-input v-model="editForm.construction_note" type="textarea" :rows="3" placeholder="施工进度、现场问题、整改说明、验收结论" /></el-form-item>
           </template>
 
           <template v-else-if="project.status === 'inspection_done'">
@@ -385,6 +413,15 @@
           <el-button v-if="project.status === 'archived' && canStartRepair && !warrantyInfo.expired" type="warning" plain @click="advanceStatus('repair_requested')">
             发起售后单
           </el-button>
+          <el-button
+            v-if="canSkipRecheck"
+            type="warning"
+            plain
+            :loading="saving"
+            @click="skipSurveyRecheck"
+          >
+            无需复尺，直接进入收款单
+          </el-button>
           <el-button plain @click="showEdit = true" v-if="canEditProject">编辑完整资料</el-button>
         </div>
       </el-card>
@@ -398,6 +435,29 @@
         @chain-updated="handleDeliveryChainUpdated"
         @project-updated="handleAttachmentsUpdated"
       />
+      <el-card class="trace-card" shadow="never">
+        <template #header>
+          <div class="summary-header">
+            <span><el-icon><Edit /></el-icon> 流程回溯</span>
+            <el-tag size="small" type="info">只读</el-tag>
+          </div>
+        </template>
+        <div class="trace-list">
+          <article v-for="step in traceSteps" :key="step.key" class="trace-item" :class="{ confirmed: step.status === '已确认' }">
+            <div class="trace-main">
+              <strong>{{ step.stage }} · {{ step.label }}</strong>
+              <span>{{ step.status || '缺失' }}{{ step.document_version_count ? ` · ${step.document_version_count} 版` : '' }}</span>
+            </div>
+            <div class="trace-meta">
+              <span v-if="step.document_versions?.length">
+                最新：{{ step.document_versions[0].source_file_name || '系统表格' }} · {{ step.document_versions[0].uploader_name || '未知人员' }}
+              </span>
+              <span v-if="step.attachments?.length">附件：{{ step.attachments.map(file => file.original_name).slice(0, 2).join('、') }}</span>
+              <span v-if="step.summary?.length">摘要：{{ step.summary.map(item => `${item[0]} ${item[1] || '未填'}`).slice(0, 2).join('；') }}</span>
+            </div>
+          </article>
+        </div>
+      </el-card>
       <ProjectDocumentImportPanel :project="project" :can-apply="canManageProject" @applied="fetchDetail" />
 
       <MaterialRequestPanel
@@ -704,7 +764,7 @@
 import { getAuthToken } from '../../utils/authSession'
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Tools, House, Select, Edit, Service } from '@element-plus/icons-vue'
 import AttachmentPanel from '../../components/AttachmentPanel.vue'
 import MaterialRequestPanel from '../../components/material/MaterialRequestPanel.vue'
@@ -813,18 +873,35 @@ const TASKS = {
   },
   survey_done: {
     title: '复尺和开工条件复核',
-    desc: '记录复尺面积、基层、水电、保护和进场条件，确认后进入班组交底排班。',
-    action: '复尺完成，进入班组交底',
-    next: 'recheck_done',
+    desc: '需要复尺时打开二次勘察表确认；无需复尺时填写原因，直接交给财务制作项目结算收款单。',
+    action: '',
+    next: '',
     roles: ['super_admin', 'admin', 'engineering'],
-    required: ['recheck_assignee', 'condition_note'],
     owner: '总监/工程部',
-    nextOwner: '总监/工程部',
+    nextOwner: '财务',
     assignedOnly: true
   },
   recheck_done: {
+    title: '项目结算收款单',
+    desc: '复尺已完成，等待财务制作收款单、总监打印签字，并确认进场前 90% 款项。',
+    action: '',
+    next: '',
+    roles: [],
+    owner: '财务',
+    nextOwner: '总监签字/门店收款确认'
+  },
+  pre_entry_payment_pending: {
+    title: '项目结算收款单',
+    desc: '财务制作项目结算收款单，派发总监打印签字并确认门店已收进场前 90% 款项。',
+    action: '',
+    next: '',
+    roles: [],
+    owner: '财务',
+    nextOwner: '总监签字/门店收款确认'
+  },
+  payment_received: {
     title: '安排施工组并完成班组交底',
-    desc: '安排班组长、施工负责人、施工成员和班组交底日期，班组交底完成后才能出库。',
+    desc: '进场款已确认，安排班组长、施工负责人、施工成员和班组交底日期，完成后才能出库。',
     action: '班组交底完成，等待出库',
     next: 'briefing_done',
     roles: ['super_admin', 'admin', 'engineering'],
@@ -949,6 +1026,7 @@ const TASKS = {
 
 const currentTask = computed(() => TASKS[project.value?.status] || TASK_FALLBACK)
 const deliveryNodes = computed(() => deliveryChain.value?.nodes || [])
+const traceSteps = computed(() => deliveryNodes.value)
 const needRecheck = computed(() => {
   const recheckNode = deliveryNodes.value.find(node => node.key === 'survey_recheck')
   if (recheckNode?.status && recheckNode.status !== '按需') return true
@@ -958,13 +1036,14 @@ const needRecheck = computed(() => {
 const skipRecheck = computed(() => {
   const status = project.value?.status || ''
   const condition = String(project.value?.condition_note || '')
-  return !needRecheck.value && ['recheck_done', 'briefing_done', 'material_requested', 'material_out', 'in_progress', 'inspection_done', 'material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived'].includes(status)
+  return !needRecheck.value && ['recheck_done', 'pre_entry_payment_pending', 'payment_received', 'briefing_done', 'material_requested', 'material_out', 'in_progress', 'inspection_done', 'material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived'].includes(status)
     && /无需复尺|跳过复尺/.test(condition)
 })
 const currentDocumentKey = computed(() => {
   const status = project.value?.status || ''
   if (['survey_pending', 'survey_done'].includes(status)) return needRecheck.value && status === 'survey_done' ? 'survey_recheck' : 'survey_initial'
-  if (status === 'recheck_done') return 'briefing'
+  if (['recheck_done', 'pre_entry_payment_pending'].includes(status)) return 'project_payment_request'
+  if (status === 'payment_received') return 'briefing'
   if (['briefing_done', 'material_requested', 'material_out'].includes(status)) return 'material_io'
   if (status === 'in_progress') return 'completion_inspection'
   if (status === 'inspection_done') return 'material_io'
@@ -978,6 +1057,7 @@ const currentDocumentLabel = computed(() => {
   return deliveryNodes.value.find(node => node.key === currentDocumentKey.value)?.label || {
     survey_initial: '首次工勘表',
     survey_recheck: '二次勘察表',
+    project_payment_request: '项目结算收款单',
     briefing: '班组交底单',
     material_io: '材料出库单',
     completion_inspection: '完工验收质检表',
@@ -996,8 +1076,9 @@ const currentActionHint = computed(() => {
 })
 const currentStepNote = computed(() => {
   if (project.value?.status === 'survey_pending') return '先上传现场图片、补充说明，再生成 PPT 并确认工勘结果。'
-  if (project.value?.status === 'survey_done') return needRecheck.value ? '该项目需要复尺，处理二次勘察后再做班组交底。' : '该项目可跳过复尺，下一步进入班组交底。'
-  if (project.value?.status === 'recheck_done') return '核对班组交底单，确认班组、面积、工艺和进场注意事项。'
+  if (project.value?.status === 'survey_done') return needRecheck.value ? '该项目需要复尺，处理二次勘察后进入收款单。' : '如果确认无需复尺，点击按钮填写原因后进入财务收款单。'
+  if (['recheck_done', 'pre_entry_payment_pending'].includes(project.value?.status)) return '财务处理项目结算收款单，确认进场前 90% 款项后才能进入班组交底。'
+  if (project.value?.status === 'payment_received') return '核对班组交底单，确认班组、面积、工艺和进场注意事项。'
   if (project.value?.status === 'briefing_done') return '班组交底完成后由仓管填写材料出库单并确认出库。'
   if (project.value?.status === 'material_out') return '工程部确认进场时间、人员和班组安排。'
   if (project.value?.status === 'in_progress') return '施工中先做轻量记录；确认验收通过后交给仓库回库。'
@@ -1016,7 +1097,8 @@ const workflowSteps = computed(() => {
     { key: 'handover', label: '门店交底', statuses: ['handover_received'] },
     { key: 'survey', label: '首次工勘', statuses: ['survey_pending'] },
     { key: 'recheck', label: '复尺复核', statuses: ['survey_done'], optional: true },
-    { key: 'briefing', label: '班组交底', statuses: ['recheck_done'] },
+    { key: 'payment', label: '收款单', statuses: ['recheck_done', 'pre_entry_payment_pending'] },
+    { key: 'briefing', label: '班组交底', statuses: ['payment_received'] },
     { key: 'material', label: '出库进场', statuses: ['briefing_done', 'material_requested', 'material_out'] },
     { key: 'build', label: '施工验收', statuses: ['in_progress', 'inspection_done'] },
     { key: 'settle', label: '回库核算', statuses: ['material_returned', 'labor_settled', 'cost_checked'] },
@@ -1040,6 +1122,12 @@ const canRunCurrentTask = computed(() => {
   if (currentTask.value.assignedOnly && ['employee', 'engineering'].includes(userRole)) return isAssignedEmployee.value
   return true
 })
+const canSkipRecheck = computed(() => {
+  if (!project.value || project.value.status !== 'survey_done') return false
+  if (!['super_admin', 'admin', 'engineering'].includes(userRole)) return false
+  if (userRole === 'super_admin' || userRole === 'admin') return true
+  return isAssignedEmployee.value
+})
 const currentMissingFields = computed(() => missingForTask(currentTask.value.required || []))
 const materialRequestDisabledReason = computed(() => {
   if (!project.value) return ''
@@ -1048,7 +1136,7 @@ const materialRequestDisabledReason = computed(() => {
   if (['material_out', 'in_progress', 'inspection_done', 'material_returned', 'labor_settled', 'cost_checked', 'finance_settled', 'archived'].includes(project.value.status)) {
     return '该工单已经过了出库申请阶段。'
   }
-  return '需要先完成复尺、施工组安排和开工交底，才能发起材料出库。'
+  return '需要先完成项目结算收款单、确认进场款和班组交底，才能发起材料出库。'
 })
 const canStartRepair = computed(() => ['super_admin', 'admin', 'engineering'].includes(userRole))
 const warrantyInfo = computed(() => {
@@ -1159,6 +1247,39 @@ function openCurrentDocument() {
   const opened = documentSummaryRef.value?.openDocument?.(currentDocumentKey.value)
   if (opened) return
   scrollToWorkflowSection({ target: 'documents' })
+}
+
+async function skipSurveyRecheck() {
+  if (!canSkipRecheck.value) return
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '请填写跳过复尺的原因，例如“首次工勘确认基层和面积无争议，门店确认无需复尺”。',
+      '无需复尺，直接进入收款单',
+      {
+        confirmButtonText: '确认跳过并交给财务',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: '不少于 6 个字',
+        inputPattern: /[\s\S]{6,}/,
+        inputErrorMessage: '跳过原因不能少于 6 个字'
+      }
+    )
+    saving.value = true
+    const res = await fetch(`/api/projects/${route.params.id}/delivery-chain/survey-recheck/skip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ reason: value })
+    })
+    const json = await readJson(res)
+    if (!res.ok || !json.success) throw new Error(json.message || '跳过复尺失败')
+    ElMessage.success('已记录跳过复尺，项目进入财务收款单')
+    documentRefreshKey.value += 1
+    await fetchDetail()
+  } catch (err) {
+    if (err !== 'cancel') ElMessage.error(err.message || '跳过复尺失败')
+  } finally {
+    saving.value = false
+  }
 }
 
 async function fetchAssignees() {
@@ -1504,6 +1625,46 @@ onMounted(() => {
   margin-bottom: 20px;
   border: 1px solid color-mix(in srgb, var(--color-primary) 28%, var(--border-light));
 }
+.trace-card {
+  margin-bottom: 20px;
+  border: 1px solid var(--border-light);
+}
+.trace-list {
+  display: grid;
+  gap: 10px;
+}
+.trace-item {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-page));
+}
+.trace-item.confirmed {
+  border-color: color-mix(in srgb, #22c55e 32%, var(--border-light));
+  background: color-mix(in srgb, #22c55e 6%, var(--bg-card));
+}
+.trace-main strong,
+.trace-main span,
+.trace-meta span {
+  display: block;
+}
+.trace-main strong {
+  color: var(--text-primary);
+}
+.trace-main span,
+.trace-meta span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.trace-meta {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
 .work-header {
   display: flex;
   justify-content: space-between;
@@ -1716,6 +1877,9 @@ onMounted(() => {
     flex-direction: column;
   }
   .current-workbench-body {
+    grid-template-columns: 1fr;
+  }
+  .trace-item {
     grid-template-columns: 1fr;
   }
   .phase-steps {

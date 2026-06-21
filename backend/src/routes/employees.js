@@ -2,6 +2,7 @@ import { authMiddleware } from '../middleware/auth.js'
 import { requireModuleAccess } from '../utils/permissions.js'
 import { generateEmployeeCode } from '../utils/employeeCode.js'
 import { departmentPositionPayload, isValidDepartmentPosition } from '../utils/orgOptions.js'
+import { employeeFacts } from '../services/businessFacts.js'
 
 export default function employeeRoutes(server, db) {
   // 获取员工列表
@@ -9,13 +10,7 @@ export default function employeeRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireModuleAccess(db, request, reply, 'employees', 'can_view', '无权限查看员工档案')) return
 
-    const employees = db.prepare(`
-      SELECT e.*, u.id as bound_user_id, u.username as bound_username, u.role as bound_user_role
-      FROM employees e
-      LEFT JOIN users u ON u.employee_id = e.id
-      ORDER BY e.id ASC
-    `).all()
-    return { success: true, data: employees }
+    return employeeFacts(db, request.user, request.query)
   })
 
   // 已注册但还没生成员工档案的账号
