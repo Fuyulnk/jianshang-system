@@ -49,6 +49,21 @@
         <div class="msg-header">
           <span>{{ currentConvName }}</span>
           <span class="msg-header-meta" v-if="currentConvMeta">{{ currentConvMeta }}</span>
+          <div class="msg-header-right">
+            <div v-if="currentConvName === '财务群'" class="recent-dropdown" @click.stop>
+              <el-button size="small" text @click="showRecent = !showRecent">📋 最近录入</el-button>
+              <div v-if="showRecent" class="recent-panel" @mouseleave="showRecent = false">
+                <div v-if="recentLoading" class="recent-loading">加载中...</div>
+                <div v-else-if="!recentEntries.length" class="recent-empty">暂无录入</div>
+                <a v-for="item in recentEntries" :key="item.id" class="recent-item" :href="`/main/transactions`" @click.prevent="goToFinance">
+                  <span :class="['recent-type', item.type]">{{ item.type === 'income' ? '收入' : '支出' }}</span>
+                  <span class="recent-amount">{{ formatMoney(item.amount) }}</span>
+                  <span class="recent-desc">{{ item.description || item.party || '-' }}</span>
+                  <span class="recent-time">{{ formatShortTime(item.created_at) }}</span>
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
         <div
           ref="msgListRef"
@@ -203,6 +218,9 @@ const dragOver = ref(false)
 const uploading = ref(false)
 const pendingFiles = ref([])
 const messageImageUrls = ref({})
+const showRecent = ref(false)
+const recentEntries = ref([])
+const recentLoading = ref(false)
 
 const showNewConv = ref(false)
 const newConvName = ref('')
@@ -590,6 +608,38 @@ function formatTime(t) {
   return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
+function formatShortTime(t) {
+  if (!t) return ''
+  const d = new Date(t)
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatMoney(v) {
+  const n = Number(v || 0)
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+async function fetchRecentEntries() {
+  if (currentConvName.value !== '财务群') return
+  recentLoading.value = true
+  try {
+    const res = await fetch('/api/transactions/recent?limit=5', {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json()
+    if (json.success) recentEntries.value = json.data
+  } catch {} finally { recentLoading.value = false }
+}
+
+function goToFinance() {
+  window.open('/main/transactions', '_blank')
+}
+
+watch(currentConvName, (name) => {
+  if (name === '财务群') fetchRecentEntries()
+  else showRecent.value = false
+})
+
 watch(messages, scrollBottom, { deep: true })
 
 onMounted(async () => {
@@ -702,6 +752,32 @@ onUnmounted(() => {
   font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 12px;
 }
 .msg-header-meta { font-weight: 400; font-size: 13px; color: var(--text-tertiary); }
+.msg-header-right { margin-left: auto; position: relative; }
+.recent-dropdown { position: relative; }
+.recent-panel {
+  position: absolute; right: 0; top: 36px; z-index: 100;
+  width: 360px; max-height: 320px; overflow-y: auto;
+  background: var(--bg-card); border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.12); border: 1px solid var(--border-color);
+  padding: 8px;
+}
+.dark .recent-panel { background: rgba(30,30,35,0.95); }
+.recent-loading, .recent-empty { padding: 24px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
+.recent-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border-radius: 8px; cursor: pointer; text-decoration: none; transition: background 0.1s;
+}
+.recent-item:hover { background: var(--border-light); }
+.recent-type {
+  font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+}
+.recent-type.income { background: #dcfce7; color: #166534; }
+.recent-type.expense { background: #fee2e2; color: #991b1b; }
+.dark .recent-type.income { background: rgba(22,101,52,0.3); color: #86efac; }
+.dark .recent-type.expense { background: rgba(153,27,27,0.3); color: #fca5a5; }
+.recent-amount { font-size: 13px; font-weight: 600; color: var(--text-primary); flex-shrink: 0; }
+.recent-desc { font-size: 12px; color: var(--text-tertiary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.recent-time { font-size: 11px; color: var(--text-placeholder); flex-shrink: 0; }
 .msg-list { flex: 1; overflow-y: auto; padding: 20px; background: var(--bg-page); position: relative; }
 .msg-list.drag-over {
   outline: 2px dashed var(--color-primary);

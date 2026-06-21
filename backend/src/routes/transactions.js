@@ -263,6 +263,21 @@ export default function transactionRoutes(server, db) {
       .send(makeExcelHtml(rows, request.query))
   })
 
+  // 最近交易（供聊天页面板使用）
+  server.get('/api/transactions/recent', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'transactions', 'can_view', '无权限查看交易流水')) return
+    const limit = Math.min(Math.max(Number(request.query.limit) || 5, 1), 20)
+    const rows = db.prepare(`
+      SELECT t.*, a.name as account_name
+      FROM transactions t
+      LEFT JOIN accounts a ON t.account_id = a.id
+      ORDER BY t.id DESC
+      LIMIT ?
+    `).all(limit)
+    return { success: true, data: rows }
+  })
+
   // 获取所有交易分类
   server.get('/api/transactions/categories', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
