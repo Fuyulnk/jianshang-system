@@ -24,6 +24,7 @@ export function runV2Cleanup(db) {
   stepAiTables(db)
   stepIndexes(db)
   stepDataFixes(db)
+  assertV2SchemaShape(db)
   recordSchemaVersion(db, VERSION, DESCRIPTION)
 }
 
@@ -188,6 +189,7 @@ function stepFinanceLedgerTables(db) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
         source_file_name TEXT DEFAULT '',
+        source_file_path TEXT DEFAULT '',
         status TEXT DEFAULT 'active',
         imported_by INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT (datetime('now', 'localtime')),
@@ -205,32 +207,74 @@ function stepFinanceLedgerTables(db) {
       CREATE TABLE IF NOT EXISTS finance_ledger_cells (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         workbook_id INTEGER NOT NULL,
-        sheet_id INTEGER DEFAULT 0,
-        row_index INTEGER DEFAULT 0,
-        col_index INTEGER DEFAULT 0,
-        cell_value TEXT DEFAULT '',
-        cell_type TEXT DEFAULT 'string',
-        created_at DATETIME DEFAULT (datetime('now', 'localtime')),
-        updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+        sheet_id INTEGER NOT NULL,
+        row_index INTEGER NOT NULL,
+        col_index INTEGER NOT NULL,
+        address TEXT NOT NULL,
+        value TEXT DEFAULT '',
+        raw_value TEXT DEFAULT '',
+        formula TEXT DEFAULT '',
+        number_format TEXT DEFAULT '',
+        updated_by INTEGER DEFAULT 0,
+        updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        UNIQUE(sheet_id, row_index, col_index)
       );
       CREATE TABLE IF NOT EXISTS finance_ledger_comments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cell_id INTEGER NOT NULL,
+        workbook_id INTEGER NOT NULL,
+        sheet_id INTEGER NOT NULL,
+        row_index INTEGER NOT NULL,
+        col_index INTEGER NOT NULL,
+        address TEXT NOT NULL,
         comment_text TEXT DEFAULT '',
         created_by INTEGER DEFAULT 0,
+        updated_by INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT (datetime('now', 'localtime')),
-        updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+        updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        UNIQUE(sheet_id, row_index, col_index)
       );
       CREATE TABLE IF NOT EXISTS finance_ledger_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workbook_id INTEGER DEFAULT 0,
+        workbook_id INTEGER NOT NULL,
+        sheet_id INTEGER DEFAULT 0,
+        address TEXT DEFAULT '',
         action TEXT NOT NULL,
-        detail TEXT DEFAULT '',
+        old_value TEXT DEFAULT '',
+        new_value TEXT DEFAULT '',
         created_by INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT (datetime('now', 'localtime'))
       );
+      CREATE INDEX IF NOT EXISTS idx_finance_ledger_cells_sheet ON finance_ledger_cells(sheet_id, row_index, col_index);
+      CREATE INDEX IF NOT EXISTS idx_finance_ledger_comments_sheet ON finance_ledger_comments(sheet_id, row_index, col_index);
     `)
   } catch {}
+  const workbookCols = ["source_file_path TEXT DEFAULT ''"]
+  const cellCols = [
+    "address TEXT DEFAULT ''",
+    "value TEXT DEFAULT ''",
+    "raw_value TEXT DEFAULT ''",
+    "formula TEXT DEFAULT ''",
+    "number_format TEXT DEFAULT ''",
+    'updated_by INTEGER DEFAULT 0'
+  ]
+  const commentCols = [
+    'workbook_id INTEGER DEFAULT 0',
+    'sheet_id INTEGER DEFAULT 0',
+    'row_index INTEGER DEFAULT 0',
+    'col_index INTEGER DEFAULT 0',
+    "address TEXT DEFAULT ''",
+    'updated_by INTEGER DEFAULT 0'
+  ]
+  const logCols = [
+    'sheet_id INTEGER DEFAULT 0',
+    "address TEXT DEFAULT ''",
+    "old_value TEXT DEFAULT ''",
+    "new_value TEXT DEFAULT ''"
+  ]
+  addColumns(db, 'finance_ledger_workbooks', workbookCols)
+  addColumns(db, 'finance_ledger_cells', cellCols)
+  addColumns(db, 'finance_ledger_comments', commentCols)
+  addColumns(db, 'finance_ledger_logs', logCols)
 }
 
 // ── AI 相关表 ──
@@ -238,24 +282,29 @@ function stepAiTables(db) {
   try {
     db.exec(`
       CREATE TABLE IF NOT EXISTS ai_tool_registry (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tool_name TEXT NOT NULL UNIQUE,
+        tool_name TEXT PRIMARY KEY,
+        label TEXT DEFAULT '',
         description TEXT DEFAULT '',
-        risk_level TEXT DEFAULT 'low',
+        tier TEXT DEFAULT 'L1',
+        risk_level TEXT DEFAULT 'medium',
         action_type TEXT DEFAULT 'tool_read',
         requires_confirmation INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        parameter_schema TEXT DEFAULT '{}',
+        enabled INTEGER DEFAULT 1,
         updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
       );
       CREATE TABLE IF NOT EXISTS ai_agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_key TEXT NOT NULL UNIQUE,
+        key TEXT NOT NULL UNIQUE,
         name TEXT NOT NULL,
-        description TEXT DEFAULT '',
-        prompt TEXT DEFAULT '',
+        purpose TEXT DEFAULT '',
+        scenario_type TEXT DEFAULT 'general',
+        base_prompt TEXT DEFAULT '',
         allowed_roles TEXT DEFAULT '[]',
+        memory_enabled INTEGER DEFAULT 0,
+        memory_retention_days INTEGER DEFAULT 7,
         enabled INTEGER DEFAULT 1,
-        context_enabled INTEGER DEFAULT 0,
+        is_default INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT (datetime('now', 'localtime')),
         updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
       );
@@ -263,29 +312,99 @@ function stepAiTables(db) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         agent_id INTEGER NOT NULL,
         tool_name TEXT NOT NULL,
-        created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        allowed INTEGER DEFAULT 0,
         UNIQUE(agent_id, tool_name)
       );
       CREATE TABLE IF NOT EXISTS ai_contexts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
+        context_type TEXT DEFAULT 'direct',
         context_key TEXT NOT NULL,
-        context_value TEXT DEFAULT '',
+        agent_id INTEGER DEFAULT 0,
+        user_id INTEGER DEFAULT 0,
+        title TEXT DEFAULT '',
         created_at DATETIME DEFAULT (datetime('now', 'localtime')),
-        updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+        updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        UNIQUE(context_type, context_key, user_id)
       );
       CREATE TABLE IF NOT EXISTS ai_memories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id INTEGER DEFAULT 0,
+        context_type TEXT DEFAULT 'direct',
+        context_key TEXT NOT NULL,
         user_id INTEGER DEFAULT 0,
-        agent_key TEXT DEFAULT '',
-        memory_key TEXT NOT NULL,
-        memory_value TEXT DEFAULT '',
-        importance REAL DEFAULT 0,
+        summary TEXT DEFAULT '',
+        source TEXT DEFAULT 'auto',
+        expires_at DATETIME DEFAULT '',
         created_at DATETIME DEFAULT (datetime('now', 'localtime')),
-        updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+        updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        UNIQUE(agent_id, context_type, context_key, user_id)
       );
+      CREATE INDEX IF NOT EXISTS idx_ai_agent_tools_agent ON ai_agent_tools(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_ai_memories_context ON ai_memories(agent_id, context_type, context_key, user_id);
     `)
   } catch {}
+  addColumns(db, 'ai_tool_registry', [
+    "label TEXT DEFAULT ''",
+    "tier TEXT DEFAULT 'L1'",
+    "parameter_schema TEXT DEFAULT '{}'",
+    'enabled INTEGER DEFAULT 1'
+  ])
+  addColumns(db, 'ai_agents', [
+    "key TEXT DEFAULT ''",
+    "purpose TEXT DEFAULT ''",
+    "scenario_type TEXT DEFAULT 'general'",
+    "base_prompt TEXT DEFAULT ''",
+    'memory_enabled INTEGER DEFAULT 0',
+    'memory_retention_days INTEGER DEFAULT 7',
+    'is_default INTEGER DEFAULT 0'
+  ])
+  addColumns(db, 'ai_agent_tools', ['allowed INTEGER DEFAULT 0'])
+  addColumns(db, 'ai_contexts', [
+    "context_type TEXT DEFAULT 'direct'",
+    'agent_id INTEGER DEFAULT 0',
+    'user_id INTEGER DEFAULT 0',
+    "title TEXT DEFAULT ''"
+  ])
+  addColumns(db, 'ai_memories', [
+    'agent_id INTEGER DEFAULT 0',
+    "context_type TEXT DEFAULT 'direct'",
+    "context_key TEXT DEFAULT ''",
+    "summary TEXT DEFAULT ''",
+    "source TEXT DEFAULT 'auto'",
+    "expires_at DATETIME DEFAULT ''"
+  ])
+  try { db.exec("UPDATE ai_agents SET key = agent_key WHERE COALESCE(key, '') = '' AND COALESCE(agent_key, '') != ''") } catch {}
+  try { db.exec("UPDATE ai_agents SET purpose = description WHERE COALESCE(purpose, '') = '' AND COALESCE(description, '') != ''") } catch {}
+  try { db.exec("UPDATE ai_agents SET base_prompt = prompt WHERE COALESCE(base_prompt, '') = '' AND COALESCE(prompt, '') != ''") } catch {}
+}
+
+function addColumns(db, table, columns) {
+  for (const column of columns) {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`) } catch {}
+  }
+}
+
+function assertV2SchemaShape(db) {
+  const requiredColumns = {
+    schema_versions: ['version'],
+    inventory_movements: ['product_id', 'movement_type', 'quantity_before', 'quantity_after'],
+    material_losses: ['project_id', 'material_request_id', 'quantity'],
+    finance_ledger_cells: ['address', 'value', 'raw_value', 'formula', 'number_format', 'updated_by'],
+    finance_ledger_comments: ['workbook_id', 'sheet_id', 'row_index', 'col_index', 'address', 'updated_by'],
+    finance_ledger_logs: ['sheet_id', 'address', 'old_value', 'new_value'],
+    ai_tool_registry: ['tool_name', 'label', 'tier', 'parameter_schema', 'enabled'],
+    ai_agents: ['key', 'purpose', 'scenario_type', 'base_prompt', 'is_default'],
+    ai_agent_tools: ['allowed'],
+    ai_contexts: ['context_type', 'agent_id', 'user_id', 'title'],
+    ai_memories: ['agent_id', 'context_type', 'context_key', 'summary', 'source', 'expires_at']
+  }
+  for (const [table, columns] of Object.entries(requiredColumns)) {
+    const existing = db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name)
+    const missing = columns.filter(column => !existing.includes(column))
+    if (missing.length) {
+      throw new Error(`V2 迁移未完成：${table} 缺少字段 ${missing.join(', ')}`)
+    }
+  }
 }
 
 // ── 索引 ──

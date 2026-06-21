@@ -1,6 +1,7 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { requireModuleAccess } from '../utils/permissions.js'
 import { parseFinanceTransactionDraft } from '../utils/financeParser.js'
+import { createTransaction, deleteTransaction } from '../services/financeCommands.js'
 
 function buildTransactionFilter(query = {}) {
   const { account_id, account_type, type, category, start_date, end_date } = query
@@ -296,34 +297,12 @@ export default function transactionRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireModuleAccess(db, request, reply, 'transactions', 'can_create', '无权限新增交易流水')) return
 
-    const { account_id, type, amount, category, description, party, proxy } = request.body
-
-    if (!account_id || !type || amount === undefined) {
-      return { success: false, message: '账户、类型和金额不能为空' }
+    try {
+      const result = createTransaction(db, request.body || {})
+      return { success: true, id: result.id }
+    } catch (err) {
+      reply.code(err.statusCode || 400).send({ success: false, message: err.message || '新增交易失败' })
     }
-    if (!['income', 'expense'].includes(type)) {
-      return { success: false, message: '类型必须为 income 或 expense' }
-    }
-    if (typeof amount !== 'number' || amount <= 0) {
-      return { success: false, message: '金额必须为正数' }
-    }
-    const account = db.prepare('SELECT id FROM accounts WHERE id = ?').get(account_id)
-    if (!account) {
-      return { success: false, message: '账户不存在' }
-    }
-
-    const result = db.prepare(
-      `INSERT INTO transactions (account_id, type, amount, category, description, party, proxy, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`
-    ).run(account_id, type, amount, category || null, description || null, party || null, proxy || null)
-
-    // 更新账户余额
-    const sign = type === 'income' ? 1 : -1
-    db.prepare(
-      "UPDATE accounts SET current_balance = current_balance + ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
-    ).run(sign * amount, account_id)
-
-    return { success: true, id: result.lastInsertRowid }
   })
 
   // 删除交易
@@ -331,21 +310,11 @@ export default function transactionRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireModuleAccess(db, request, reply, 'transactions', 'can_delete', '无权限删除交易流水')) return
 
-    const tx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(request.params.id)
-    if (!tx) {
-      reply.code(404).send({ success: false, message: '交易记录不存在' })
-      return
+    try {
+      deleteTransaction(db, request.params.id)
+      return { success: true }
+    } catch (err) {
+      reply.code(err.statusCode || 400).send({ success: false, message: err.message || '删除交易失败' })
     }
-
-    // 回退账户余额（已取消的交易不改余额）
-    if (tx.status !== 'cancelled') {
-      const sign = tx.type === 'income' ? -1 : 1
-      db.prepare(
-        "UPDATE accounts SET current_balance = current_balance + ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
-      ).run(sign * tx.amount, tx.account_id)
-    }
-
-    db.prepare('DELETE FROM transactions WHERE id = ?').run(request.params.id)
-    return { success: true }
   })
 }

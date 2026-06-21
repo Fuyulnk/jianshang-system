@@ -464,6 +464,7 @@ function preferredAttachment(node) {
 }
 
 function canExportOriginal(node) {
+  if (node?.key === 'project_payment_request' && node.document) return true
   const files = Array.isArray(node?.attachments) ? node.attachments : []
   return files.some(file => /\.xlsx$/i.test(file.original_name || ''))
 }
@@ -713,8 +714,8 @@ function actionVisible(node, action) {
 function canConfirmNode(node) {
   if (!node) return false
   if (props.currentStepKey && node.key !== props.currentStepKey) return false
-  if (node.key === 'material_io' && props.project?.status !== 'inspection_done') return false
-  return ['survey_initial', 'survey_recheck', 'project_payment_request', 'briefing', 'material_io', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'].includes(node.key)
+  if (node.key === 'material_io') return false
+  return ['survey_initial', 'survey_recheck', 'project_payment_request', 'briefing', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'].includes(node.key)
 }
 
 function confirmButtonLabel(node) {
@@ -723,7 +724,6 @@ function confirmButtonLabel(node) {
     survey_recheck: '确认复尺完成',
     project_payment_request: '确认进场款已收',
     briefing: '确认班组交底完成',
-    material_io: '确认回库完成',
     completion_inspection: '确认验收完成',
     labor_settlement: '确认工费结算',
     cost_check: '确认成本核算',
@@ -863,10 +863,12 @@ function normalizeMaterialItem(item = {}) {
   const returned = toNumber(item.return_quantity)
   const usage = item.usage_quantity === undefined || item.usage_quantity === '' ? Math.max(out - returned, 0) : toNumber(item.usage_quantity)
   const expected = Math.max(out - usage, 0)
+  const materialName = item.material_name || item.product_name || item.name || ''
   return {
     category: item.category || '',
     out_date: item.out_date || '',
-    material_name: item.material_name || item.name || '',
+    material_name: materialName,
+    product_name: item.product_name || materialName,
     unit: item.unit || '',
     out_quantity: out || item.out_quantity || '',
     return_quantity: returned || item.return_quantity || '',

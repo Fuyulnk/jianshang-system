@@ -81,7 +81,7 @@ export default function settingsRoutes(server, db) {
     const settings = getSettings(db)
 
     try {
-      const res = await fetch('https://api.deepseek.com/chat/completions', {
+      const res = await fetch(process.env.AI_ENDPOINT || 'https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify({

@@ -9,6 +9,7 @@ import { buildProjectDraft, emptyDeliveryDocument, missingBriefingFields, parseB
 import { buildLabelCellUpdates, patchXlsxCells } from '../utils/xlsxTemplateExport.js'
 import { getActiveDocumentTemplate } from '../services/documentTemplateService.js'
 import { buildProjectDeliveryChain, deliveryDocumentLabel } from '../services/projectDocumentChain.js'
+import { confirmDeliveryStep, getLatestProjectDocument, normalizeDeliveryDocumentType, syncProjectFromDeliveryDocument, upsertProjectDocument } from '../services/projectDocumentCommands.js'
 import {
   diffDraft,
   missingCoreFields,
@@ -18,7 +19,7 @@ import {
   summarizeRawContent
 } from '../utils/projectImport.js'
 
-const AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
+const AI_ENDPOINT = process.env.AI_ENDPOINT || 'https://api.deepseek.com/chat/completions'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const UPLOAD_DIR = join(__dirname, '../../data/uploads')
@@ -26,7 +27,6 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024
 const LARGE_DELIVERY_BODY_LIMIT = 160 * 1024 * 1024
 const MAX_MONEY_VALUE = 100000000
 const ALLOWED_BRIEFING_ATTACHMENT_EXTS = new Set(['.csv', '.xls', '.xlsx', '.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.ppt', '.pptx'])
-const DELIVERY_DOCUMENT_TYPES = new Set(['survey_initial', 'survey_recheck', 'project_payment_request', 'briefing', 'material_io', 'completion_inspection', 'labor_settlement', 'cost_check', 'finance_settlement'])
 
 export default function projectImportRoutes(server, db) {
   server.post('/api/briefing-imports/parse', async (request, reply) => {
@@ -234,6 +234,10 @@ export default function projectImportRoutes(server, db) {
       reply.code(404).send({ success: false, message: '项目不存在、单据类型无效或无权限' })
       return
     }
+    if (!canWriteDeliveryDocument(request.user, documentType)) {
+      reply.code(403).send({ success: false, message: deliveryDocumentWriteDeniedMessage(documentType) })
+      return
+    }
     const { file_name = '', file_data = '' } = request.body || {}
     if (!file_name || !file_data) return { success: false, message: '请选择要导入的项目单据' }
     try {
@@ -249,6 +253,10 @@ export default function projectImportRoutes(server, db) {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(toInt(request.params.id))
     if (!project || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
       reply.code(404).send({ success: false, message: '项目不存在或无权限导入项目结算收款单' })
+      return
+    }
+    if (!canWriteDeliveryDocument(request.user, 'project_payment_request')) {
+      reply.code(403).send({ success: false, message: deliveryDocumentWriteDeniedMessage('project_payment_request') })
       return
     }
     const { file_name = '', file_data = '' } = request.body || {}
@@ -267,6 +275,10 @@ export default function projectImportRoutes(server, db) {
     const documentType = normalizeDeliveryDocumentType(request.params.type)
     if (!project || !documentType || !canAccessModule(db, request.user, 'projects', 'can_edit') || !canAccessProjectRecord(db, request.user, project)) {
       reply.code(404).send({ success: false, message: '项目不存在、单据类型无效或无权限' })
+      return
+    }
+    if (!canWriteDeliveryDocument(request.user, documentType)) {
+      reply.code(403).send({ success: false, message: deliveryDocumentWriteDeniedMessage(documentType) })
       return
     }
     try {
@@ -541,98 +553,18 @@ export default function projectImportRoutes(server, db) {
       reply.code(404).send({ success: false, message: '项目不存在、单据类型无效或无权限' })
       return
     }
-    const rule = deliveryStepConfirmRule(documentType, project)
-    if (!rule) {
-      reply.code(400).send({ success: false, message: '当前单据暂不支持直接确认推进' })
-      return
-    }
-    if (!canConfirmDeliveryStep(request.user, rule)) {
-      reply.code(403).send({ success: false, message: '当前角色不能确认这个步骤' })
-      return
-    }
-
-    const doc = getLatestProjectDocument(db, project.id, documentType)
-    if (!doc) {
-      reply.code(400).send({ success: false, message: `请先保存或上传${deliveryDocumentLabel(documentType)}` })
-      return
-    }
-    const guard = validateDeliveryStepConfirmation(db, project, documentType, doc)
-    if (!guard.ok) {
-      reply.code(400).send({ success: false, message: guard.message })
-      return
-    }
-
-    const currentStatus = String(project.status || '')
-    const targetStatus = guard.targetStatus || rule.targetStatus
-    const shouldMove = targetStatus && rule.from.includes(currentStatus)
-    const confirmedData = {
-      ...doc.confirmed_data,
-      step_confirmed: true,
-      step_confirmed_at: new Date().toISOString(),
-      step_confirmed_by: request.user.userId
-    }
-    if (doc.confirmed_data?.survey) {
-      confirmedData.survey = {
-        ...doc.confirmed_data.survey,
-        step_confirmed: true,
-        step_confirmed_at: confirmedData.step_confirmed_at
-      }
-    }
-
     try {
-      const tx = db.transaction(() => {
-        upsertProjectDocument(db, {
-          projectId: project.id,
-          documentType,
-          sourceAttachmentId: doc.source_attachment_id,
-          parsedData: doc.parsed_data || {},
-          confirmedData,
-          warnings: doc.warnings || [],
-          userId: request.user.userId
-        })
-        syncProjectFromDeliveryDocument(db, project, documentType, confirmedData)
-        const updates = stepConfirmProjectUpdates(documentType, confirmedData, guard)
-        const values = updates.map(item => item.value)
-        if (shouldMove) {
-          updates.push({ field: 'status', value: targetStatus })
-          values.push(targetStatus)
-        }
-        if (updates.length) {
-          const assignments = updates.map(item => `${item.field} = ?`)
-          assignments.push("updated_at = datetime('now', 'localtime')")
-          values.push(project.id)
-          let result
-          if (shouldMove) {
-            values.push(currentStatus)
-            result = db.prepare(`UPDATE projects SET ${assignments.join(', ')} WHERE id = ? AND status = ?`).run(...values)
-          } else {
-            result = db.prepare(`UPDATE projects SET ${assignments.join(', ')} WHERE id = ?`).run(...values)
-          }
-          if (shouldMove && result.changes === 0) {
-            const conflict = new Error('项目状态已被其他请求推进，请刷新后重试')
-            conflict.code = 'PROJECT_STATUS_CONFLICT'
-            throw conflict
-          }
-        }
-        const label = deliveryDocumentLabel(documentType)
-        const statusNote = shouldMove
-          ? `项目状态推进到${deliveryStatusLabel(targetStatus)}。`
-          : '项目已处于后续阶段，本次只确认单据。'
-        addProjectLog(db, project.id, `确认${label}`, request.user.username,
-          `${label}已确认完成；${guard.logExtra || ''}${statusNote}`)
-      })
-      tx()
-      const nextProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id)
+      const result = confirmDeliveryStep(db, { project, documentType, user: request.user })
       return {
         success: true,
         data: {
-          project_status: nextProject.status,
-          message: shouldMove ? '当前步骤已完成，项目已进入下一步' : '当前步骤已完成',
-          chain: buildProjectDeliveryChain(db, nextProject)
+          project_status: result.nextProject.status,
+          message: result.message,
+          chain: buildProjectDeliveryChain(db, result.nextProject)
         }
       }
     } catch (err) {
-      reply.code(err.code === 'PROJECT_STATUS_CONFLICT' ? 409 : 400).send({ success: false, message: err.message || '确认当前步骤失败' })
+      reply.code(err.statusCode || (err.code === 'PROJECT_STATUS_CONFLICT' ? 409 : 400)).send({ success: false, message: err.message || '确认当前步骤失败' })
     }
   })
 
@@ -952,191 +884,25 @@ function canApplyProjectDocumentImport(user) {
   return ['super_admin', 'admin', 'engineering', 'finance'].includes(user?.role)
 }
 
-const DELIVERY_CONFIRM_RULES = {
-  survey_initial: {
-    from: ['handover_received', 'survey_pending'],
-    targetStatus: 'survey_done',
-    roles: ['super_admin', 'admin', 'engineering']
-  },
-  survey_recheck: {
-    from: ['survey_done'],
-    targetStatus: 'pre_entry_payment_pending',
-    roles: ['super_admin', 'admin', 'engineering']
-  },
-  project_payment_request: {
-    from: ['recheck_done', 'pre_entry_payment_pending'],
-    targetStatus: 'payment_received',
-    roles: ['super_admin', 'admin', 'finance']
-  },
-  briefing: {
-    from: ['payment_received'],
-    targetStatus: 'briefing_done',
-    roles: ['super_admin', 'admin', 'engineering']
-  },
-  material_io: {
-    from: ['inspection_done'],
-    targetStatus: 'material_returned',
-    roles: ['super_admin', 'admin', 'warehouse', 'engineering']
-  },
-  completion_inspection: {
-    from: ['in_progress', 'material_out'],
-    targetStatus: 'inspection_done',
-    roles: ['super_admin', 'admin', 'engineering', 'employee']
-  },
-  labor_settlement: {
-    from: ['material_returned'],
-    targetStatus: 'labor_settled',
-    roles: ['super_admin', 'admin', 'finance', 'engineering']
-  },
-  cost_check: {
-    from: ['labor_settled'],
-    targetStatus: 'cost_checked',
-    roles: ['super_admin', 'admin', 'finance']
-  },
-  finance_settlement: {
-    from: ['cost_checked'],
-    targetStatus: 'finance_settled',
-    roles: ['super_admin', 'admin', 'finance']
-  }
+const DELIVERY_DOCUMENT_WRITE_ROLES = {
+  survey_initial: ['engineering'],
+  survey_recheck: ['engineering'],
+  project_payment_request: ['finance'],
+  briefing: ['engineering'],
+  material_io: ['warehouse'],
+  completion_inspection: ['engineering', 'employee'],
+  labor_settlement: ['finance', 'engineering'],
+  cost_check: ['finance'],
+  finance_settlement: ['finance']
 }
 
-function deliveryStepConfirmRule(documentType, project) {
-  const rule = DELIVERY_CONFIRM_RULES[documentType]
-  if (!rule) return null
-  if (documentType === 'survey_initial') {
-    return { ...rule, targetStatus: surveyInitialTargetStatus(project) }
-  }
-  return rule
+function canWriteDeliveryDocument(user, documentType) {
+  if (['super_admin', 'admin'].includes(user?.role)) return true
+  return (DELIVERY_DOCUMENT_WRITE_ROLES[documentType] || []).includes(user?.role)
 }
 
-function surveyInitialTargetStatus(project) {
-  const status = String(project?.status || '')
-  return ['handover_received', 'survey_pending'].includes(status) ? 'pre_entry_payment_pending' : 'survey_done'
-}
-
-function canConfirmDeliveryStep(user, rule) {
-  if (user?.role === 'super_admin') return true
-  return rule.roles.includes(user?.role)
-}
-
-function validateDeliveryStepConfirmation(db, project, documentType, doc) {
-  const data = doc.confirmed_data || {}
-  if (['survey_initial', 'survey_recheck', 'completion_inspection'].includes(documentType)) {
-    const survey = data.survey || {}
-    const images = Array.isArray(survey.images) ? survey.images : []
-    const pptAttachment = getAttachment(db, doc.source_attachment_id)
-    if (documentType !== 'completion_inspection') {
-      if (!images.length && (!pptAttachment || !isPptAttachment(pptAttachment))) {
-        return { ok: false, message: '请先上传现场图片或直接上传工勘 PPT' }
-      }
-      if (!pptAttachment || !isPptAttachment(pptAttachment)) {
-        return { ok: false, message: '请先生成或上传工勘 PPT，再确认完成' }
-      }
-    }
-    if (documentType === 'survey_initial') {
-      const judgment = String(survey.entry_judgment || '').trim()
-      if (!['ready', 'conditional', 'blocked'].includes(judgment)) {
-        return { ok: false, message: '请先选择工勘结论：无需复尺、需要复尺或暂不具备进场条件' }
-      }
-      if (judgment === 'blocked') {
-        return { ok: false, message: '当前结论为暂不具备进场条件，请先处理整改或改为需要复尺后再推进' }
-      }
-      const needsRecheck = !!survey.need_recheck || judgment === 'conditional'
-      return {
-        ok: true,
-        targetStatus: needsRecheck ? 'survey_done' : 'pre_entry_payment_pending',
-        logExtra: needsRecheck ? '结论：需要复尺；' : '结论：无需复尺，已跳过复尺节点并转财务收款单；'
-      }
-    }
-    return {
-      ok: true,
-      logExtra: `PPT 附件 #${doc.source_attachment_id || 0}；现场图片 ${images.length} 张。`
-    }
-  }
-  if (documentType === 'briefing') {
-    const items = Array.isArray(data.items) ? data.items : []
-    if (!data.project?.customer && !project.customer) return { ok: false, message: '班组交底单缺少客户姓名' }
-    if (!items.length) return { ok: false, message: '班组交底单缺少施工项目明细' }
-  }
-  if (documentType === 'project_payment_request') {
-    const summary = data.summary || {}
-    const request = data.payment_request || {}
-    const preEntryAmount = Number(summary.pre_entry_amount || 0)
-    const receivedAmount = Number(summary.received_amount || 0)
-    const confirmed = !!request.pre_entry_payment_confirmed
-      || summary.payment_status === 'pre_entry_paid'
-      || (preEntryAmount > 0 && receivedAmount >= preEntryAmount)
-    if (!preEntryAmount) return { ok: false, message: '请先填写进场前 90% 收款金额' }
-    if (!confirmed) return { ok: false, message: '请先确认门店已收进场前 90% 款项，再进入班组交底' }
-  }
-  if (documentType === 'material_io') {
-    const summary = data.summary || {}
-    if (String(project.status || '') === 'briefing_done') {
-      return { ok: false, message: '出库阶段请走“材料出库单”，由仓库确认后推进' }
-    }
-    if (summary.material_return_status && summary.material_return_status !== 'done') {
-      return { ok: false, message: '材料回库状态未完成，不能确认回库节点' }
-    }
-  }
-  if (documentType === 'labor_settlement' && !Number(data.summary?.labor_fee || 0)) {
-    return { ok: false, message: '请先填写或导入人工费合计' }
-  }
-  if (documentType === 'cost_check' && !Number(data.summary?.total_cost || 0)) {
-    return { ok: false, message: '请先填写或导入成本合计' }
-  }
-  if (documentType === 'finance_settlement' && data.summary?.payment_status !== 'paid') {
-    return { ok: false, message: '财务归档前请先把收款状态确认为已收齐' }
-  }
-  return { ok: true, logExtra: '' }
-}
-
-function stepConfirmProjectUpdates(documentType, confirmedData, guard) {
-  const updates = []
-  const survey = confirmedData?.survey || {}
-  const summary = confirmedData?.summary || {}
-  if (['survey_initial', 'survey_recheck'].includes(documentType)) {
-    if (survey.survey_date) updates.push({ field: 'survey_date', value: survey.survey_date })
-    if (survey.conclusion) {
-      updates.push({
-        field: documentType === 'survey_initial' ? 'survey_report' : 'condition_note',
-        value: survey.conclusion
-      })
-    }
-    if (documentType === 'survey_initial' && guard?.targetStatus === 'pre_entry_payment_pending') {
-      updates.push({ field: 'condition_note', value: `无需复尺：${survey.conclusion || '首次工勘确认具备进场条件'}` })
-    }
-  }
-  if (documentType === 'project_payment_request') {
-    if (Number(summary.contract_amount || 0)) updates.push({ field: 'total_amount', value: Number(summary.contract_amount || 0) })
-    if (Number(summary.received_amount || 0)) updates.push({ field: 'deposit_amount', value: Number(summary.received_amount || 0) })
-  }
-  if (documentType === 'completion_inspection') {
-    if (survey.survey_date) updates.push({ field: 'acceptance_date', value: survey.survey_date })
-    if (survey.conclusion) updates.push({ field: 'construction_note', value: survey.conclusion })
-  }
-  if (documentType === 'material_io') {
-    updates.push({ field: 'material_return_status', value: 'done' })
-    if (summary.material_return_note) updates.push({ field: 'material_return_note', value: summary.material_return_note })
-  }
-  if (documentType === 'cost_check' && Number(summary.revenue_amount || 0)) {
-    updates.push({ field: 'settlement_amount', value: Number(summary.revenue_amount || 0) })
-  }
-  return updates
-}
-
-function deliveryStatusLabel(status) {
-  return {
-    survey_done: '勘察完成待复尺',
-    recheck_done: '复尺完成待收款单',
-    pre_entry_payment_pending: '待财务处理项目结算收款单',
-    payment_received: '进场款已收，待班组交底',
-    briefing_done: '班组交底完成待出库',
-    inspection_done: '验收完成待回库',
-    material_returned: '回库完成待工费结算',
-    labor_settled: '工费结算完成待成本核算',
-    cost_checked: '成本核算完成待财务结算',
-    finance_settled: '财务结算完成待归档'
-  }[status] || status
+function deliveryDocumentWriteDeniedMessage(documentType) {
+  return `当前岗位不能保存${deliveryDocumentLabel(documentType)}`
 }
 
 function decorateDeliveryParsedData(project, documentType, parsed) {
@@ -1156,46 +922,6 @@ function mergeProjectIntoDeliveryData(project, documentType, data) {
     ...data,
     project: { ...base.project, ...(data.project || {}) }
   }
-}
-
-function normalizeDeliveryDocumentType(value) {
-  const text = String(value || '').trim()
-  return DELIVERY_DOCUMENT_TYPES.has(text) ? text : ''
-}
-
-function syncProjectFromDeliveryDocument(db, project, documentType, data) {
-  const updates = []
-  const values = []
-  if (documentType === 'survey_initial') {
-    pushProjectUpdate(updates, values, project, 'survey_date', data.survey?.survey_date)
-    pushProjectUpdate(updates, values, project, 'survey_report', data.survey?.conclusion)
-    pushProjectUpdate(updates, values, project, 'condition_note', data.survey?.entry_judgment ? `${data.survey.entry_judgment}：${data.survey.conclusion || ''}` : '')
-  }
-  if (documentType === 'survey_recheck') {
-    pushProjectUpdate(updates, values, project, 'condition_note', data.survey?.conclusion)
-  }
-  if (documentType === 'completion_inspection') {
-    pushProjectUpdate(updates, values, project, 'acceptance_date', data.survey?.survey_date)
-    pushProjectUpdate(updates, values, project, 'construction_note', data.survey?.conclusion)
-  }
-  if (documentType === 'project_payment_request') {
-    pushProjectUpdate(updates, values, project, 'total_amount', data.summary?.contract_amount)
-    pushProjectUpdate(updates, values, project, 'deposit_amount', data.summary?.received_amount)
-  }
-  if (documentType === 'cost_check') {
-    pushProjectUpdate(updates, values, project, 'settlement_amount', data.summary?.revenue_amount)
-  }
-  if (!updates.length) return
-  updates.push("updated_at = datetime('now', 'localtime')")
-  values.push(project.id)
-  db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values)
-}
-
-function pushProjectUpdate(updates, values, project, field, value) {
-  if (value === undefined || value === null || value === '') return
-  if (String(project[field] ?? '') === String(value)) return
-  updates.push(`${field} = ?`)
-  values.push(value)
 }
 
 function parseBriefingText(text = '') {
@@ -1329,60 +1055,6 @@ function normalizeBriefingForm(input = {}) {
   }
 }
 
-function upsertProjectDocument(db, { projectId, documentType, sourceAttachmentId, parsedData, confirmedData, warnings, userId }) {
-  const existing = db.prepare(`
-    SELECT id, source_attachment_id FROM project_documents
-    WHERE project_id = ? AND document_type = ?
-    ORDER BY id DESC
-    LIMIT 1
-  `).get(projectId, documentType)
-  const parsed = JSON.stringify(parsedData || {})
-  const confirmed = JSON.stringify(confirmedData || {})
-  const warningText = JSON.stringify(Array.isArray(warnings) ? warnings : [])
-  const hasNewSourceVersion = existing
-    && sourceAttachmentId
-    && Number(sourceAttachmentId) !== Number(existing.source_attachment_id || 0)
-  if (existing && !hasNewSourceVersion) {
-    db.prepare(`
-      UPDATE project_documents
-      SET source_attachment_id = COALESCE(NULLIF(?, 0), source_attachment_id),
-          status = 'confirmed', parsed_data = ?, confirmed_data = ?, warnings = ?,
-          updated_by = ?, updated_at = datetime('now', 'localtime')
-      WHERE id = ?
-    `).run(sourceAttachmentId || 0, parsed, confirmed, warningText, userId || 0, existing.id)
-    return existing.id
-  }
-  const result = db.prepare(`
-    INSERT INTO project_documents (
-      project_id, document_type, source_attachment_id, status,
-      parsed_data, confirmed_data, warnings, created_by, updated_by
-    ) VALUES (?, ?, ?, 'confirmed', ?, ?, ?, ?, ?)
-  `).run(projectId, documentType, sourceAttachmentId || 0, parsed, confirmed, warningText, userId || 0, userId || 0)
-  return result.lastInsertRowid
-}
-
-function getLatestProjectDocument(db, projectId, documentType) {
-  const row = db.prepare(`
-    SELECT d.*, a.original_name as source_file_name
-    FROM project_documents d
-    LEFT JOIN attachments a ON a.id = d.source_attachment_id
-    WHERE d.project_id = ? AND d.document_type = ?
-    ORDER BY d.id DESC
-    LIMIT 1
-  `).get(projectId, documentType)
-  return row ? formatProjectDocument(row) : null
-}
-
-function getAttachment(db, id) {
-  const cleanId = toInt(id)
-  if (!cleanId) return null
-  return db.prepare(`
-    SELECT id, original_name, mime_type
-    FROM attachments
-    WHERE id = ? AND COALESCE(deleted_at, '') = ''
-  `).get(cleanId)
-}
-
 function getAttachmentFile(db, id) {
   const cleanId = toInt(id)
   if (!cleanId) return null
@@ -1434,22 +1106,6 @@ function buildProjectDocumentExportUpdates(originalBuffer, project, documentType
     { labels: ['客户电话', '电话', '联系方式'], value: p.phone || project.phone },
     { labels: ['详细地址', '项目地址', '地址'], value: p.address || project.address_detail || project.address }
   ])
-}
-
-function isPptAttachment(file) {
-  return /ppt|presentation/i.test(file?.mime_type || '') || /\.(ppt|pptx)$/i.test(file?.original_name || '')
-}
-
-function formatProjectDocument(row) {
-  return {
-    ...row,
-    parsed_data: parseJson(row.parsed_data, {}),
-    confirmed_data: parseJson(row.confirmed_data, {}),
-    warnings: parseJson(row.warnings, []),
-    created_by_name: row.created_by_real_name || row.created_by_username || '',
-    updated_by_name: row.updated_by_real_name || row.updated_by_username || '',
-    source_file_name: row.source_file_name || ''
-  }
 }
 
 function saveProjectAttachment(db, user, projectId, file) {

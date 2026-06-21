@@ -34,6 +34,7 @@ import { AI_TOOL_REGISTRY, DEFAULT_AI_AGENTS } from './ai/toolRegistry.js'
 import { ensureSchemaVersions, recordFrameworkBaseline } from './db/schemaVersions.js'
 import { runV2Cleanup } from './db/migrations/v2-schema-cleanup.js'
 import { ensureSystemDocumentTemplates } from './db/documentTemplates.js'
+import { handleFinanceGroupMessage } from './services/chatFinanceBot.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -617,8 +618,29 @@ const start = async () => {
 
         io.to(`conv:${conversation_id}`).emit('message:new', msg)
 
-        // 群聊 @AI 自动回复
+        // 获取会话信息（后续多个检查复用）
         const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversation_id)
+
+        // 财务群自动录入（无 @AI 的财务消息）
+        if (conv?.type === 'group' && socket.user.userId) {
+          const botUser = db.prepare("SELECT id FROM users WHERE username = 'ai'").get()
+          if (botUser && socket.user.userId !== botUser.id) {
+            try {
+              await handleFinanceGroupMessage({
+                content: content.trim(),
+                conversationId: conversation_id,
+                conversationName: conv.name || '',
+                senderId: socket.user.userId,
+                db,
+                io
+              })
+            } catch (err) {
+              console.error('💰 财务自动录入异常:', err.message)
+            }
+          }
+        }
+
+        // 群聊 @AI 自动回复
         if (conv?.type === 'group' && /@(AI|小助手|ai)/.test(content)) {
           const question = content.replace(/@(AI|小助手|ai)\s*/g, '').trim() || content
           try {
@@ -653,7 +675,7 @@ const start = async () => {
               }
             } catch {}
 
-            const response = await fetch('https://api.deepseek.com/chat/completions', {
+            const response = await fetch(process.env.AI_ENDPOINT || 'https://api.deepseek.com/chat/completions', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',

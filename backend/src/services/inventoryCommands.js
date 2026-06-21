@@ -38,9 +38,9 @@ export function deductStock(db, productId, quantity) {
   return product
 }
 
-export function addStock(db, productId, quantity) {
+export function addStock(db, productId, quantity, fallbackProductName = '') {
   const product = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?').get(productId)
-  if (!product) throw new Error(`产品「${product.name}」不存在，不能回库`)
+  if (!product) throw new Error(`产品「${fallbackProductName || productId}」不存在，不能回库`)
   const before = toNumber(product.stock)
   const after = roundQty(before + quantity)
   db.prepare(`UPDATE products SET stock = stock + ?, updated_at = datetime('now', 'localtime') WHERE id = ?`)
@@ -105,6 +105,69 @@ export function upsertMaterialIoDocument(db, project, requestRow, items, userId)
   }
 }
 
+export function applyMaterialReturnInventory(db, { project, requestRow, items, note, userId }) {
+  const productStmt = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?')
+  const updateItemStmt = db.prepare(`
+    UPDATE material_request_items
+    SET usage_quantity = ?, return_quantity = ?, amount = ?, remark = ?
+    WHERE id = ?
+  `)
+
+  for (const item of items) {
+    if (item.id) {
+      updateItemStmt.run(item.usage_quantity, item.return_quantity, item.amount, item.remark || '', item.id)
+    }
+
+    let returnedProduct = null
+    if (item.product_id && item.return_quantity > 0) {
+      returnedProduct = addStock(db, item.product_id, item.return_quantity, item.product_name)
+      recordInventoryMovement(db, {
+        product_id: item.product_id,
+        project_id: project.id,
+        material_request_id: requestRow.id,
+        movement_type: 'return',
+        quantity_delta: item.return_quantity,
+        quantity_before: returnedProduct.stock_before,
+        quantity_after: returnedProduct.stock_after,
+        unit: returnedProduct.unit || item.unit || '',
+        reason: '项目回库',
+        note: note || `${project.name || '项目'} 回库：${item.product_name}`,
+        created_by: userId
+      })
+    }
+
+    if (item.difference_quantity > 0) {
+      recordMaterialLoss(db, {
+        projectId: project.id,
+        requestId: requestRow.id,
+        productId: item.product_id || 0,
+        productName: item.product_name || '',
+        quantity: item.difference_quantity,
+        unit: item.unit || '',
+        reason: '回库差异',
+        note: item.remark || note || '',
+        userId
+      })
+      if (item.product_id) {
+        const product = returnedProduct || productStmt.get(item.product_id)
+        recordInventoryMovement(db, {
+          product_id: item.product_id,
+          project_id: project.id,
+          material_request_id: requestRow.id,
+          movement_type: 'loss',
+          quantity_delta: 0,
+          quantity_before: product?.stock_after ?? product?.stock ?? 0,
+          quantity_after: product?.stock_after ?? product?.stock ?? 0,
+          unit: product?.unit || item.unit || '',
+          reason: '损耗记录',
+          note: `损耗 ${formatQty(item.difference_quantity)} ${item.unit || ''}：${item.product_name}`,
+          created_by: userId
+        })
+      }
+    }
+  }
+}
+
 // ── helpers ──
 function roundQty(value) {
   const n = Number(value || 0)
@@ -117,4 +180,8 @@ function roundMoney(value) {
 function toNumber(value) {
   const n = Number(value)
   return Number.isFinite(n) ? n : 0
+}
+function formatQty(value) {
+  const n = Number(value || 0)
+  return Number.isInteger(n) ? String(n) : n.toFixed(2)
 }

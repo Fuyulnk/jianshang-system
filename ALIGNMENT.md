@@ -176,6 +176,61 @@
 
 ## 对接记录
 
+### 2026-06-21 Claude：财务群自动录入机器人
+
+- 任务：财务群里发财务消息（如"收入5000 王晓 墙漆尾款 晓婉中行"），自动解析并写入交易流水，回复"已录入"。
+- 新增文件：`backend/src/services/chatFinanceBot.js`
+  - 三级过滤：非bot用户 → 财务群 → 含数字+财务关键词 → 解析置信度高 → 创建交易 → 回复
+  - 含 @AI 的消息跳过（不走bot，走现有AI分身）
+  - 非财务消息跳过（"今天天气不错"不触发）
+- 修改文件：`backend/src/index.js` — socket.io message:send 处理器插入财务群检测
+- 验证：
+  - `node --check` 通过 ✅
+  - `parseFinanceTransactionDraft("收入5000 王晓 墙漆尾款 晓婉中行")` 返回置信度 high ✅
+  - `createTransaction` 创建交易成功，测试数据已清理 ✅
+- 部署状态：未提交，未上传服务器。
+
+### 2026-06-21 Codex：V2 多子代理推进 + 部署校准 + 服务层边界修复
+
+- 任务：按用户“V2 多子代理推进计划”执行，采用 Codex 主控 + 子代理并行模式；本轮只做本地实现和验证，不提交、不上传服务器。
+- P0 部署校准：
+  - 线上 `/health` 正常，PM2 仍运行 `/root/jianshang-system/backend/src/index.js`。
+  - 线上代码仍是旧版：缺 `backend/src/db/migrations/v2-schema-cleanup.js`、缺 `backend/src/services/inventoryCommands.js`。
+  - 线上数据库 `/root/fuyulnk/jianshang.db` 与 `/root/jianshang-system/backend/data/jianshang.db` 均未发现 `schema_versions`。
+  - 结论：本地 V2 进度尚未进入线上运行目录；后续部署前必须按部署流程备份 `/root/fuyulnk/jianshang.db` 和 `/root/jianshang-system/backend/data/`，再同步源码/静态资源并 PM2 重启。
+- 后端改动：
+  - `backend/src/services/inventoryCommands.js`：新增 `applyMaterialReturnInventory`，材料回库加库存、损耗记录、库存流水统一走服务层；`material-requests.js` 删除本地回库 SQL。
+  - `backend/src/services/projectDocumentCommands.js`：抽出项目资料链确认服务，内聚单据读取/版本写入/字段同步/确认校验/状态推进并发保护/日志写入；`project-imports.js` 路由改为认证、查项目、调用服务。
+  - `backend/src/services/financeCommands.js`：新增交易流水写入服务，`transactions.js` 的新增/删除流水与账户余额回退改由服务层处理。
+  - `backend/src/db/migrations/v2-schema-cleanup.js`：修复空库先创建简版财务/AI 表导致字段缺失的问题；新增迁移后结构断言，关键字段缺失时不记录 `schema_versions`。
+  - `backend/src/routes/project-imports.js`：项目资料链保存/导入增加按单据类型的岗位写入限制，避免财务/仓库保存非本岗工勘、班组交底、验收等单据。
+  - `backend/src/routes/projects.js`：通用状态推进增加 `WHERE id = ? AND status = ?` 并发保护，重复点击或多人同时推进时返回 409。
+  - `backend/src/index.js`、`backend/src/routes/settings.js`、`backend/src/routes/project-imports.js`：AI 接口统一支持 `AI_ENDPOINT` 覆盖，便于脱敏/mock 测试，不强制打真实 DeepSeek。
+- 前端联动修复：
+  - `frontend-new/src/components/projects/ProjectDocumentSummary.vue`：材料资料链兼容后端 `product_name`，避免材料名为空。
+  - 资料链移除 `material_io` 的直接“确认回库”按钮，防止绕过真正的 `/material-return/confirm` 库存回库服务。
+  - 项目结算收款单只要已有系统单据也显示“导出原格式”，由后端决定走原附件还是固定模板。
+- 子代理结果：
+  - 库存代理完成回库/损耗服务化并通过语法检查。
+  - 项目单据代理完成 `projectDocumentCommands` 抽离并通过语法/导入检查。
+  - 前端代理只读发现 4 个联动接缝，本轮已修 3 个关键项；`ProjectDetail` 材料更新刷新资料链当前已有 `handleAttachmentsUpdated`，未重复改。
+  - 风险代理只读拦截 P0/P1：P0 语法重复声明已由项目单据代理后续修复，V2 简版表问题已由本轮迁移修复；P1 单据越权、状态并发、AI mock 边界已处理。
+- 验证：
+  - `node --check` 通过：`v2-schema-cleanup.js`、`inventoryCommands.js`、`projectDocumentCommands.js`、`financeCommands.js`、`material-requests.js`、`project-imports.js`、`transactions.js`、`projects.js`、`settings.js`、`index.js`。
+  - V2 迁移内存库结构验证通过，`schema_versions` 写入 `20260621_v2_schema_cleanup`。
+  - 临时空库后端启动成功，`/health` 正常，`schema_versions` 有 `20260621_v2_schema_cleanup`。
+  - 临时真实库副本后端启动成功，`/health` 正常，`schema_versions` 有 `20260621_v2_schema_cleanup`。
+  - 多角色接口冒烟通过：`finance` 访问 `/api/finance/overview` 为 200；`warehouse`/`employee` 访问财务为 403；`warehouse` 访问产品为 200；`finance` 保存班组交底被 403 拒绝。
+  - 内存服务冒烟通过：`financeCommands` 新增/删除流水正确更新并回退账户余额；`applyMaterialReturnInventory` 正确加库存、记录损耗和 return/loss 库存流水。
+  - `npm run build`（`frontend-new`）通过；仅有既有 Vite 大 chunk 警告。
+  - `git diff --check` 通过。
+- 未完成/注意：
+  - 本轮未提交、未上传服务器。
+  - `handoff/ai-agent-groupchat-plan.md` 是既有未跟踪规划文件，本轮未纳入提交范围。
+  - 财务入账登记表的单元格/备注写入仍在 `finance.js` 路由内，后续可继续抽到 `financeCommands` 或专门的 ledger command service。
+  - `products.js` 里的普通库存调整仍有本地库存流水 helper，后续可按同一 SOP 收敛到库存服务。
+  - 后续部署必须先解决线上旧目录未吃到本地 V2 的问题，再做服务器回归。
+
 ### 2026-06-21 Claude：V2 数据库迁移整理（schema 集中化）
 
 - 任务：将散落在 `index.js` 的 100+ 行 `try/catch` 建表/补字段逻辑集中到迁移模块。

@@ -375,7 +375,15 @@ export default function projectRoutes(server, db) {
       return
     }
 
-    db.prepare("UPDATE projects SET status = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(targetStatus, project.id)
+    const result = db.prepare(`
+      UPDATE projects
+      SET status = ?, updated_at = datetime('now', 'localtime')
+      WHERE id = ? AND status = ?
+    `).run(targetStatus, project.id, project.status)
+    if (result.changes === 0) {
+      reply.code(409).send({ success: false, message: '项目状态已被其他请求推进，请刷新后重试' })
+      return
+    }
     addLog(
       db,
       project.id,

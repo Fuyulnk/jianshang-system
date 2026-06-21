@@ -1,6 +1,6 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { canAccessModule, canAccessProjectRecord } from '../utils/permissions.js'
-import { recordInventoryMovement, deductStock, updateMaterialRequestStatus, upsertMaterialIoDocument } from '../services/inventoryCommands.js'
+import { recordInventoryMovement, deductStock, updateMaterialRequestStatus, upsertMaterialIoDocument, applyMaterialReturnInventory } from '../services/inventoryCommands.js'
 
 const STATUS_LABELS = {
   requested: '待仓库确认',
@@ -437,81 +437,6 @@ function roundQty(value) {
   return Number.isFinite(n) ? Math.round(n * 10000) / 10000 : 0
 }
 
-function applyMaterialReturnInventory(db, { project, requestRow, items, note, userId }) {
-  const productStmt = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?')
-  const addStockStmt = db.prepare(`
-    UPDATE products
-    SET stock = stock + ?, updated_at = datetime('now', 'localtime')
-    WHERE id = ?
-  `)
-  const updateItemStmt = db.prepare(`
-    UPDATE material_request_items
-    SET usage_quantity = ?, return_quantity = ?, amount = ?, remark = ?
-    WHERE id = ?
-  `)
-  const lossStmt = db.prepare(`
-    INSERT INTO material_losses (
-      project_id, material_request_id, product_id, product_name,
-      quantity, unit, reason, note, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-
-  for (const item of items) {
-    if (item.id) {
-      updateItemStmt.run(item.usage_quantity, item.return_quantity, item.amount, item.remark || '', item.id)
-    }
-    if (item.product_id && item.return_quantity > 0) {
-      const product = productStmt.get(item.product_id)
-      if (!product) throw new Error(`产品「${item.product_name}」不存在，不能回库`)
-      const before = toNumber(product.stock)
-      const after = roundQty(before + item.return_quantity)
-      addStockStmt.run(item.return_quantity, item.product_id)
-      recordInventoryMovement(db, {
-        product_id: item.product_id,
-        project_id: project.id,
-        material_request_id: requestRow.id,
-        movement_type: 'return',
-        quantity_delta: item.return_quantity,
-        quantity_before: before,
-        quantity_after: after,
-        unit: product.unit || item.unit || '',
-        reason: '项目回库',
-        note: note || `${project.name || '项目'} 回库：${item.product_name}`,
-        created_by: userId
-      })
-    }
-    if (item.difference_quantity > 0) {
-      lossStmt.run(
-        project.id,
-        requestRow.id,
-        item.product_id || 0,
-        item.product_name || '',
-        item.difference_quantity,
-        item.unit || '',
-        '回库差异',
-        item.remark || note || '',
-        userId || 0
-      )
-      if (item.product_id) {
-        const product = productStmt.get(item.product_id)
-        recordInventoryMovement(db, {
-          product_id: item.product_id,
-          project_id: project.id,
-          material_request_id: requestRow.id,
-          movement_type: 'loss',
-          quantity_delta: 0,
-          quantity_before: product?.stock || 0,
-          quantity_after: product?.stock || 0,
-          unit: product?.unit || item.unit || '',
-          reason: '损耗记录',
-          note: `损耗 ${formatQty(item.difference_quantity)} ${item.unit || ''}：${item.product_name}`,
-          created_by: userId
-        })
-      }
-    }
-  }
-}
-
 function groupLabel(group) {
   return { material: '材料清单', auxiliary: '辅材损耗', tool: '工具', transport: '运输费' }[group] || '材料清单'
 }
@@ -533,10 +458,4 @@ function toNumber(value) {
 
 function cleanText(value) {
   return String(value || '').trim()
-}
-
-
-function formatQty(value) {
-  const n = Number(value || 0)
-  return Number.isInteger(n) ? String(n) : n.toFixed(2)
 }
