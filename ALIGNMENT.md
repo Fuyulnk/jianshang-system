@@ -176,6 +176,15 @@
 
 ## 对接记录
 
+### 2026-06-21 Claude：最近录入面板 + formatProjectDocument 导出修复
+
+- 任务：财务群聊天头部增加"📋 最近录入"下拉面板，显示最近 5 条交易，可跳转到交易流水。
+- 后端：新增 `GET /api/transactions/recent?limit=5` 接口
+- 前端：ChatIndex.vue 财务群头部添加下拉面板，可收缩
+- Bug 修复：`projectDocumentCommands.js` 的 `formatProjectDocument` 未导出，导致 `project-imports.js` 调用报错 → 已加 `export`
+- 验证：`node --check` 通过，`npm run build` 通过
+- 部署：`603e206` + 热修复 `formatProjectDocument` 已同步服务器
+
 ### 2026-06-21 Claude：财务群自动录入机器人
 
 - 任务：财务群里发财务消息（如"收入5000 王晓 墙漆尾款 晓婉中行"），自动解析并写入交易流水，回复"已录入"。
