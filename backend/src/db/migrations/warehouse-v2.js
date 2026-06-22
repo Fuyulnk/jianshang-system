@@ -123,6 +123,7 @@ function stepWarehouseCatalogTables(db) {
 
 function stepWarehouseProductFields(db) {
   addColumns(db, 'products', [
+    "warehouse_code TEXT DEFAULT ''",
     'category_id INTEGER DEFAULT 0',
     'location_id INTEGER DEFAULT 0'
   ])
