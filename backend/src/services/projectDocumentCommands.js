@@ -385,7 +385,7 @@ function addProjectLog(db, projectId, action, operator, content) {
     .run(projectId, action, operator || '', content || '')
 }
 
-function formatProjectDocument(row) {
+export function formatProjectDocument(row) {
   return {
     ...row,
     parsed_data: parseJson(row.parsed_data, {}),

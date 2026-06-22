@@ -33,6 +33,7 @@ import { setAuthDb, resolveFreshUser } from './middleware/auth.js'
 import { AI_TOOL_REGISTRY, DEFAULT_AI_AGENTS } from './ai/toolRegistry.js'
 import { ensureSchemaVersions, recordFrameworkBaseline } from './db/schemaVersions.js'
 import { runV2Cleanup } from './db/migrations/v2-schema-cleanup.js'
+import { runWarehouseV2Schema } from './db/migrations/warehouse-v2.js'
 import { ensureSystemDocumentTemplates } from './db/documentTemplates.js'
 import { handleFinanceGroupMessage } from './services/chatFinanceBot.js'
 
@@ -59,6 +60,7 @@ ensureProjectTables(db)
 ensureSchemaVersions(db)
 recordFrameworkBaseline(db)
 runV2Cleanup(db)
+runWarehouseV2Schema(db)
 
 // 初始化 JWT 配置（自动轮换密钥）
 initJwtConfig(db)
@@ -81,6 +83,8 @@ try { db.exec('ALTER TABLE users ADD COLUMN activated_by INTEGER DEFAULT 0') } c
 try { db.exec("ALTER TABLE users ADD COLUMN disabled_at TEXT DEFAULT ''") } catch {}
 try { db.exec('ALTER TABLE users ADD COLUMN disabled_by INTEGER DEFAULT 0') } catch {}
 try { db.exec("ALTER TABLE users ADD COLUMN last_login_at TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE transactions ADD COLUMN status TEXT DEFAULT 'approved'") } catch {}
+try { db.prepare("UPDATE transactions SET status = 'approved' WHERE status IS NULL OR status = ''").run() } catch {}
 try { db.prepare("UPDATE users SET status = 'active' WHERE status IS NULL OR status = ''").run() } catch {}
 try { db.prepare("UPDATE users SET status = 'active', assignment_status = 'pending' WHERE status = 'pending_activation'").run() } catch {}
 try { db.prepare("UPDATE users SET assignment_status = 'assigned' WHERE username = 'fuyulnk' OR role IN ('super_admin', 'admin') OR COALESCE(employee_id, 0) > 0").run() } catch {}
@@ -867,6 +871,7 @@ function ensureCoreTables(db) {
       category TEXT,
       unit TEXT DEFAULT 'kg',
       spec TEXT DEFAULT '',
+      warehouse_code TEXT DEFAULT '',
       unit_price REAL DEFAULT 0,
       price_unit TEXT DEFAULT '',
       stock REAL DEFAULT 0,
@@ -914,15 +919,20 @@ function ensureCoreTables(db) {
       source TEXT DEFAULT '',
       address TEXT DEFAULT '',
       amount REAL DEFAULT 0,
+      fulfillment_type TEXT DEFAULT 'warehouse',
       status TEXT DEFAULT 'ordered',
       note TEXT DEFAULT '',
       created_by INTEGER DEFAULT 0,
       finance_confirmed_by INTEGER DEFAULT 0,
       warehouse_confirmed_by INTEGER DEFAULT 0,
+      stock_out_by INTEGER DEFAULT 0,
+      purchase_paid_by INTEGER DEFAULT 0,
       shipped_by INTEGER DEFAULT 0,
       completed_by INTEGER DEFAULT 0,
       finance_confirmed_at TEXT DEFAULT '',
       warehouse_confirmed_at TEXT DEFAULT '',
+      stock_out_at TEXT DEFAULT '',
+      purchase_paid_at TEXT DEFAULT '',
       shipped_at TEXT DEFAULT '',
       completed_at TEXT DEFAULT '',
       created_at DATETIME DEFAULT (datetime('now', 'localtime')),
@@ -1131,10 +1141,17 @@ function ensureCoreTables(db) {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id, deleted_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_uploaded_by ON attachments(uploaded_by, created_at)') } catch {}
   try { db.exec("ALTER TABLE products ADD COLUMN spec TEXT DEFAULT ''") } catch {}
+  try { db.exec("ALTER TABLE products ADD COLUMN warehouse_code TEXT DEFAULT ''") } catch {}
   try { db.exec('ALTER TABLE products ADD COLUMN unit_price REAL DEFAULT 0') } catch {}
   try { db.exec("ALTER TABLE products ADD COLUMN price_unit TEXT DEFAULT ''") } catch {}
   try { db.exec('ALTER TABLE products ADD COLUMN is_test INTEGER DEFAULT 0') } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_products_warehouse_code ON products(warehouse_code)') } catch {}
   try { db.exec('ALTER TABLE supply_orders ADD COLUMN project_id INTEGER DEFAULT 0') } catch {}
+  try { db.exec("ALTER TABLE supply_orders ADD COLUMN fulfillment_type TEXT DEFAULT 'warehouse'") } catch {}
+  try { db.exec('ALTER TABLE supply_orders ADD COLUMN stock_out_by INTEGER DEFAULT 0') } catch {}
+  try { db.exec("ALTER TABLE supply_orders ADD COLUMN stock_out_at TEXT DEFAULT ''") } catch {}
+  try { db.exec('ALTER TABLE supply_orders ADD COLUMN purchase_paid_by INTEGER DEFAULT 0') } catch {}
+  try { db.exec("ALTER TABLE supply_orders ADD COLUMN purchase_paid_at TEXT DEFAULT ''") } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_status ON supply_orders(status, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_created_by ON supply_orders(created_by, created_at)') } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_supply_orders_project ON supply_orders(project_id, created_at)') } catch {}

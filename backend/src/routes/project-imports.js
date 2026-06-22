@@ -9,7 +9,7 @@ import { buildProjectDraft, emptyDeliveryDocument, missingBriefingFields, parseB
 import { buildLabelCellUpdates, patchXlsxCells } from '../utils/xlsxTemplateExport.js'
 import { getActiveDocumentTemplate } from '../services/documentTemplateService.js'
 import { buildProjectDeliveryChain, deliveryDocumentLabel } from '../services/projectDocumentChain.js'
-import { confirmDeliveryStep, getLatestProjectDocument, normalizeDeliveryDocumentType, syncProjectFromDeliveryDocument, upsertProjectDocument } from '../services/projectDocumentCommands.js'
+import { confirmDeliveryStep, formatProjectDocument, getLatestProjectDocument, normalizeDeliveryDocumentType, syncProjectFromDeliveryDocument, upsertProjectDocument } from '../services/projectDocumentCommands.js'
 import {
   diffDraft,
   missingCoreFields,

@@ -1,13 +1,22 @@
 // 系统设置接口
 import { authMiddleware } from '../middleware/auth.js'
 import { spawn } from 'child_process'
-import { existsSync } from 'fs'
-import { join } from 'path'
+import { existsSync, mkdirSync, writeFileSync } from 'fs'
+import { fileURLToPath } from 'url'
+import { dirname } from 'path'
+import { basename, join } from 'path'
 import { requireAssignedAccount } from '../utils/permissions.js'
+import { ensureDocumentTemplateTables } from '../db/documentTemplates.js'
+import { SYSTEM_DOCUMENT_TEMPLATES } from '../domain/documentTemplateConfig.js'
 
 const KB_SERVER = 'http://127.0.0.1:18790'
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 export default function settingsRoutes(server, db) {
+  const documentTemplateDir = join(__dirname, '../../data/document-templates')
+  ensureDocumentTemplateTables(db)
+
   // 确保设置表存在
   db.exec(`CREATE TABLE IF NOT EXISTS system_settings (
     key TEXT PRIMARY KEY,
@@ -219,6 +228,73 @@ export default function settingsRoutes(server, db) {
 
     return { success: true, data: rows, summary }
   })
+
+  server.get('/api/settings/document-templates', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!['super_admin', 'admin'].includes(request.user.role)) {
+      reply.code(403).send({ success: false, message: '无权限' })
+      return
+    }
+
+    const rows = db.prepare(`
+      SELECT dt.*,
+             (SELECT COUNT(*) FROM document_template_mappings m WHERE m.template_id = dt.id) as mapping_count
+      FROM document_templates dt
+      ORDER BY dt.document_type ASC, dt.updated_at DESC, dt.id DESC
+    `).all()
+    const configMap = new Map(SYSTEM_DOCUMENT_TEMPLATES.map(item => [item.document_type, item]))
+    return {
+      success: true,
+      data: rows.map(row => ({
+        ...row,
+        configured_title: configMap.get(row.document_type)?.title || row.title,
+        file_exists: row.source_file_path ? existsSync(row.source_file_path) : false
+      })),
+      supported: SYSTEM_DOCUMENT_TEMPLATES.map(item => ({
+        document_type: item.document_type,
+        title: item.title,
+        mapping_count: item.mappings?.length || 0
+      }))
+    }
+  })
+
+  server.post('/api/settings/document-templates/:documentType/upload', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!['super_admin', 'admin'].includes(request.user.role)) {
+      reply.code(403).send({ success: false, message: '无权限' })
+      return
+    }
+    const documentType = cleanText(request.params.documentType)
+    const config = SYSTEM_DOCUMENT_TEMPLATES.find(item => item.document_type === documentType)
+    if (!config) return { success: false, message: '不支持的模板类型' }
+    const fileName = safeFileName(request.body?.file_name || config.file_name)
+    if (!/\.(xlsx|xlsm|xls)$/i.test(fileName)) return { success: false, message: '模板必须是 Excel 文件' }
+    const fileData = String(request.body?.file_data || '')
+    if (!fileData) return { success: false, message: '请上传模板文件' }
+    const buffer = decodeDataUrl(fileData)
+    if (!buffer.length) return { success: false, message: '模板文件内容为空' }
+    if (buffer.length > 20 * 1024 * 1024) return { success: false, message: '模板文件不能超过 20MB' }
+
+    mkdirSync(documentTemplateDir, { recursive: true })
+    const version = `manual_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`
+    const storedName = `${documentType}_${version}.xlsx`
+    const storedPath = join(documentTemplateDir, storedName)
+    writeFileSync(storedPath, buffer)
+
+    const tx = db.transaction(() => {
+      db.prepare("UPDATE document_templates SET status = 'inactive', updated_at = datetime('now', 'localtime') WHERE document_type = ? AND status = 'active'")
+        .run(documentType)
+      const inserted = db.prepare(`
+        INSERT INTO document_templates (
+          document_type, title, template_version, source_file_name, source_file_path, status, created_by
+        ) VALUES (?, ?, ?, ?, ?, 'active', ?)
+      `).run(documentType, cleanText(request.body?.title) || config.title, version, fileName, storedPath, request.user.userId)
+      upsertTemplateMappings(db, inserted.lastInsertRowid, config.mappings || [])
+      return inserted.lastInsertRowid
+    })
+    const id = tx()
+    return { success: true, id, message: '模板已上传并设为当前版本' }
+  })
 }
 
 function getSettings(db) {
@@ -228,4 +304,44 @@ function getSettings(db) {
   } catch {
     return {}
   }
+}
+
+function upsertTemplateMappings(db, templateId, mappings) {
+  const stmt = db.prepare(`
+    INSERT INTO document_template_mappings (
+      template_id, field_key, field_label, sheet_name, cell_address, value_type, required
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(template_id, field_key) DO UPDATE SET
+      field_label = excluded.field_label,
+      sheet_name = excluded.sheet_name,
+      cell_address = excluded.cell_address,
+      value_type = excluded.value_type,
+      required = excluded.required,
+      updated_at = datetime('now', 'localtime')
+  `)
+  for (const mapping of mappings) {
+    stmt.run(
+      templateId,
+      mapping.field_key,
+      mapping.field_label || '',
+      mapping.sheet_name || '',
+      mapping.cell_address,
+      mapping.value_type || 'text',
+      mapping.required ? 1 : 0
+    )
+  }
+}
+
+function decodeDataUrl(value) {
+  const text = String(value || '')
+  const base64 = text.includes(',') ? text.split(',').pop() : text
+  return Buffer.from(base64, 'base64')
+}
+
+function safeFileName(value) {
+  return basename(String(value || 'template.xlsx')).replace(/[\\/:*?"<>|]/g, '_').slice(0, 120)
+}
+
+function cleanText(value) {
+  return String(value || '').trim()
 }

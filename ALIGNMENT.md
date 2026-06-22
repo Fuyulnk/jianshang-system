@@ -104,6 +104,7 @@
 - `handoff/2026-06-13-real-project-smoke-run-v1.md`：线上测试项目从交接跑到归档的真实闭环试跑报告，包含项目 ID、资料链结果、库存影响和卡点分级。
 - `handoff/2026-06-18-database-framework-api-v1.md`：数据库框架与接口整理 V1 对接，记录数据域、迁移记录、事实服务、AI 读取口、固定模板导出和 V2 建议。
 - `handoff/2026-06-18-original-template-export-v1.md`：原表格格式导出 V1 对接，记录入账登记表、项目结算收款单按原 Excel 格式导出的实现边界。
+- `handoff/2026-06-22-warehouse-data-entry-sop-v1.md`：仓库数据录入 SOP V1，统一材料名称、规格、仓库单位、库位编码、盘点导入、出库/回库/供货单和 AI 查询口径。
 - `handoff/2026-06-17-project-payment-ledger-flow-v1.md`：项目结算收款单、财务入账登记表、出库导入、复尺跳过等流程调整对接。
 - `outputs/project-library-v1/`：项目库 V1 生成物，含 `project_library_seed.csv`、`project_library_seed.json`、`project_document_inventory.json`。
 - `handoff/animation-tasks.md`：历史遗留的动画任务记录，目前不是主线，除非用户明确要求再处理。
@@ -175,6 +176,188 @@
 注意：这些改动可能是用户或其他 Agent 的已有成果。除非用户明确要求，不要清理或回滚。
 
 ## 对接记录
+
+### 2026-06-22 Codex：Hermes 财务/盘点/模板审计修补
+
+- 背景：Hermes 指出财务群机器人高置信度消息会直接创建交易流水、盘点歧义匹配仍可提交、模板上传版本号可由用户自定义。用户确认“飞书式自动录入”体验要保留，所以本轮改成“自动生成待确认流水，人工确认后才影响余额”。
+- 财务机器人：
+  - `backend/src/services/chatFinanceBot.js`：财务群消息命中高置信度后不再直接生效，改为创建 `status='pending'` 的待确认流水，并在群内回复“请在交易流水页面确认后生效”。
+  - `backend/src/services/financeCommands.js`：`createTransaction` 支持 `pending/approved`；`pending` 不更新账户余额；新增 `confirmTransaction`，确认时才更新余额。
+  - `confirmTransaction` 增加并发保护：必须先抢到 `pending -> approved` 状态更新，避免多人同时确认导致余额重复增减。
+  - `deleteTransaction`：删除待确认流水不回退余额，删除已确认流水才回退余额。
+  - `backend/src/routes/transactions.js`：新增 `POST /api/transactions/:id/confirm`；交易筛选支持 `status=pending/approved/cancelled`；导出汇总只统计已确认流水。
+  - `frontend-new/src/views/transactions/TransactionList.vue`：交易流水页新增“状态”筛选、状态列、待确认行的“确认”按钮；账户分组收入/支出统计只算已确认流水。
+  - `backend/src/routes/accounts.js`：账户月度/总览汇总只统计已确认流水，避免待确认草稿污染月份报表。
+  - `backend/src/routes/ai.js`：AI 工具 `create_transaction` 改走 `financeCommands.createTransaction`，不再保留路由内本地 SQL 写入逻辑。
+- 盘点：
+  - `backend/src/routes/products.js`：别名匹配到多个产品时，盘点草稿明细记录为 `match_status='ambiguous'`，不自动绑定第一个产品。
+  - 盘点确认前显式阻断 `ambiguous` 明细，提示“请先手动指定产品”，避免同名多规格材料被误扣/误调库存。
+- 模板上传：
+  - `backend/src/routes/settings.js`：模板版本号改为后端自动生成 `manual_YYYYMMDDHHMMSS`，忽略请求体里的 `template_version`，避免用户自定义 `v999/hack` 之类版本。
+- 旧库兼容：
+  - `backend/src/index.js`：启动时确保旧数据库补 `transactions.status`，并把空状态补为 `approved`。
+- 验证：
+  - `node --check backend/src/services/financeCommands.js backend/src/services/chatFinanceBot.js backend/src/routes/transactions.js backend/src/routes/products.js backend/src/routes/settings.js backend/src/routes/accounts.js backend/src/routes/ai.js backend/src/index.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 后端内存库冒烟通过：pending 不改余额、确认后改余额、重复确认不重复改余额、删除 pending 不回退余额。
+- 未处理：
+  - Hermes P2-1 “月份余额快照表”暂未做。当前仍是 `initial_balance + 已确认历史流水` 的估算模式；如果月底正式运行后要锁定历史月份，需要单独做月末快照表。
+- 注意：
+  - 本轮未提交、未上传服务器。
+
+### 2026-06-22 Codex：账户管理新增月份视图
+
+- 任务：用户希望账户管理页能按月份查看交易流水汇总，方便观察跨月收入、支出和余额变化；先做一个可审版本。
+- 后端：
+  - `backend/src/routes/accounts.js` 新增 `GET /api/accounts/summary`。
+  - 支持 `mode=all` 总览和 `month=YYYY-MM` 月份视图。
+  - 月份视图按 `transactions.created_at` 汇总未作废流水，返回每个账户的收入、支出、净变化、月初估算余额、月末估算余额。
+  - 总览模式返回累计收入、累计支出、累计净变化和当前余额。
+- 前端：
+  - `frontend-new/src/views/accounts/AccountList.vue` 增加“月份视图/总览”切换、月份选择、回到本月按钮。
+  - 选择记忆保存在当前浏览器 `localStorage`，下次进入账户页保留上次月份或总览模式。
+  - 表格保留原初始余额/当前余额，并新增收入、支出、净变化、月末估算余额列。
+  - ID 列加宽并居中，避免 `ID` 和两位数编号竖向换行。
+  - 新增“编辑”按钮；新增/编辑账户弹窗均可填写初始余额和当前余额校准。
+- 余额口径：
+  - 初始余额用于月度估算的起点。
+  - 当前余额是账户当前账面余额，后续交易流水会在这个基础上自动增减。
+- 验证：
+  - `node --check backend/src/routes/accounts.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 本地真实库 SQL 抽查：账户数 12；当前 2026-06 样本流水为空，页面应显示月度收入/支出为 0.00。
+  - 本地 3001 后端已重启，`/health` 正常。
+- 注意：
+  - 本轮未提交、未上传服务器。
+
+### 2026-06-22 Claude：Hermes P2 修复 — 模板文件名 + 盘点歧义匹配
+
+- P2-1 模板上传文件名重复前缀 → `settings.js` 存储名改为 `${documentType}_${version}.xlsx`，不再拼接用户原始文件名
+- P2-3 盘点别名匹配歧义 → `products.js` 的 `matchStocktakingProduct` 在别名匹配到多个产品时，返回 `match_status: 'ambiguous'` 和匹配数量，前端可提示用户手动确认
+- P2-2 供货方式不可改 → 设计如此，不修
+- 验证：`node --check` 通过
+
+### 2026-06-22 Codex：仓库数据录入 SOP 沉淀
+
+- 任务：按用户要求，把仓库编码、盘点导入、产品规格/单位、出库/回库/供货单联动和 AI 查询口径沉淀成共享 SOP，方便 Codex、Claude、Hermes 和后续业务人员按同一套标准处理仓库数据。
+- 新增文件：
+  - `handoff/2026-06-22-warehouse-data-entry-sop-v1.md`
+- SOP 核心：
+  - 同名不同规格必须拆成不同 SKU，例如 `霞光沙1L` 和 `霞光沙5L` 分开录。
+  - `1L/5L/20kg` 是规格，不是库存单位；仓库单位应使用 `桶/支/卷/个` 等真实盘点单位。
+  - 库位编码采用 `A-1-1-1` 四段式：区域、货架、排、格。
+  - 盘点导入先生成草稿，匹配失败必须人工确认，不允许系统猜同名材料。
+  - 自有库存出库/供货必须绑定 `product_id`；总部直发不扣自有库存。
+  - AI 仓库查询必须回答名称、规格、仓库单位、库存、低库存线和库位。
+- 注意：
+  - 本轮只新增 SOP 和索引，不改业务代码、不提交、不上传服务器。
+
+### 2026-06-22 Codex：V2 收口 + 仓库体系 V2 + 脱敏真实模型回归
+
+- 任务：完成昨日 V2 遗留项和今日仓库体系主线：Excel 模板手动上传替换、多角色权限回归、脱敏测试库跑真实 DeepSeek、仓库数据库迁移、库存页搜索/分类/库位筛选、产品表单库位选择、盘点导入草稿、出库/回库/供货单库位联动、AI 仓库查询口径同步。
+- 后端：
+  - `backend/src/db/migrations/warehouse-v2.js`：新增仓库 V2 迁移，包含 `product_categories`、`warehouse_locations`、`product_aliases`、`product_location_balances`、出库/供货分配表、盘点批次和盘点明细；补 `products.category_id/location_id`、`inventory_movements.location_id/stocktaking_batch_id/reference_*`、`material_request_items.location_id`、`supply_order_items.location_id`。
+  - `backend/src/services/warehouseCatalog.js`：新增仓库编码解析和归一化，支持 `A-1-1-1` 解释为区域/货架/排/格；过滤“门口左边”等临时位置。
+  - `backend/src/routes/products.js`：产品新增/编辑写入分类和库位；新增 `/api/warehouse/options`、盘点草稿导入、盘点批次查看和确认接口；盘点确认会更新库存、低库存提醒和库位余额，只有数量变化时写库存流水。
+  - 盘点导入已兼容真实仓库表头 `款式 规格`，避免 Excel 标题空格清洗后产品名识别失败。
+  - `backend/src/services/businessFacts.js`：库存事实接口支持 `query/category/area/warehouse_code/location_status/stock_status/order_by`，返回规格、仓库单位、库位和多规格 SKU 信息。
+  - `backend/src/services/inventoryCommands.js`、`backend/src/routes/material-requests.js`、`backend/src/routes/supply-orders.js`：出库、回库、供货单库存动作携带 `location_id`，自有库存路线保留 `product_id` 和库位联动。
+  - `backend/src/routes/settings.js`：系统设置新增 Excel 模板上传/替换接口，模板文件放在 `backend/data/document-templates/`，数据库记录模板类型、版本、路径、字段映射和启用状态；不再要求 SSH 手工同步模板文件。
+  - `backend/scripts/seed-safe-ai-test-db.mjs`、`rbac-smoke.mjs`、`ai-mock-smoke.mjs`、`ai-real-deepseek-smoke.mjs`：新增脱敏测试库、权限回归、AI mock 和真实 DeepSeek 冒烟脚本。
+- 前端：
+  - `frontend-new/src/views/products/ProductList.vue`：产品库存页增加搜索、分类、区域、库存状态、库位状态筛选；新增/编辑表单支持仓库编码/库位选择；新增“导入盘点草稿”入口和确认抽屉。
+  - `frontend-new/src/components/material/MaterialRequestPanel.vue`：材料出库/回库表格显示库位，产品下拉按名称、规格、单位、库存、库位搜索。
+  - `frontend-new/src/views/projects/ProjectSupplyList.vue`：供货单新建/导入明细显示并保存库位，自有库存选品沿用库存下拉体验。
+  - `frontend-new/src/views/system/SystemSettings.vue`：新增“表格模板”设置面板，可按模板类型上传/替换固定 Excel 模板。
+  - `backend/src/ai/toolRegistry.js`、`backend/src/routes/ai.js`：AI 仓库口径同步为“名称 + 规格 + 仓库单位 + 库位”，明确 5升/20kg 是规格，不是库存单位。
+- 验证：
+  - 后端语法检查通过：`products.js`、`warehouseCatalog.js`、`warehouse-v2.js`、`settings.js`、`businessFacts.js`、`inventoryCommands.js`、`material-requests.js`、`supply-orders.js`、`ai.js`、`toolRegistry.js` 和 4 个新增脚本。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - `npm --prefix backend run seed:safe-ai`、`smoke:rbac`、`smoke:ai-mock` 通过。
+  - `AI_REAL_EGRESS_ENABLED=1 AI_TEST_DATASET=1 npm --prefix backend run smoke:ai-real` 通过，真实 DeepSeek 基于脱敏库回答出霞光沙 5升/1升、单位桶、低库存线和 A 区库位。
+  - 本地真实库已跑仓库 V2 迁移检查，`schema_versions` 有 `20260622_warehouse_v2`，关键表和字段存在。
+- 注意：
+  - 本轮未提交、未上传服务器。
+  - 用户提供的真实仓库盘点表已做表头预检，字段包括 `款式 规格`、`功能名称`、`单位`、`仓库库存数量`、`存放位置`、`阀值`；尚未在真实页面确认完整导入效果。
+  - 多角色回归目前是脚本级接口权限验证，真实浏览器多人同时登录仍建议后续让 Claude/Hermes 低成本复测。
+
+### 2026-06-21 Claude：供货单流程改造——分支流程+库存联动+供货方式
+
+- 任务：供货单支持两种供货方式（自有库存发货 / 总部采购直发），不同方式走不同流程步骤。
+- 后端：
+  - `supply-orders.js`：状态机改为动态分支，`nextStatus()` 根据 `fulfillment_type` 决定下一步
+  - 新增状态：`stock_out`（出库扣库存）、`purchase_paid`（付总部货款）
+  - `stock_out` 调 `deductStock` + `recordInventoryMovement` 扣库存
+  - `purchase_paid` 调 `createTransaction` 记支出
+  - 新增字段：`fulfillment_type`、`stock_out_by/at`、`purchase_paid_by/at`
+  - 迁移：`index.js` 加 ALTER TABLE
+- 前端：
+  - 新建/编辑弹窗加"供货方式"选择（radio group）
+  - 表格加"供货方式"列，显示自有库存/总部直发
+  - 流程步骤条根据 `fulfillment_type` 动态切换
+  - 导入弹窗也加供货方式选择，`normalizeParsedOrder` 补 `fulfillment_type`
+  - 概览卡片和状态筛选同步新状态
+- 验证：本地后端测试创建/推进/扣库存均通过。未部署服务器。
+- 注意：前端需要强制刷新（Cmd+Shift+R）清除缓存才能看到新列和选项。
+
+### 2026-06-21 Codex：供货单入口路线锁定 + 产品库存台账简化
+
+- 任务：修复供货单“选总部仍保存成自有”的路线串联问题；按用户要求取消表单内自有/总部单选，改为入口按钮直接决定供货路线；完成后继续把产品库存页面改成正常人能看懂的材料台账口径。
+- 供货单：
+  - `frontend-new/src/views/projects/ProjectSupplyList.vue`：页面顶部改为 4 个明确入口：导入自有、导入总部、新建自有、新建总部；弹窗内只显示路线标签，不再允许二次切换供货方式。
+  - 新建/导入供货明细改为库存产品下拉；下拉展示具体规格和库存，自有库存必须选中库存产品，避免“霞光沙”同名多规格被系统猜错。
+  - AI/导入解析结果不能覆盖入口路线，`normalizeParsedOrder(input, selectedType)` 以入口按钮传入的 `warehouse/purchase` 为准。
+  - `backend/src/routes/supply-orders.js`：新增后端双保险，自有库存供货保存阶段必须带 `product_id`；编辑旧单时锁定原有 `fulfillment_type`，不能通过请求体改路线。
+- 产品库存：
+  - `frontend-new/src/views/products/ProductList.vue`：列表从数据库字段式展示改为“产品 / 库存 / 参考单价 / 状态 / 操作”。
+  - `规格/包装` 放到产品副标题，`库存单位` 合并到库存数量，`计价单位` 默认隐藏到高级设置，单价显示为 `￥xx / 单位`。
+  - 新增编辑入口，新增/编辑共用一套“基础信息 + 高级设置”弹窗；库存数量变化仍走原后端接口并自动生成库存流水。
+- 验证：
+  - `node --check backend/src/routes/supply-orders.js backend/src/routes/products.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 临时库接口冒烟通过：自有库存未选 `product_id` 返回中文提示；总部直发中文 `总部采购直发` 保存后返回 `fulfillment_type=purchase`；自有库存选择 `霞光沙5L` 后保存为 `warehouse`。
+- 注意：
+  - 本轮未提交、未上传服务器。
+  - 总部直发是否要新增“支付总部货款”节点仍待业务确认，本轮不做。
+
+### 2026-06-22 Codex：供货单路线热修复复测
+
+- 问题：用户反馈不管点“总部直发”还是“自有库存”，列表仍显示自有库存。
+- 排查结论：
+  - 代码里的按钮传参已是 `purchase/warehouse`，但本地 3001 后端进程是 6 月 18 日前启动的旧进程，没有吃到 6 月 21 日供货单路由改动。
+  - 复测旧进程时，直接向 `/api/supply-orders` 提交 `fulfillment_type: "purchase"`，详情仍返回 `warehouse`，且创建接口响应缺少新字段，确认是运行进程旧代码。
+- 处理：
+  - 重启本地 3001 后端进程，使其加载当前 `backend/src/routes/supply-orders.js`。
+  - `frontend-new/src/views/projects/ProjectSupplyList.vue` 的 `normalizeFulfillmentType` 补充中文/英文兼容，识别 `purchase/hq/headquarters/direct/总部/采购/直发`，防止导入器或旧数据中文值再次被前端归成自有。
+- 验证：
+  - 重启后直接创建总部直发测试单，接口返回和详情均为 `fulfillment_type=purchase`。
+  - 自有库存未选择 `product_id` 时返回中文提示：`第 1 条供货明细必须选择库存产品，不能只手填名称`。
+  - 测试数据已删除，`keyword=路线测试` 查询剩余 0 条。
+  - `node --check backend/src/routes/supply-orders.js` 通过；`npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+
+### 2026-06-22 Codex：产品库存规格/单位口径修正 + 仓库编码字段
+
+- 背景：用户指出产品库存不能把 `5L` 当库存单位；正确口径是 `5L` 是规格，一桶是库存单位。例如“霞光沙5L｜仓库单位：桶｜当前10桶/低于3桶提醒｜单价：100/桶”。
+- 参考文件：`/Users/fuyulnk./Desktop/简尚文件库/26.5.12仓库盘点(1).xlsx`
+  - 表内已有字段：款式规格、功能名称、色号、单位、仓库库存数量、单价、存放位置。
+  - 旧盘点表里出现过临时摆放描述；系统口径不使用这类临时位置，示例统一按货架编码承接。
+- 后端：
+  - `products` 新增 `warehouse_code TEXT DEFAULT ''`，用于仓库材料编码/存放位置，如 `A-1-1-1`、`B-2-1-1`。
+  - `backend/src/index.js`、`backend/src/db/init.js`、`backend/src/db/seed.js` 已同步建表/迁移字段。
+  - `backend/src/routes/products.js` 新增/编辑产品时保存 `warehouse_code`。
+  - `backend/src/services/businessFacts.js` 返回并搜索 `warehouse_code`，库存下拉、AI facts、库存查询可按库位码命中。
+- 前端：
+  - `frontend-new/src/views/products/ProductList.vue` 标题维持完整产品名，不再额外显示蓝色规格标签；库存说明行增强显示，表达为：`仓库单位：桶｜当前10桶/低于3桶提醒｜单价：100/桶｜分类：...`。
+  - 新增“仓库编码/存放位置”字段，placeholder 为 `A-1-1-1、B-2-1-1`。
+  - 表单提示明确：`5L 是规格，库存单位填桶，表示 5L 一桶`。
+- 验证：
+  - `node --check backend/src/routes/products.js backend/src/services/businessFacts.js backend/src/index.js backend/src/db/init.js backend/src/db/seed.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 本地 3001 后端已重启，迁移字段已生效。
+  - 临时创建 `编码测试` 产品验证 `warehouse_code=A-1-1-1` 可写入、可搜索、可返回；测试产品和测试库存流水均已删除。
+- 后续：
+  - 等仓库清单整理完整后，可做批量导入：Excel 的“存放位置”映射到 `warehouse_code`，单位映射到 `unit`，款式规格/色号/功能名称需再定产品命名规则。
+  - 如果未来库位编码完全标准化，再考虑拆 `warehouse_locations` 表，结构化为区域/货架/排/层。
 
 ### 2026-06-21 Claude：最近录入面板 + formatProjectDocument 导出修复
 

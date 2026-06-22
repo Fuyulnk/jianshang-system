@@ -20,6 +20,13 @@
             <el-option label="支出" value="expense" />
           </el-select>
         </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="filters.status" placeholder="全部" clearable style="width: 120px" @change="doSearch">
+            <el-option label="已确认" value="approved" />
+            <el-option label="待确认" value="pending" />
+            <el-option label="已作废" value="cancelled" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="账户">
           <el-select v-model="filters.account_id" placeholder="全部" clearable style="width: 160px" @change="doSearch">
             <el-option v-for="a in allAccounts" :key="a.id" :label="a.name" :value="a.id" />
@@ -99,8 +106,16 @@
                 <el-table-column prop="category" label="分类" width="100" />
                 <el-table-column prop="description" label="备注" min-width="140" />
                 <el-table-column prop="party" label="对方" width="110" />
-                <el-table-column label="操作" width="120" fixed="right">
+                <el-table-column label="状态" width="90">
                   <template #default="{ row }">
+                    <el-tag :type="transactionStatusType(row.status)" size="small">
+                      {{ transactionStatusLabel(row.status) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="160" fixed="right">
+                  <template #default="{ row }">
+                    <el-button v-if="row.status === 'pending'" type="success" link size="small" @click="handleConfirm(row)">确认</el-button>
                     <el-button link size="small" @click="openAttachmentDialog(row)">附件</el-button>
                     <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
                   </template>
@@ -224,7 +239,7 @@ const smartText = ref('')
 const parseWarnings = ref([])
 const addForm = ref({ account_id: null, type: 'expense', amount: 0, category: '', description: '', party: '' })
 
-const filters = ref({ type: '', account_id: null, account_type: '', category: '' })
+const filters = ref({ type: '', status: '', account_id: null, account_type: '', category: '' })
 const dateRange = ref(null)
 
 function token() { return getAuthToken() }
@@ -262,6 +277,7 @@ const groups = computed(() => {
       }
     }
     map[key].txs.push(tx)
+    if (transactionStatusLabel(tx.status) !== '已确认') continue
     if (tx.type === 'income') map[key].income += tx.amount
     else map[key].expense += tx.amount
   }
@@ -280,6 +296,7 @@ function buildQuery() {
   // 一次性拉 200 条，前端分组
   params.set('pageSize', '200')
   if (filters.value.type) params.set('type', filters.value.type)
+  if (filters.value.status) params.set('status', filters.value.status)
   if (filters.value.account_id) params.set('account_id', filters.value.account_id)
   if (filters.value.account_type) params.set('account_type', filters.value.account_type)
   if (filters.value.category) params.set('category', filters.value.category)
@@ -362,7 +379,7 @@ async function exportTransactions() {
 function doSearch() { fetchList() }
 
 function resetFilters() {
-  filters.value = { type: '', account_id: null, account_type: '', category: '' }
+  filters.value = { type: '', status: '', account_id: null, account_type: '', category: '' }
   dateRange.value = null
   fetchList()
 }
@@ -429,6 +446,7 @@ async function handleAdd() {
       parseWarnings.value = []
       pendingReceipts.value = []
       fetchList()
+      fetchAccounts()
       fetchCategories()
     }
   } finally {
@@ -514,12 +532,42 @@ async function handleDelete(row) {
     })
     ElMessage.success('已删除')
     fetchList()
+    fetchAccounts()
   } catch {}
+}
+
+async function handleConfirm(row) {
+  try {
+    await ElMessageBox.confirm('确认后这条流水会生效，并更新账户余额。', '确认流水')
+    const res = await fetch(`/api/transactions/${row.id}/confirm`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json()
+    if (!json.success) throw new Error(json.message || '确认失败')
+    ElMessage.success(json.message || '流水已确认')
+    fetchList()
+    fetchAccounts()
+  } catch (error) {
+    if (!['cancel', 'close'].includes(error)) ElMessage.error(error.message || '确认失败')
+  }
 }
 
 function openAttachmentDialog(row) {
   selectedTransaction.value = row
   showAttachments.value = true
+}
+
+function transactionStatusLabel(status) {
+  if (status === 'pending') return '待确认'
+  if (status === 'cancelled') return '已作废'
+  return '已确认'
+}
+
+function transactionStatusType(status) {
+  if (status === 'pending') return 'warning'
+  if (status === 'cancelled') return 'info'
+  return 'success'
 }
 
 watch(() => route.query, (q) => {

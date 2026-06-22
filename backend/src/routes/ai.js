@@ -5,6 +5,7 @@ import { canAccessModule, requireAssignedAccount } from '../utils/permissions.js
 import { missingCoreFields, normalizeProjectDraft, parseProjectHandoverText } from '../utils/projectImport.js'
 import { parseFinanceTransactionDraft as parseFinanceTransactionDraftShared } from '../utils/financeParser.js'
 import { AI_TOOL_REGISTRY, buildToolSchemas, toolMeta } from '../ai/toolRegistry.js'
+import { createTransaction } from '../services/financeCommands.js'
 import {
   accountFacts,
   employeeFacts,
@@ -104,14 +105,14 @@ export function executeTool(name, args, db, user) {
       }
       const info = db.prepare('SELECT name, current_balance FROM accounts WHERE id = ?').get(args.account_id)
       if (!info) return JSON.stringify({ success: false, message: `账户 ${args.account_id} 不存在` })
-      db.prepare(
-        'INSERT INTO transactions (account_id, type, amount, category, description, party) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(args.account_id, args.type, args.amount, args.category, args.description || '', args.party || '')
-      // 更新账户余额
-      const sign = args.type === 'income' ? 1 : -1
-      db.prepare(
-        "UPDATE accounts SET current_balance = current_balance + ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
-      ).run(sign * args.amount, args.account_id)
+      createTransaction(db, {
+        account_id: args.account_id,
+        type: args.type,
+        amount: args.amount,
+        category: args.category,
+        description: args.description || '',
+        party: args.party || ''
+      })
       const newBalance = db.prepare('SELECT current_balance FROM accounts WHERE id = ?').get(args.account_id).current_balance
       return JSON.stringify({ success: true, message: `已成功添加${args.type === 'income' ? '收入' : '支出'} ${args.amount} 元 [${args.category}]，账户「${info.name}」当前余额 ${newBalance} 元` })
     }
@@ -302,6 +303,7 @@ function getSystemPrompt(username, agent, memorySummary = '') {
 你描述项目状态时必须使用以上口径，不要再说“项目前期、准备阶段、施工执行”这种旧阶段名称。注意区分“门店交底”和“班组交底”：门店交底是项目来源和客户需求，班组交底是复尺后、出库前的工程执行安排。
 你可以说明下一步缺什么、帮用户生成草稿或检查单据，但不能绕过人工确认。工费、成本、财务结算必须分别通过施工班组工费结算单、完工成本核算表、财务结算/归档凭证确认推进。
 普通员工只能查看和自己相关的项目；如果用户询问无关项目或工具没有返回数据，应明确说明“没有权限或没有查到可见数据”，不要猜测。
+仓库库存要按“产品名+规格+仓库单位+库位”回答。同名多规格材料必须分开列出，例如霞光沙1升、霞光沙5升、霞光沙14升是不同库存项；库存单位通常是桶、袋、支等仓库盘点单位，5升/20kg这类是规格说明，不要当作库存单位。回答库存时优先带出当前数量、低库存提醒线、仓库编码或库位。
 
 ## 当前分身
 名称：${agent?.name || '简尚总助手'}

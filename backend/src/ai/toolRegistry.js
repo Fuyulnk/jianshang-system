@@ -38,14 +38,20 @@ export const AI_TOOL_REGISTRY = [
   {
     name: 'get_products',
     label: '查看库存产品',
-    desc: '查询产品名称、规格、分类、单位、库存、测试材料标记和低库存状态',
+    desc: '查询库存产品，返回名称、规格、分类、仓库单位、当前库存、低库存线、仓库编码/库位、别名和低库存状态',
     tier: 'L1',
     risk_level: 'low',
     action_type: 'tool_read',
     schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '材料名称、规格、分类或单位关键词，如 霞光沙 5L' },
+        query: { type: 'string', description: '材料名称、规格、分类、单位、别名或仓库编码关键词，如 霞光沙 5L、A-1-1-1' },
+        category: { type: 'string', description: '按材料分类筛选' },
+        area: { type: 'string', description: '按仓库区域筛选，如 A、B、C' },
+        warehouse_code: { type: 'string', description: '按仓库编码筛选，如 A-1-1-1' },
+        stock_status: { type: 'string', enum: ['low', 'normal'], description: '低库存或正常库存' },
+        location_status: { type: 'string', enum: ['assigned', 'missing'], description: '是否已填写库位' },
+        order_by: { type: 'string', enum: ['warehouse'], description: '按仓库摆放顺序排序' },
         limit: { type: 'number', description: '返回数量，默认100，最多300' }
       },
       required: []
@@ -258,7 +264,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'warehouse', 'engineering'],
     tools: ['get_products', 'get_projects', 'get_project_documents', 'get_system_stats'],
-    base_prompt: '你是简尚仓库助手。回答产品、分类、规格、单位和库存时必须以系统查询结果为准。'
+    base_prompt: '你是简尚仓库助手。回答产品、分类、规格、仓库单位、库存和库位时必须以系统查询结果为准。同名材料要按规格分开说，例如霞光沙1升、霞光沙5升、霞光沙14升不能混成一个产品。'
   },
   {
     key: 'project',

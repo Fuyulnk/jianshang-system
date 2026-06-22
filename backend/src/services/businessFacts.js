@@ -8,18 +8,42 @@ import {
 } from '../domain/businessDictionaries.js'
 import { canAccessModule, canAccessProjectRecord } from '../utils/permissions.js'
 import { emptyDeliveryDocument } from '../utils/projectDocumentImport.js'
+import { buildLocationDisplay, warehouseSortKeyFromProduct } from './warehouseCatalog.js'
 
 export function inventoryFacts(db, user, filters = {}) {
   if (!canAccessModule(db, user, 'products', 'can_view')) {
     return denied('没有查看库存的权限')
   }
   const query = clean(filters.query)
+  const category = clean(filters.category)
+  const area = clean(filters.area).toUpperCase()
+  const warehouseCode = clean(filters.warehouse_code).toUpperCase()
+  const locationStatus = clean(filters.location_status)
+  const stockStatus = clean(filters.stock_status)
+  const orderBy = clean(filters.order_by)
   const limit = clampLimit(filters.limit, 100, 300)
-  const rows = db.prepare(`
-    SELECT id, name, category, spec, unit, unit_price, price_unit, stock, min_stock, is_test, updated_at
-    FROM products
-    ORDER BY name ASC, spec ASC, id ASC
-  `).all()
+  let rows = db.prepare(`
+    SELECT p.id, p.name, p.category, p.category_id, pc.name as category_name,
+           p.spec, p.warehouse_code, p.location_id,
+           wl.code as location_code, wl.label as location_label, wl.area as location_area, wl.sort_key as location_sort_key,
+           p.unit, p.unit_price, p.price_unit, p.stock, p.min_stock, p.is_test, p.updated_at,
+           COALESCE(GROUP_CONCAT(pa.alias, ' '), '') as aliases
+    FROM products p
+    LEFT JOIN product_categories pc ON pc.id = p.category_id
+    LEFT JOIN warehouse_locations wl ON wl.id = p.location_id
+    LEFT JOIN product_aliases pa ON pa.product_id = p.id
+    GROUP BY p.id
+    ORDER BY
+      CASE WHEN ? = 'warehouse' THEN COALESCE(wl.sort_key, 'ZZZ') ELSE '' END ASC,
+      p.name ASC, p.spec ASC, p.id ASC
+  `).all(orderBy)
+  if (category) rows = rows.filter(row => clean(row.category_name || row.category) === category)
+  if (area) rows = rows.filter(row => clean(row.location_area).toUpperCase() === area)
+  if (warehouseCode) rows = rows.filter(row => clean(row.warehouse_code || row.location_code).toUpperCase().includes(warehouseCode))
+  if (locationStatus === 'missing') rows = rows.filter(row => !clean(row.warehouse_code || row.location_code))
+  if (locationStatus === 'assigned') rows = rows.filter(row => clean(row.warehouse_code || row.location_code))
+  if (stockStatus === 'low') rows = rows.filter(row => Number(row.stock || 0) <= Number(row.min_stock || 0))
+  if (stockStatus === 'normal') rows = rows.filter(row => Number(row.stock || 0) > Number(row.min_stock || 0))
   const data = rows
     .map(productFact)
     .filter(row => !query || row.search_text.includes(query.toLowerCase()))
@@ -27,7 +51,13 @@ export function inventoryFacts(db, user, filters = {}) {
   return ok(data, {
     count: data.length,
     domain: 'inventory',
-    query
+    query,
+    category,
+    area,
+    warehouse_code: warehouseCode,
+    location_status: locationStatus,
+    stock_status: stockStatus,
+    order_by: orderBy
   })
 }
 
@@ -280,14 +310,22 @@ function productFact(product) {
   const displayName = productDisplayName(product)
   const unit = clean(product.unit)
   const stock = Number(product.stock || 0)
-  const skuLabel = `${displayName}${unit ? `｜${unit}` : ''}｜${formatQty(stock)}`
+  const warehouseCode = clean(product.warehouse_code)
+  const locationDisplay = buildLocationDisplay(product)
+  const sortKey = warehouseSortKeyFromProduct(product)
+  const categoryName = clean(product.category_name || product.category)
+  const skuLabel = `${displayName}${warehouseCode ? `｜${warehouseCode}` : ''}${unit ? `｜${unit}` : ''}｜库存${formatQty(stock)}`
   return {
     ...product,
+    category: categoryName,
     is_test: product.is_test ? 1 : 0,
     display_name: displayName,
     sku_label: skuLabel,
+    location_display: locationDisplay,
+    location_sort_key: sortKey,
+    aliases: clean(product.aliases),
     stock_status: stock <= Number(product.min_stock || 0) ? 'low' : 'normal',
-    search_text: [displayName, product.name, product.spec, product.category, product.unit, skuLabel]
+    search_text: [displayName, product.name, product.spec, categoryName, product.warehouse_code, locationDisplay, product.location_area, product.unit, product.aliases, skuLabel]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()

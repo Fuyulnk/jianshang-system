@@ -75,7 +75,7 @@ export default function materialRequestRoutes(server, db) {
     const checkedItems = []
     for (const item of items) {
       const product = item.product_id
-        ? db.prepare('SELECT id, name, category, unit, stock, unit_price FROM products WHERE id = ?').get(item.product_id)
+        ? db.prepare('SELECT id, name, category, unit, stock, unit_price, warehouse_code, location_id FROM products WHERE id = ?').get(item.product_id)
         : null
       if (item.product_id && !product) return { success: false, message: `产品 ${item.product_id} 不存在` }
       checkedItems.push(mergeProductDefaults(item, product))
@@ -103,8 +103,8 @@ export default function materialRequestRoutes(server, db) {
       const stmt = db.prepare(`
         INSERT INTO material_request_items (
           request_id, product_id, product_name, item_group, category, unit, quantity,
-          out_date, out_quantity, return_quantity, usage_quantity, unit_price, amount, note, remark
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          location_id, out_date, out_quantity, return_quantity, usage_quantity, unit_price, amount, note, remark
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       for (const item of checkedItems) {
         stmt.run(
@@ -115,6 +115,7 @@ export default function materialRequestRoutes(server, db) {
           item.category || item.product?.category || '',
           item.unit || item.product?.unit || '',
           item.quantity,
+          item.location_id || item.product?.location_id || 0,
           item.out_date,
           item.out_quantity,
           item.return_quantity,
@@ -167,9 +168,10 @@ export default function materialRequestRoutes(server, db) {
         recordInventoryMovement(db, {
           product_id: item.product_id, project_id: project.id, material_request_id: requestId,
           movement_type: 'out', quantity_delta: -quantity,
-          quantity_before: product.stock, quantity_after: Number(product.stock || 0) - quantity,
+          quantity_before: product.stock, quantity_after: product.stock_after ?? Number(product.stock || 0) - quantity,
           unit: product.unit || item.unit || '', reason: '项目出库',
-          note: `${project.name || '项目'} 出库：${item.product_name}`, created_by: request.user.userId
+          note: `${project.name || '项目'} 出库：${item.product_name}`, created_by: request.user.userId,
+          location_id: item.location_id || product.location_id || 0
         })
       }
       updateMaterialRequestStatus(db, requestId, 'confirmed', request.user.userId, note)
@@ -304,6 +306,8 @@ function normalizeReturnItems(items, originalItems) {
       item_group: normalizeGroup(item.item_group || sourceItem.item_group),
       category: cleanText(item.category || sourceItem.category),
       unit: cleanText(item.unit || sourceItem.unit),
+      location_id: toInt(item.location_id || sourceItem.location_id),
+      warehouse_code: cleanText(item.warehouse_code || sourceItem.warehouse_code),
       out_date: cleanText(item.out_date || sourceItem.out_date),
       out_quantity: outQuantity,
       usage_quantity: usageQuantity,
@@ -325,10 +329,12 @@ function canSeeMaterialRequest(db, user, row) {
 function getItemsForRequests(db, ids) {
   if (!ids.length) return {}
   const rows = db.prepare(`
-    SELECT *
-    FROM material_request_items
+    SELECT mri.*, p.warehouse_code as product_warehouse_code, wl.code as location_code, wl.label as location_label
+    FROM material_request_items mri
+    LEFT JOIN warehouse_locations wl ON wl.id = mri.location_id
+    LEFT JOIN products p ON p.id = mri.product_id
     WHERE request_id IN (${ids.map(() => '?').join(',')})
-    ORDER BY id ASC
+    ORDER BY mri.id ASC
   `).all(...ids)
   return rows.reduce((map, item) => {
     if (!map[item.request_id]) map[item.request_id] = []
@@ -362,11 +368,13 @@ function normalizeItems(items) {
     const amount = roundMoney(toNumber(item.amount) || usageQuantity * unitPrice)
     return {
       product_id: toInt(item.product_id),
-      product_name: cleanText(item.product_name || item.material_name),
-      item_group: normalizeGroup(item.item_group || item.group),
-      category: cleanText(item.category),
-      unit: cleanText(item.unit),
-      quantity: outQuantity,
+    product_name: cleanText(item.product_name || item.material_name),
+    item_group: normalizeGroup(item.item_group || item.group),
+    category: cleanText(item.category),
+    unit: cleanText(item.unit),
+    location_id: toInt(item.location_id),
+    warehouse_code: cleanText(item.warehouse_code),
+    quantity: outQuantity,
       out_date: cleanText(item.out_date),
       out_quantity: outQuantity,
       return_quantity: toNumber(item.return_quantity),
@@ -390,6 +398,8 @@ function mergeProductDefaults(item, product) {
     product_name: item.product_name || product.name,
     category: item.category || product.category || '',
     unit: item.unit || product.unit || '',
+    location_id: item.location_id || product.location_id || 0,
+    warehouse_code: item.warehouse_code || product.warehouse_code || '',
     unit_price: unitPrice,
     amount: item.amount || roundMoney(usageQuantity * unitPrice)
   }

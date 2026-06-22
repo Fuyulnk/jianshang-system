@@ -68,6 +68,9 @@ function emptyRow(group) {
     category: '',
     out_date: '',
     unit: '',
+    location_id: 0,
+    warehouse_code: '',
+    location_display: '',
     out_quantity: 1,
     usage_quantity: '',
     unit_price: 0,
@@ -81,8 +84,9 @@ function emptyRow(group) {
 
 function productLabel(item) {
   const sku = item?.sku_label || `${productDisplayName(item)}｜${item.unit || '单位未填'}｜${formatQty(item.stock)}`
+  const location = item?.location_display || item?.warehouse_code || ''
   const testMark = item?.is_test ? ' / 测试材料' : ''
-  return `${sku}${item.category ? ` / ${item.category}` : ''}${testMark}`
+  return `${sku}${location ? ` / ${location}` : ''}${item.category ? ` / ${item.category}` : ''}${testMark}`
 }
 
 function productDisplayName(item) {
@@ -95,7 +99,7 @@ function productDisplayName(item) {
 
 function productSearchText(item) {
   if (item?.search_text) return item.search_text
-  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit, item?.sku_label]
+  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit, item?.sku_label, item?.warehouse_code, item?.location_display]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
@@ -144,6 +148,9 @@ function buildReturnRows() {
       item_group: item.item_group || 'material',
       category: item.category || groupTitle(item.item_group),
       unit: item.unit || '',
+      location_id: item.location_id || 0,
+      warehouse_code: item.warehouse_code || item.product_warehouse_code || item.location_code || '',
+      location_display: item.location_label || item.location_code || item.warehouse_code || item.product_warehouse_code || '',
       out_date: item.out_date || '',
       out_quantity: outQuantity,
       usage_quantity: usageQuantity,
@@ -162,6 +169,9 @@ function applyProduct(row, productId) {
   row.product_name = productDisplayName(product)
   row.category = product.category || row.category || ''
   row.unit = product.unit || row.unit || ''
+  row.location_id = product.location_id || 0
+  row.warehouse_code = product.warehouse_code || ''
+  row.location_display = product.location_display || product.warehouse_code || ''
   if (Number(product.unit_price || 0) > 0) row.unit_price = Number(product.unit_price)
   row.match_status = 'matched'
   row.match_message = `已匹配 ${productLabel(product)}`
@@ -197,6 +207,8 @@ function normalizeRow(row) {
     category: row.category || groupTitle(row.item_group),
     out_date: row.out_date || '',
     unit: row.unit || '',
+    location_id: Number(row.location_id || 0),
+    warehouse_code: row.warehouse_code || '',
     out_quantity: toNumber(row.out_quantity),
     return_quantity: 0,
     usage_quantity: usage,
@@ -493,6 +505,7 @@ onMounted(() => {
           <div class="warehouse-row warehouse-head">
             <span>出库时间</span>
             <span>材料名</span>
+            <span>库位</span>
             <span>单位</span>
             <span>出库数量</span>
             <span>用量</span>
@@ -521,6 +534,7 @@ onMounted(() => {
               <el-input v-model="row.product_name" placeholder="也可手填材料名" @blur="applyManualName(row)" />
               <small v-if="row.match_message" class="match-message">{{ row.match_message }}</small>
             </div>
+            <el-input :model-value="row.location_display || row.warehouse_code || '未填'" disabled />
             <el-input v-model="row.unit" placeholder="单位" />
             <el-input-number v-model="row.out_quantity" :min="0" :precision="2" controls-position="right" @change="recalcRow(row)" />
             <el-input-number v-model="row.usage_quantity" :min="0" :precision="2" controls-position="right" placeholder="默认同出库" @change="recalcRow(row)" />
@@ -562,6 +576,7 @@ onMounted(() => {
           <div class="warehouse-table">
             <div class="warehouse-row return-row warehouse-head">
               <span>材料名</span>
+              <span>库位</span>
               <span>单位</span>
               <span>出库数量</span>
               <span>实际用量</span>
@@ -571,6 +586,7 @@ onMounted(() => {
             </div>
             <div class="warehouse-row return-row" v-for="row in returnRows" :key="row.id || row.product_name">
               <el-input v-model="row.product_name" disabled />
+              <el-input :model-value="row.location_display || row.warehouse_code || '未填'" disabled />
               <el-input v-model="row.unit" disabled />
               <el-input-number v-model="row.out_quantity" :min="0" :precision="2" controls-position="right" disabled />
               <el-input-number v-model="row.usage_quantity" :min="0" :precision="2" controls-position="right" @change="recalcReturnRow(row)" />
@@ -603,6 +619,9 @@ onMounted(() => {
           <div v-for="line in item.items" :key="line.id">
             <em>{{ groupTitle(line.item_group) }}</em>
             {{ line.product_name }}
+            <span v-if="line.location_label || line.location_code || line.warehouse_code || line.product_warehouse_code">
+              · {{ line.location_label || line.location_code || line.warehouse_code || line.product_warehouse_code }}
+            </span>
             <b>{{ formatQty(line.out_quantity || line.quantity) }} {{ line.unit }}</b>
             <span>· {{ money(line.amount) }}</span>
             <span v-if="line.remark || line.note">· {{ line.remark || line.note }}</span>
@@ -676,10 +695,10 @@ onMounted(() => {
 }
 .warehouse-row {
   display: grid;
-  grid-template-columns: 118px 260px 78px 112px 112px 112px 112px 180px 44px;
+  grid-template-columns: 118px 260px 120px 78px 112px 112px 112px 112px 180px 44px;
   gap: 8px;
   align-items: center;
-  min-width: 1130px;
+  min-width: 1260px;
   margin-bottom: 8px;
 }
 .warehouse-row.unmatched {
@@ -690,8 +709,8 @@ onMounted(() => {
   background: color-mix(in srgb, #f59e0b 8%, var(--bg-card));
 }
 .warehouse-row.return-row {
-  grid-template-columns: 220px 78px 112px 112px 112px 90px 220px;
-  min-width: 960px;
+  grid-template-columns: 220px 120px 78px 112px 112px 112px 90px 220px;
+  min-width: 1080px;
 }
 .warehouse-head {
   margin-bottom: 6px;

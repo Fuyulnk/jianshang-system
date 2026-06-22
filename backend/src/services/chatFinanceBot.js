@@ -3,7 +3,7 @@
  *
  * When someone sends a financial message in the 财务群 group chat
  * (e.g. "收入5000 王晓 墙漆尾款"), this bot auto-detects it,
- * parses via financeParser, creates a transaction, and replies.
+ * parses via financeParser, creates a pending transaction draft, and replies.
  *
  * Messages with @AI / @小助手 are skipped (handled by existing AI agent).
  * Non-financial messages are ignored.
@@ -22,7 +22,7 @@ function looksLikeFinance(text) {
 
 /**
  * Handle a message in the finance group.
- * Returns true if the message was processed (transaction created), false otherwise.
+ * Returns true if the message was processed (pending transaction created), false otherwise.
  */
 export async function handleFinanceGroupMessage({ content, conversationId, conversationName, senderId, db, io }) {
   // [1] Quick pre-check before expensive parsing
@@ -37,7 +37,7 @@ export async function handleFinanceGroupMessage({ content, conversationId, conve
   if (draft.amount <= 0) return false
   if (!draft.account_id) return false
 
-  // [4] Create transaction
+  // [4] Create a pending transaction. It becomes effective only after finance confirms it.
   const result = createTransaction(db, {
     account_id: draft.account_id,
     type: draft.type,
@@ -45,7 +45,8 @@ export async function handleFinanceGroupMessage({ content, conversationId, conve
     category: draft.category || null,
     description: draft.description || null,
     party: draft.party || null,
-    proxy: null
+    proxy: null,
+    status: 'pending'
   })
 
   if (!result?.id) return false
@@ -53,7 +54,7 @@ export async function handleFinanceGroupMessage({ content, conversationId, conve
   // [5] Build reply
   const typeLabel = draft.type === 'income' ? '收入' : '支出'
   const amountStr = Number(draft.amount).toLocaleString('zh-CN')
-  const replyText = `已录入：${typeLabel}${amountStr}元${draft.party ? ' ' + draft.party : ''}${draft.description ? ' ' + draft.description : ''}`
+  const replyText = `已生成待确认流水：${typeLabel}${amountStr}元${draft.party ? ' ' + draft.party : ''}${draft.description ? ' ' + draft.description : ''}。请在交易流水页面确认后生效。`
 
   // [6] Find bot user
   const botUser = db.prepare("SELECT id FROM users WHERE username = 'ai'").get()

@@ -5,27 +5,29 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 import DecimalCellInput from '../../components/projects/DecimalCellInput.vue'
-import SystemSheetTable from '../../components/projects/SystemSheetTable.vue'
 
 const router = useRouter()
 
-const steps = [
-  { key: 'ordered', label: '销售下单' },
-  { key: 'payment_confirmed', label: '财务确认收款' },
-  { key: 'materials_ordered', label: '仓库订材料' },
-  { key: 'shipped', label: '材料到位发货' },
-  { key: 'completed', label: '完结' }
-]
+const flowSteps = {
+  warehouse: [
+    { key: 'ordered', label: '销售下单' },
+    { key: 'payment_confirmed', label: '财务确认收款' },
+    { key: 'stock_out', label: '仓管出库' },
+    { key: 'shipped', label: '发货' },
+    { key: 'completed', label: '完结' }
+  ],
+  purchase: [
+    { key: 'ordered', label: '销售下单' },
+    { key: 'payment_confirmed', label: '财务确认收款' },
+    { key: 'shipped', label: '总部直发' },
+    { key: 'completed', label: '完结' }
+  ]
+}
+const defaultSteps = flowSteps.warehouse
 
-const itemColumns = [
-  { key: 'product_name', label: '产品/材料', width: 170 },
-  { key: 'category', label: '分类', width: 120 },
-  { key: 'unit', label: '单位', width: 80 },
-  { key: 'quantity', label: '数量', type: 'number', width: 100 },
-  { key: 'unit_price', label: '单价', type: 'number', width: 100 },
-  { key: 'amount', label: '金额', type: 'number', width: 110 },
-  { key: 'note', label: '备注', width: 220 }
-]
+function stepsFor(row) {
+  return flowSteps[row?.fulfillment_type] || defaultSteps
+}
 
 const list = ref([])
 const products = ref([])
@@ -45,8 +47,8 @@ const importForm = ref(emptyForm())
 
 const board = computed(() => [
   { label: '待财务确认', count: list.value.filter(row => row.status === 'ordered').length, desc: '导入或新建后，财务先核对收款' },
-  { label: '待仓库订料', count: list.value.filter(row => row.status === 'payment_confirmed').length, desc: '收款后进入仓库' },
-  { label: '待发货', count: list.value.filter(row => row.status === 'materials_ordered').length, desc: '材料到位后发货' },
+  { label: '待处理', count: list.value.filter(row => row.status === 'payment_confirmed').length, desc: '自有库存待出库，总部直发待确认发货' },
+  { label: '待发货', count: list.value.filter(row => row.status === 'stock_out').length, desc: '自有库存已出库，待发货' },
   { label: '已完结', count: list.value.filter(row => row.status === 'completed').length, desc: '供货闭环完成' }
 ])
 
@@ -54,7 +56,7 @@ function token() {
   return getAuthToken() || ''
 }
 
-function emptyForm() {
+function emptyForm(type = 'warehouse') {
   return {
     customer: '',
     phone: '',
@@ -62,13 +64,14 @@ function emptyForm() {
     address: '',
     amount: 0,
     note: '',
+    fulfillment_type: normalizeFulfillmentType(type),
     items: [emptyItem()],
     meta: {}
   }
 }
 
 function emptyItem() {
-  return { product_name: '', category: '', unit: '', quantity: 1, unit_price: 0, amount: 0, note: '' }
+  return { product_id: 0, product_name: '', category: '', unit: '', location_id: 0, warehouse_code: '', location_display: '', quantity: 1, unit_price: 0, amount: 0, note: '' }
 }
 
 async function requestJson(url, options = {}) {
@@ -114,21 +117,21 @@ async function fetchProducts() {
   }
 }
 
-function openCreate() {
+function openCreate(type) {
   editingId.value = 0
-  form.value = emptyForm()
+  form.value = emptyForm(type)
   showDialog.value = true
 }
 
-function openImport() {
-  resetImport()
+function openImport(type) {
+  resetImport(type)
   showImportDialog.value = true
 }
 
-function resetImport() {
+function resetImport(type = 'warehouse') {
   importFile.value = null
   importParsed.value = null
-  importForm.value = emptyForm()
+  importForm.value = emptyForm(type)
   if (importFileInput.value) importFileInput.value.value = ''
 }
 
@@ -151,7 +154,7 @@ function onImportFileChange(event) {
   }
   importFile.value = file
   importParsed.value = null
-  importForm.value = emptyForm()
+  importForm.value = emptyForm(importForm.value.fulfillment_type)
 }
 
 async function parseImport() {
@@ -170,7 +173,7 @@ async function parseImport() {
       })
     })
     importParsed.value = json.data
-    importForm.value = normalizeParsedOrder(json.data?.form_data || {})
+    importForm.value = normalizeParsedOrder(json.data?.form_data || {}, importForm.value.fulfillment_type)
     ElMessage.success('供货单已解析，请核对后创建')
   } catch (err) {
     ElMessage.error(err.message || '供货单解析失败')
@@ -186,6 +189,11 @@ async function confirmImportCreate() {
   }
   if (!String(importForm.value.customer || '').trim()) {
     ElMessage.warning('客户/项目名称必填')
+    return
+  }
+  const warehouseMessage = validateWarehouseProductLinks(importForm.value)
+  if (warehouseMessage) {
+    ElMessage.warning(warehouseMessage)
     return
   }
   importConfirming.value = true
@@ -223,6 +231,7 @@ async function openEdit(row) {
       address: data.address || '',
       amount: data.amount || 0,
       note: data.note || '',
+      fulfillment_type: data.fulfillment_type || 'warehouse',
       items: data.items?.length ? data.items.map(normalizeItem) : [emptyItem()]
     }
     showDialog.value = true
@@ -233,9 +242,13 @@ async function openEdit(row) {
 
 function normalizeItem(item) {
   return {
+    product_id: Number(item.product_id || 0),
     product_name: item.product_name || '',
     category: item.category || '',
     unit: item.unit || '',
+    location_id: Number(item.location_id || 0),
+    warehouse_code: item.warehouse_code || item.product_warehouse_code || item.location_code || '',
+    location_display: item.location_label || item.location_code || item.warehouse_code || item.product_warehouse_code || '',
     quantity: Number(item.quantity || 0),
     unit_price: Number(item.unit_price || 0),
     amount: Number(item.amount || 0),
@@ -243,7 +256,7 @@ function normalizeItem(item) {
   }
 }
 
-function normalizeParsedOrder(input) {
+function normalizeParsedOrder(input, selectedType = 'warehouse') {
   return {
     customer: input.customer || '',
     phone: input.phone || '',
@@ -251,6 +264,7 @@ function normalizeParsedOrder(input) {
     address: input.address || '',
     amount: Number(input.amount || 0),
     note: input.note || '',
+    fulfillment_type: normalizeFulfillmentType(selectedType),
     items: Array.isArray(input.items) && input.items.length ? input.items.map(normalizeItem) : [emptyItem()],
     meta: input.meta || {}
   }
@@ -260,51 +274,55 @@ function addItem() {
   form.value.items.push(emptyItem())
 }
 
+function addImportItem() {
+  importForm.value.items.push(emptyItem())
+}
+
 function removeEmptyItems() {
   form.value.items = form.value.items.filter(item => String(item.product_name || '').trim())
   if (!form.value.items.length) form.value.items = [emptyItem()]
 }
 
-function onItemChange({ row, column }) {
-  if (column.key === 'product_name') {
-    const matched = matchProduct(row.product_name)
-    if (matched) {
-      row.product_name = productDisplayName(matched)
-      if (!row.category) row.category = matched.category || ''
-      if (!row.unit) row.unit = matched.unit || ''
-      if (!row.unit_price) row.unit_price = Number(matched.unit_price || 0)
-    }
+function applyProduct(row, productId, target = 'form') {
+  const product = products.value.find(item => Number(item.id) === Number(productId))
+  if (!product) {
+    row.product_id = 0
+    recalcRow(row, target)
+    return
   }
-  if (['quantity', 'unit_price', 'product_name'].includes(column.key)) {
-    row.amount = roundMoney(Number(row.quantity || 0) * Number(row.unit_price || 0))
-    refreshAmount()
+  row.product_id = product.id
+  row.product_name = productDisplayName(product)
+  row.category = product.category || row.category || ''
+  row.unit = product.unit || row.unit || ''
+  row.location_id = product.location_id || 0
+  row.warehouse_code = product.warehouse_code || ''
+  row.location_display = product.location_display || product.warehouse_code || ''
+  if (Number(product.unit_price || 0) > 0) row.unit_price = Number(product.unit_price)
+  recalcRow(row, target)
+}
+
+function applyManualProductName(row, target = 'form') {
+  const matched = matchProduct(row.product_name)
+  if (matched) applyProduct(row, matched.id, target)
+  else {
+    row.product_id = 0
+    recalcRow(row, target)
   }
 }
 
-function onImportItemChange({ row, column }) {
-  if (column.key === 'product_name') {
-    const matched = matchProduct(row.product_name)
-    if (matched) {
-      row.product_name = productDisplayName(matched)
-      if (!row.category) row.category = matched.category || ''
-      if (!row.unit) row.unit = matched.unit || ''
-      if (!row.unit_price) row.unit_price = Number(matched.unit_price || 0)
-    }
-  }
-  if (['quantity', 'unit_price', 'product_name'].includes(column.key)) {
-    row.amount = roundMoney(Number(row.quantity || 0) * Number(row.unit_price || 0))
-    refreshImportAmount()
-  }
+function recalcRow(row, target = 'form') {
+  row.amount = roundMoney(Number(row.quantity || 0) * Number(row.unit_price || 0))
+  if (target === 'import') refreshImportAmount()
+  else refreshAmount()
 }
 
 function matchProduct(value) {
   const keyword = compactSku(value)
   if (!keyword) return null
-  return products.value.find(item => compactSku(productDisplayName(item)) === keyword)
-    || products.value.find(item => compactSku(item.name) === keyword)
-    || products.value.find(item => compactSku(item.sku_label) === keyword)
-    || products.value.find(item => compactSku(item.search_text).includes(keyword))
-    || null
+  const exactSku = products.value.find(item => compactSku(productDisplayName(item)) === keyword || compactSku(item.sku_label) === keyword)
+  if (exactSku) return exactSku
+  const sameName = products.value.filter(item => compactSku(item.name) === keyword)
+  return sameName.length === 1 ? sameName[0] : null
 }
 
 function productDisplayName(item) {
@@ -315,10 +333,63 @@ function productDisplayName(item) {
   return `${name}${spec}`
 }
 
+function productLabel(item) {
+  const sku = item?.sku_label || `${productDisplayName(item)}｜${item.unit || '单位未填'}｜库存${formatQty(item.stock)}`
+  const location = item?.location_display || item?.warehouse_code || ''
+  const testMark = item?.is_test ? ' / 测试材料' : ''
+  return `${sku}${location ? ` / ${location}` : ''}${item.category ? ` / ${item.category}` : ''}${testMark}`
+}
+
+function productSearchText(item) {
+  if (item?.search_text) return item.search_text
+  return [productDisplayName(item), item?.name, item?.spec, item?.category, item?.unit, item?.sku_label, item?.warehouse_code, item?.location_display]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function formatQty(value) {
+  const n = Number(value || 0)
+  return Number.isInteger(n) ? String(n) : n.toFixed(2)
+}
+
+function fulfillmentLabel(type) {
+  return normalizeFulfillmentType(type) === 'purchase' ? '总部采购直发' : '自有库存发货'
+}
+
+function fulfillmentShortLabel(type) {
+  return normalizeFulfillmentType(type) === 'purchase' ? '总部直发' : '自有库存'
+}
+
+function fulfillmentTagType(type) {
+  return normalizeFulfillmentType(type) === 'purchase' ? 'warning' : 'primary'
+}
+
+function fulfillmentHint(type) {
+  return normalizeFulfillmentType(type) === 'purchase'
+    ? '总部直发允许手填材料明细，不扣简尚库存。'
+    : '自有库存必须选择库存产品，后续出库会按规格扣减库存。'
+}
+
+function normalizeFulfillmentType(type) {
+  const raw = String(type || '').trim()
+  const compacted = compactSku(raw)
+  if (['purchase', 'hq', 'headquarters', 'direct'].includes(compacted)) return 'purchase'
+  if (raw.includes('总部') || raw.includes('采购') || raw.includes('直发')) return 'purchase'
+  return 'warehouse'
+}
+
 function compactSku(value) {
   return String(value || '')
     .replace(/[｜|\s　/／·,，-]/g, '')
     .toLowerCase()
+}
+
+function validateWarehouseProductLinks(draft) {
+  if (normalizeFulfillmentType(draft.fulfillment_type) !== 'warehouse') return ''
+  const rows = Array.isArray(draft.items) ? draft.items.filter(item => String(item.product_name || '').trim()) : []
+  const missing = rows.findIndex(item => !Number(item.product_id || 0))
+  return missing >= 0 ? `自有库存供货第 ${missing + 1} 条必须选择库存产品，不能只手填名称` : ''
 }
 
 function refreshAmount() {
@@ -341,6 +412,11 @@ function readAsDataUrl(file) {
 async function saveOrder() {
   if (!String(form.value.customer || '').trim()) {
     ElMessage.warning('客户/项目名称必填')
+    return
+  }
+  const warehouseMessage = validateWarehouseProductLinks(form.value)
+  if (warehouseMessage) {
+    ElMessage.warning(warehouseMessage)
     return
   }
   saving.value = true
@@ -412,7 +488,8 @@ function displayStatus(row) {
 }
 
 function stepActive(row, step) {
-  return steps.findIndex(item => item.key === step.key) <= steps.findIndex(item => item.key === row.status)
+  const ss = stepsFor(row)
+  return ss.findIndex(item => item.key === step.key) <= ss.findIndex(item => item.key === row.status)
 }
 
 function money(value) {
@@ -436,11 +513,13 @@ onMounted(() => {
       <div>
         <el-button text @click="router.push('/main/projects')">← 返回项目工单</el-button>
         <h2>项目供货单</h2>
-        <p>不走施工交付的材料供货分支：销售下单、财务确认收款、仓库订材料、材料到位发货、完结。</p>
+        <p>供货单分两类：自有库存直接卖给门店并扣库存；总部直发由简尚代采转售，先不强制卡总部付款。</p>
       </div>
       <div class="header-actions">
-        <el-button @click="openImport">导入供货单</el-button>
-        <el-button type="primary" @click="openCreate">新建供货单</el-button>
+        <el-button @click="openImport('warehouse')">导入自有库存供货单</el-button>
+        <el-button @click="openImport('purchase')">导入总部直发供货单</el-button>
+        <el-button type="primary" @click="openCreate('warehouse')">新建自有库存供货单</el-button>
+        <el-button type="warning" @click="openCreate('purchase')">新建总部直发供货单</el-button>
       </div>
     </div>
 
@@ -457,12 +536,17 @@ onMounted(() => {
         <div class="card-head">
           <div>
             <h3>供货单列表</h3>
-            <p>导入或新建后先进入财务确认收款，财务核对后再交给仓库订料和发货。</p>
+            <p>导入或新建后先由财务确认门店收款，再按供货方式进入自有库存出库或总部直发确认。</p>
           </div>
           <div class="filters">
             <el-input v-model="filters.keyword" clearable placeholder="搜索客户/电话/地址" @keyup.enter="fetchList" />
             <el-select v-model="filters.status" clearable placeholder="状态" style="width: 150px" @change="fetchList">
-              <el-option v-for="step in steps" :key="step.key" :label="step.label" :value="step.key" />
+              <el-option label="全部状态" value="" />
+              <el-option label="待财务确认" value="ordered" />
+              <el-option label="财务已收款" value="payment_confirmed" />
+              <el-option label="待出库" value="stock_out" />
+              <el-option label="已发货" value="shipped" />
+              <el-option label="已完结" value="completed" />
             </el-select>
             <el-button @click="fetchList">查询</el-button>
           </div>
@@ -474,6 +558,13 @@ onMounted(() => {
         <el-table-column prop="customer" label="客户/项目" min-width="150" />
         <el-table-column prop="phone" label="联系方式" width="130" />
         <el-table-column prop="source" label="来源" width="110" />
+        <el-table-column label="供货方式" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.fulfillment_type === 'purchase' ? 'warning' : 'primary'" size="small" effect="plain">
+              {{ row.fulfillment_type === 'purchase' ? '总部直发' : '自有库存' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="金额" width="120" align="right">
           <template #default="{ row }">{{ money(row.amount) }}</template>
         </el-table-column>
@@ -485,7 +576,7 @@ onMounted(() => {
         <el-table-column label="流程" min-width="420">
           <template #default="{ row }">
             <div class="flow-line">
-              <span v-for="step in steps" :key="step.key" :class="{ active: stepActive(row, step) }">{{ step.label }}</span>
+              <span v-for="step in stepsFor(row)" :key="step.key" :class="{ active: stepActive(row, step) }">{{ step.label }}</span>
             </div>
           </template>
         </el-table-column>
@@ -501,7 +592,11 @@ onMounted(() => {
       </el-table>
     </el-card>
 
-    <el-dialog v-model="showDialog" :title="editingId ? '编辑供货单' : '新建供货单'" width="960px">
+    <el-dialog v-model="showDialog" :title="editingId ? '编辑供货单' : `新建${fulfillmentShortLabel(form.fulfillment_type)}供货单`" width="1080px">
+      <div class="route-banner" :class="form.fulfillment_type">
+        <el-tag :type="fulfillmentTagType(form.fulfillment_type)" effect="plain">{{ fulfillmentLabel(form.fulfillment_type) }}</el-tag>
+        <span>{{ fulfillmentHint(form.fulfillment_type) }}</span>
+      </div>
       <el-form :model="form" label-position="top">
         <div class="form-grid">
           <el-form-item label="客户/项目名称"><el-input v-model="form.customer" /></el-form-item>
@@ -516,22 +611,58 @@ onMounted(() => {
         <strong>供货明细</strong>
         <el-button size="small" @click="addItem">新增一行</el-button>
       </div>
-      <SystemSheetTable
-        :columns="itemColumns"
-        :rows="form.items"
-        storage-key="supply-order-items"
-        empty-text="暂无供货明细"
-        @cell-change="onItemChange"
-      />
+      <div class="supply-items-table">
+        <div class="supply-items-head">
+          <span>库存产品</span>
+          <span>材料名称</span>
+          <span>库位</span>
+          <span>分类</span>
+          <span>单位</span>
+          <span>数量</span>
+          <span>单价</span>
+          <span>金额</span>
+          <span>备注</span>
+        </div>
+        <div v-for="(row, index) in form.items" :key="`form-${index}`" class="supply-item-row" :class="{ unmatched: form.fulfillment_type === 'warehouse' && row.product_name && !row.product_id }">
+          <el-select
+            v-model="row.product_id"
+            filterable
+            clearable
+            placeholder="选库存"
+            @change="applyProduct(row, $event, 'form')"
+          >
+            <el-option v-for="product in products" :key="product.id" :label="productLabel(product)" :value="product.id">
+              <div class="product-option">
+                <span>{{ productLabel(product) }}</span>
+                <el-tag v-if="product.is_test" size="small" type="info">测试</el-tag>
+              </div>
+            </el-option>
+          </el-select>
+          <el-input v-model="row.product_name" placeholder="材料名称" @blur="applyManualProductName(row, 'form')" />
+          <el-input :model-value="row.location_display || row.warehouse_code || '未填'" disabled />
+          <el-input v-model="row.category" placeholder="分类" />
+          <el-input v-model="row.unit" placeholder="单位" />
+          <DecimalCellInput v-model="row.quantity" @update:model-value="recalcRow(row, 'form')" />
+          <DecimalCellInput v-model="row.unit_price" @update:model-value="recalcRow(row, 'form')" />
+          <DecimalCellInput v-model="row.amount" @update:model-value="refreshAmount" />
+          <el-input v-model="row.note" placeholder="备注" />
+          <el-button class="row-delete" link type="danger" @click="form.items.splice(index, 1)">删除</el-button>
+        </div>
+        <div v-if="!form.items.length" class="empty-items">暂无供货明细</div>
+      </div>
       <template #footer>
         <el-button @click="showDialog = false">关闭</el-button>
         <el-button type="primary" :loading="saving" @click="saveOrder">保存</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showImportDialog" title="导入项目供货单" width="1080px" class="supply-import-dialog" @closed="resetImport">
+    <el-dialog v-model="showImportDialog" :title="`导入${fulfillmentShortLabel(importForm.fulfillment_type)}供货单`" width="1080px" class="supply-import-dialog" @closed="resetImport">
       <div class="import-layout">
         <section class="import-source">
+          <div class="route-banner compact" :class="importForm.fulfillment_type">
+            <el-tag :type="fulfillmentTagType(importForm.fulfillment_type)" effect="plain">{{ fulfillmentLabel(importForm.fulfillment_type) }}</el-tag>
+            <span>{{ fulfillmentHint(importForm.fulfillment_type) }}</span>
+          </div>
           <div class="section-title">供货单来源</div>
           <div class="upload-box" @click="openImportPicker">
             <input ref="importFileInput" class="hidden-input" type="file" accept=".csv,.xls,.xlsx" @change="onImportFileChange" />
@@ -597,15 +728,47 @@ onMounted(() => {
 
           <div class="dialog-toolbar">
             <strong>供货明细</strong>
-            <el-button size="small" @click="importForm.items.push(emptyItem())">新增一行</el-button>
+            <el-button size="small" @click="addImportItem">新增一行</el-button>
           </div>
-          <SystemSheetTable
-            :columns="itemColumns"
-            :rows="importForm.items"
-            storage-key="supply-order-import-items"
-            empty-text="解析后会显示供货明细"
-            @cell-change="onImportItemChange"
-          />
+          <div class="supply-items-table">
+            <div class="supply-items-head">
+              <span>库存产品</span>
+              <span>材料名称</span>
+              <span>库位</span>
+              <span>分类</span>
+              <span>单位</span>
+              <span>数量</span>
+              <span>单价</span>
+              <span>金额</span>
+              <span>备注</span>
+            </div>
+            <div v-for="(row, index) in importForm.items" :key="`import-${index}`" class="supply-item-row" :class="{ unmatched: importForm.fulfillment_type === 'warehouse' && row.product_name && !row.product_id }">
+              <el-select
+                v-model="row.product_id"
+                filterable
+                clearable
+                placeholder="选库存"
+                @change="applyProduct(row, $event, 'import')"
+              >
+                <el-option v-for="product in products" :key="product.id" :label="productLabel(product)" :value="product.id">
+                  <div class="product-option">
+                    <span>{{ productLabel(product) }}</span>
+                    <el-tag v-if="product.is_test" size="small" type="info">测试</el-tag>
+                  </div>
+                </el-option>
+              </el-select>
+              <el-input v-model="row.product_name" placeholder="材料名称" @blur="applyManualProductName(row, 'import')" />
+              <el-input :model-value="row.location_display || row.warehouse_code || '未填'" disabled />
+              <el-input v-model="row.category" placeholder="分类" />
+              <el-input v-model="row.unit" placeholder="单位" />
+              <DecimalCellInput v-model="row.quantity" @update:model-value="recalcRow(row, 'import')" />
+              <DecimalCellInput v-model="row.unit_price" @update:model-value="recalcRow(row, 'import')" />
+              <DecimalCellInput v-model="row.amount" @update:model-value="refreshImportAmount" />
+              <el-input v-model="row.note" placeholder="备注" />
+              <el-button class="row-delete" link type="danger" @click="importForm.items.splice(index, 1)">删除</el-button>
+            </div>
+            <div v-if="!importForm.items.length" class="empty-items">解析后会显示供货明细</div>
+          </div>
         </section>
       </div>
     </el-dialog>
@@ -629,6 +792,8 @@ onMounted(() => {
 .header-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .supply-header h2,
@@ -747,6 +912,90 @@ onMounted(() => {
   margin: 4px 0 10px;
 }
 
+.route-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, #3b82f6 22%, var(--border-light));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #3b82f6 7%, var(--bg-card));
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.route-banner.purchase {
+  border-color: color-mix(in srgb, #f59e0b 28%, var(--border-light));
+  background: color-mix(in srgb, #f59e0b 8%, var(--bg-card));
+}
+
+.route-banner.compact {
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.supply-items-table {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+
+.supply-items-head,
+.supply-item-row {
+  display: grid;
+  grid-template-columns: 210px 170px 120px 120px 90px 92px 100px 100px 150px 54px;
+  gap: 8px;
+  align-items: center;
+  min-width: 1240px;
+  padding: 8px;
+}
+
+.supply-items-head {
+  padding-right: 70px;
+  background: var(--bg-page);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.supply-item-row {
+  position: relative;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-card);
+}
+
+.supply-item-row.unmatched {
+  background: color-mix(in srgb, #ef4444 7%, var(--bg-card));
+}
+
+.supply-item-row.unmatched::before {
+  position: absolute;
+  left: 8px;
+  bottom: 2px;
+  content: "自有库存需选择具体库存产品";
+  color: #dc2626;
+  font-size: 11px;
+}
+
+.row-delete {
+  justify-self: end;
+}
+
+.empty-items {
+  padding: 18px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.product-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .import-layout {
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
@@ -849,6 +1098,7 @@ onMounted(() => {
 @media (max-width: 860px) {
   .supply-header,
   .card-head,
+  .header-actions,
   .filters,
   .result-header {
     display: grid;

@@ -6,7 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "seed:safe-ai": "node scripts/seed-safe-ai-test-db.mjs",
+    "smoke:rbac": "node scripts/rbac-smoke.mjs",
+    "smoke:ai-mock": "node scripts/ai-mock-smoke.mjs",
+    "smoke:ai-real": "AI_REAL_EGRESS_ENABLED=1 AI_TEST_DATASET=1 node scripts/ai-real-deepseek-smoke.mjs"
   },
   "keywords": [
     "jianshang",

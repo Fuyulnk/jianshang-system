@@ -8,8 +8,9 @@ export function recordInventoryMovement(db, movement) {
   db.prepare(`
     INSERT INTO inventory_movements (
       product_id, project_id, material_request_id, movement_type,
-      quantity_delta, quantity_before, quantity_after, unit, reason, note, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      quantity_delta, quantity_before, quantity_after, unit, reason, note, created_by,
+      location_id, stocktaking_batch_id, reference_type, reference_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     movement.product_id,
     movement.project_id || 0,
@@ -21,12 +22,16 @@ export function recordInventoryMovement(db, movement) {
     movement.unit || '',
     movement.reason || '',
     movement.note || '',
-    movement.created_by || 0
+    movement.created_by || 0,
+    movement.location_id || 0,
+    movement.stocktaking_batch_id || 0,
+    movement.reference_type || '',
+    movement.reference_id || 0
   )
 }
 
 export function deductStock(db, productId, quantity) {
-  const product = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?').get(productId)
+  const product = db.prepare('SELECT id, name, unit, stock, location_id, warehouse_code, min_stock FROM products WHERE id = ?').get(productId)
   if (!product) throw new Error(`产品不存在`)
   const result = db.prepare(`
     UPDATE products SET stock = stock - ?, updated_at = datetime('now', 'localtime')
@@ -35,16 +40,23 @@ export function deductStock(db, productId, quantity) {
   if (!result.changes) {
     throw new Error(`产品「${product.name}」库存不足，当前 ${product.stock ?? 0}，需扣 ${quantity}`)
   }
-  return product
+  const after = roundQty(toNumber(product.stock) - quantity)
+  if (product.location_id) {
+    upsertProductLocationBalance(db, product.id, product.location_id, after, product.min_stock, 1)
+  }
+  return { ...product, stock_after: after }
 }
 
 export function addStock(db, productId, quantity, fallbackProductName = '') {
-  const product = db.prepare('SELECT id, name, unit, stock FROM products WHERE id = ?').get(productId)
+  const product = db.prepare('SELECT id, name, unit, stock, location_id, warehouse_code, min_stock FROM products WHERE id = ?').get(productId)
   if (!product) throw new Error(`产品「${fallbackProductName || productId}」不存在，不能回库`)
   const before = toNumber(product.stock)
   const after = roundQty(before + quantity)
   db.prepare(`UPDATE products SET stock = stock + ?, updated_at = datetime('now', 'localtime') WHERE id = ?`)
     .run(quantity, productId)
+  if (product.location_id) {
+    upsertProductLocationBalance(db, product.id, product.location_id, after, product.min_stock, 1)
+  }
   return { ...product, stock_before: before, stock_after: after }
 }
 
@@ -85,6 +97,7 @@ export function upsertMaterialIoDocument(db, project, requestRow, items, userId)
     summary,
     items: items.map(item => ({
       product_name: item.product_name, category: item.category, unit: item.unit,
+      warehouse_code: item.warehouse_code || '', location_id: item.location_id || 0,
       out_quantity: item.out_quantity, return_quantity: item.return_quantity,
       usage_quantity: item.usage_quantity, difference_quantity: item.difference_quantity,
       unit_price: item.unit_price, amount: item.amount, remark: item.remark
@@ -132,7 +145,8 @@ export function applyMaterialReturnInventory(db, { project, requestRow, items, n
         unit: returnedProduct.unit || item.unit || '',
         reason: '项目回库',
         note: note || `${project.name || '项目'} 回库：${item.product_name}`,
-        created_by: userId
+        created_by: userId,
+        location_id: item.location_id || returnedProduct.location_id || 0
       })
     }
 
@@ -161,11 +175,24 @@ export function applyMaterialReturnInventory(db, { project, requestRow, items, n
           unit: product?.unit || item.unit || '',
           reason: '损耗记录',
           note: `损耗 ${formatQty(item.difference_quantity)} ${item.unit || ''}：${item.product_name}`,
-          created_by: userId
+          created_by: userId,
+          location_id: item.location_id || product?.location_id || 0
         })
       }
     }
   }
+}
+
+export function upsertProductLocationBalance(db, productId, locationId, quantity, minStock = 0, isPrimary = 0) {
+  db.prepare(`
+    INSERT INTO product_location_balances (product_id, location_id, quantity, min_stock, is_primary)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(product_id, location_id) DO UPDATE SET
+      quantity = excluded.quantity,
+      min_stock = excluded.min_stock,
+      is_primary = excluded.is_primary,
+      updated_at = datetime('now', 'localtime')
+  `).run(productId, locationId, roundQty(quantity), roundQty(minStock), isPrimary ? 1 : 0)
 }
 
 // ── helpers ──

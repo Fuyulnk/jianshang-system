@@ -1,10 +1,10 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { requireModuleAccess } from '../utils/permissions.js'
 import { parseFinanceTransactionDraft } from '../utils/financeParser.js'
-import { createTransaction, deleteTransaction } from '../services/financeCommands.js'
+import { confirmTransaction, createTransaction, deleteTransaction } from '../services/financeCommands.js'
 
 function buildTransactionFilter(query = {}) {
-  const { account_id, account_type, type, category, start_date, end_date } = query
+  const { account_id, account_type, type, category, start_date, end_date, status } = query
   const keyword = String(query.query || query.keyword || '').trim()
   const conditions = []
   const params = []
@@ -20,6 +20,10 @@ function buildTransactionFilter(query = {}) {
   if (type === 'income' || type === 'expense') {
     conditions.push('t.type = ?')
     params.push(type)
+  }
+  if (['pending', 'approved', 'cancelled'].includes(status)) {
+    conditions.push("COALESCE(t.status, 'approved') = ?")
+    params.push(status)
   }
   if (category) {
     conditions.push('t.category = ?')
@@ -108,10 +112,10 @@ function makeCsv(rows) {
 
 function makeExcelHtml(rows, query = {}) {
   const incomeTotal = rows
-    .filter(row => row.type === 'income')
+    .filter(row => row.type === 'income' && statusLabel(row.status) === '已确认')
     .reduce((sum, row) => sum + Number(row.amount || 0), 0)
   const expenseTotal = rows
-    .filter(row => row.type === 'expense')
+    .filter(row => row.type === 'expense' && statusLabel(row.status) === '已确认')
     .reduce((sum, row) => sum + Number(row.amount || 0), 0)
   const netTotal = incomeTotal - expenseTotal
   const generatedAt = new Date().toLocaleString('zh-CN', { hour12: false })
@@ -317,6 +321,23 @@ export default function transactionRoutes(server, db) {
       return { success: true, id: result.id }
     } catch (err) {
       reply.code(err.statusCode || 400).send({ success: false, message: err.message || '新增交易失败' })
+    }
+  })
+
+  // 确认待确认流水：确认后才更新账户余额。
+  server.post('/api/transactions/:id/confirm', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'transactions', 'can_edit', '无权限确认交易流水')) return
+
+    try {
+      const result = confirmTransaction(db, request.params.id)
+      return {
+        success: true,
+        id: result.id,
+        message: result.already_confirmed ? '该流水已确认' : '流水已确认并更新账户余额'
+      }
+    } catch (err) {
+      reply.code(err.statusCode || 400).send({ success: false, message: err.message || '确认交易失败' })
     }
   })
 

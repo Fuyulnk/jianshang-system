@@ -310,6 +310,43 @@
           </el-card>
         </div>
 
+        <!-- 表格模板 -->
+        <div v-show="activeTab === 'templates'" class="settings-section">
+          <div class="section-header">
+            <h3>表格模板</h3>
+            <p class="section-desc">手动上传替换固定 Excel 模板，导出时仍按原表格格式生成，不需要 SSH 到服务器换文件</p>
+          </div>
+
+          <el-card shadow="never" class="settings-card-wide">
+            <input ref="templateFileInput" class="hidden-input" type="file" accept=".xlsx,.xls,.xlsm" @change="onTemplateFileChange" />
+            <div class="template-toolbar">
+              <el-select v-model="selectedTemplateType" placeholder="选择模板类型" style="width: 260px">
+                <el-option v-for="item in supportedTemplates" :key="item.document_type" :label="item.title" :value="item.document_type" />
+              </el-select>
+              <el-input v-model="templateVersion" placeholder="版本号，可留空" style="width: 180px" />
+              <el-button type="primary" :loading="templateUploading" @click="openTemplatePicker">上传替换模板</el-button>
+              <el-button @click="fetchDocumentTemplates">刷新</el-button>
+            </div>
+            <div class="stable-table-wrap">
+              <el-table :data="documentTemplates" v-loading="templateLoading" stripe style="width: 100%">
+                <el-table-column prop="title" label="模板" min-width="160" />
+                <el-table-column prop="document_type" label="类型" min-width="190" />
+                <el-table-column prop="template_version" label="版本" width="150" />
+                <el-table-column prop="source_file_name" label="文件名" min-width="220" show-overflow-tooltip />
+                <el-table-column label="状态" width="120">
+                  <template #default="{ row }">
+                    <el-tag :type="row.status === 'active' && row.file_exists ? 'success' : row.status === 'active' ? 'warning' : 'info'" size="small">
+                      {{ row.status === 'active' && row.file_exists ? '当前可用' : row.status === 'active' ? '文件缺失' : row.status }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="mapping_count" label="字段映射" width="100" />
+                <el-table-column prop="updated_at" label="更新时间" width="160" />
+              </el-table>
+            </div>
+          </el-card>
+        </div>
+
         <!-- 用户管理 -->
         <div v-show="activeTab === 'users'" class="settings-section">
           <div class="section-header">
@@ -497,6 +534,7 @@ const navItems = [
   { key: 'kb', label: '知识库', icon: Collection },
   { key: 'ai-perm', label: 'AI 权限', icon: Operation },
   { key: 'ai-audit', label: 'API统计', icon: Operation },
+  { key: 'templates', label: '表格模板', icon: Collection },
   { key: 'users', label: '用户管理', icon: User },
   { key: 'about', label: '关于', icon: InfoFilled },
 ]
@@ -535,6 +573,13 @@ const aiAuditSummary = ref({})
 const aiAuditLoading = ref(false)
 const aiAuditDateRange = ref(null)
 const aiAuditFilters = ref({ user_id: null, action_type: '', tool_name: '', status: '' })
+const documentTemplates = ref([])
+const supportedTemplates = ref([])
+const selectedTemplateType = ref('')
+const templateVersion = ref('')
+const templateFileInput = ref(null)
+const templateLoading = ref(false)
+const templateUploading = ref(false)
 
 const aiRoleTableData = computed(() => {
   const map = {}
@@ -683,6 +728,74 @@ function resetAiAuditFilters() {
   aiAuditFilters.value = { user_id: null, action_type: '', tool_name: '', status: '' }
   aiAuditDateRange.value = null
   fetchAiAudit()
+}
+
+async function fetchDocumentTemplates() {
+  if (!isAdmin.value) return
+  templateLoading.value = true
+  try {
+    const res = await fetch('/api/settings/document-templates', {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json()
+    if (json.success) {
+      documentTemplates.value = json.data || []
+      supportedTemplates.value = json.supported || []
+      if (!selectedTemplateType.value && supportedTemplates.value[0]) {
+        selectedTemplateType.value = supportedTemplates.value[0].document_type
+      }
+    } else {
+      ElMessage.error(json.message || '模板列表加载失败')
+    }
+  } catch {
+    ElMessage.error('模板列表加载失败')
+  } finally {
+    templateLoading.value = false
+  }
+}
+
+function openTemplatePicker() {
+  if (!selectedTemplateType.value) {
+    ElMessage.warning('请先选择模板类型')
+    return
+  }
+  templateFileInput.value?.click()
+}
+
+async function onTemplateFileChange(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  templateUploading.value = true
+  try {
+    const res = await fetch(`/api/settings/document-templates/${selectedTemplateType.value}/upload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({
+        file_name: file.name,
+        file_data: await readAsDataUrl(file),
+        template_version: templateVersion.value
+      })
+    })
+    const json = await res.json()
+    if (!json.success) throw new Error(json.message || '模板上传失败')
+    ElMessage.success('模板已替换为当前版本')
+    templateVersion.value = ''
+    await fetchDocumentTemplates()
+  } catch (err) {
+    ElMessage.error(err.message || '模板上传失败')
+  } finally {
+    templateUploading.value = false
+  }
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 }
 
 // ====== 用户管理 ======
@@ -1211,6 +1324,7 @@ onMounted(() => {
     fetchAiData()
     fetchAiAudit()
     fetchUsers()
+    fetchDocumentTemplates()
   }
 })
 </script>
@@ -1422,6 +1536,16 @@ onMounted(() => {
 }
 .users-table :deep(.el-table) {
   min-width: 860px;
+}
+.hidden-input {
+  display: none;
+}
+.template-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
 }
 .audit-summary {
   display: grid;

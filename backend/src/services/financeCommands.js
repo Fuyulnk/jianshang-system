@@ -2,6 +2,7 @@ export function createTransaction(db, payload = {}) {
   const accountId = toPositiveInt(payload.account_id)
   const type = cleanText(payload.type)
   const amount = toPositiveMoney(payload.amount)
+  const status = normalizeTransactionStatus(payload.status)
   if (!accountId || !type || payload.amount === undefined) {
     throw commandError('账户、类型和金额不能为空', 400)
   }
@@ -18,8 +19,8 @@ export function createTransaction(db, payload = {}) {
 
   const tx = db.transaction(() => {
     const result = db.prepare(`
-      INSERT INTO transactions (account_id, type, amount, category, description, party, proxy, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+      INSERT INTO transactions (account_id, type, amount, category, description, party, proxy, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
     `).run(
       accountId,
       type,
@@ -27,15 +28,13 @@ export function createTransaction(db, payload = {}) {
       cleanNullable(payload.category),
       cleanNullable(payload.description),
       cleanNullable(payload.party),
-      cleanNullable(payload.proxy)
+      cleanNullable(payload.proxy),
+      status
     )
 
-    const sign = type === 'income' ? 1 : -1
-    db.prepare(`
-      UPDATE accounts
-      SET current_balance = current_balance + ?, updated_at = datetime('now', 'localtime')
-      WHERE id = ?
-    `).run(sign * amount, accountId)
+    if (status === 'approved') {
+      applyAccountBalanceDelta(db, accountId, type, amount)
+    }
 
     return result.lastInsertRowid
   })
@@ -51,7 +50,7 @@ export function deleteTransaction(db, transactionId) {
   }
 
   const tx = db.transaction(() => {
-    if (transaction.status !== 'cancelled') {
+    if (isBalanceAppliedStatus(transaction.status)) {
       const sign = transaction.type === 'income' ? -1 : 1
       db.prepare(`
         UPDATE accounts
@@ -64,6 +63,36 @@ export function deleteTransaction(db, transactionId) {
 
   tx()
   return { id }
+}
+
+export function confirmTransaction(db, transactionId) {
+  const id = toPositiveInt(transactionId)
+  const tx = db.transaction(() => {
+    const transaction = id ? db.prepare('SELECT * FROM transactions WHERE id = ?').get(id) : null
+    if (!transaction) {
+      throw commandError('交易记录不存在', 404)
+    }
+    if (transaction.status === 'cancelled') {
+      throw commandError('已作废的流水不能确认', 400)
+    }
+    if (isBalanceAppliedStatus(transaction.status)) {
+      return { id, already_confirmed: true }
+    }
+
+    const updated = db.prepare(`
+      UPDATE transactions
+      SET status = 'approved'
+      WHERE id = ? AND status = 'pending'
+    `).run(id)
+    if (!updated.changes) {
+      const fresh = db.prepare('SELECT status FROM transactions WHERE id = ?').get(id)
+      if (isBalanceAppliedStatus(fresh?.status)) return { id, already_confirmed: true }
+      throw commandError('流水状态已变化，请刷新后重试', 409)
+    }
+    applyAccountBalanceDelta(db, transaction.account_id, transaction.type, Number(transaction.amount || 0))
+    return { id, already_confirmed: false }
+  })
+  return tx()
 }
 
 function commandError(message, statusCode = 400) {
@@ -89,4 +118,21 @@ function cleanText(value) {
 function cleanNullable(value) {
   const text = cleanText(value)
   return text || null
+}
+
+function normalizeTransactionStatus(value) {
+  return cleanText(value) === 'pending' ? 'pending' : 'approved'
+}
+
+function isBalanceAppliedStatus(status) {
+  return !status || status === 'approved'
+}
+
+function applyAccountBalanceDelta(db, accountId, type, amount) {
+  const sign = type === 'income' ? 1 : -1
+  db.prepare(`
+    UPDATE accounts
+    SET current_balance = current_balance + ?, updated_at = datetime('now', 'localtime')
+    WHERE id = ?
+  `).run(sign * Number(amount || 0), accountId)
 }
