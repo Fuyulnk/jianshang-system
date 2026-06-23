@@ -395,6 +395,7 @@ onMounted(fetchWorkbooks)
 }
 .ledger-table-wrap {
   overflow: auto;
+  max-height: calc(100vh - 260px);
   max-height: calc(100dvh - 260px);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);

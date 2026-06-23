@@ -177,6 +177,49 @@
 
 ## 对接记录
 
+### 2026-06-23 Codex：白屏隐患与 Windows/移动端基础兼容排查
+
+- 背景：用户要求继续检查是否还有隐藏白屏风险，并注意当前 Mac 开发环境与员工 Windows、后续小程序/手机浏览器之间的兼容差异。
+- 本轮修复：
+  - `frontend-new/src/utils/authSession.js`：统一 JWT payload 解码为 base64url 兼容实现，并给 sessionStorage/localStorage 读写删除加安全兜底，避免浏览器 storage 策略异常时在应用启动阶段直接抛错白屏。
+  - `frontend-new/src/router/index.js`：所有 token 解析改走 `getTokenPayload`；新增未知路由兜底，已登录用户访问旧链接/错链接时回到合适入口，未登录用户回登录页，避免空 router-view。
+  - `frontend-new/src/components/material/MaterialRequestPanel.vue`、`ProductList.vue`、`ProjectList.vue`、`ProjectDetail.vue`、`SystemSettings.vue`、`EmployeeList.vue`：移除散落的 `JSON.parse(atob(token.split('.')[1]))`，统一使用 `getTokenPayload`。
+  - `frontend-new/src/App.vue`、`MainLayout.vue`、`Login.vue`、`FinanceLedger.vue`：给 `100dvh` / `calc(100dvh...)` 增加 `100vh` fallback，降低旧 Windows 浏览器和手机浏览器 viewport 单位不兼容导致的高度异常。
+  - `frontend-new/src/layouts/MainLayout.vue`：窗口宽度小于 900px 时自动收起侧边栏，避免 Windows 缩小窗口或移动端宽度下主内容被挤压。
+  - `frontend-new/src/views/Dashboard.vue`：动态图标使用 `markRaw`，消除 Vue reactive component warning；控制台时间定时器在卸载时清理。
+- 验证：
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 本地 `/health` 正常。
+  - Playwright 真实浏览器：登录页可打开；超级管理员 `fuyulnk` 登录、刷新、访问 `/main/not-exist` 均正常，控制台 0 error / 0 warning。
+  - Playwright 真实浏览器：财务账号 `caiwu` 登录工作台、刷新正常；390px 窄屏 reload 后侧边栏自动收起，控制台 0 error / 0 warning。
+- 注意：
+  - 本轮未提交、未上传服务器。
+  - 本轮只做白屏/兼容基础兜底，没有做完整 Windows 真机、安卓、iPhone、小程序 WebView 视觉适配；后续正式移动端前仍需单独做一轮多端适配清单。
+
+### 2026-06-22 Codex：财务注册账号角色映射 + 刷新白屏热修
+
+- 背景：用户反馈财务部门新注册账号填写“财务”职位后，进入系统仍显示普通员工；同时刷新页面后出现白屏风险。本轮按 P0 事故处理，只修账号岗位映射、登录/菜单兜底和财务工作台越权请求。
+- 后端：
+  - `backend/src/routes/employees.js`：管理员从注册账号生成员工档案时，不再只绑定 `employee_id`，会根据部门/职位同步账号角色。财务部/财务 -> `finance`，仓库/仓管 -> `warehouse`，工程部/监理/施工员工 -> `engineering`。
+  - `backend/src/routes/users.js`：用户管理里绑定/解绑员工档案时同步岗位角色、部门、职位、手机号、`assignment_status` 和 `role_version`，避免“已建档但仍是 employee”的旧问题。
+  - `backend/src/index.js`：新增一次性启动修复 `reconcile_assigned_user_roles_20260622`，对旧库中已绑定员工档案但角色仍不对的账号做补偿同步；管理员/超级管理员不被自动降权。
+  - `backend/src/routes/employee-dashboard.js`：员工工作台接口直接返回 `employee_code`，避免前端为了显示员工 ID 再去请求 `/api/employees` 全表。
+  - `backend/src/routes/auth.js`：注册成功文案从“普通员工入口”调整为“基础工作台”，避免误解为最终岗位。
+- 前端：
+  - `frontend-new/src/views/EmployeeDashboard.vue`：员工 ID 改为使用 `/api/employee/dashboard` 返回的 `employee_code`，删除无权限的 `/api/employees` 兜底请求。
+  - `frontend-new/src/layouts/MainLayout.vue`：`/api/me`、菜单接口失败或 401 时不再静默失败，改为清理会话并提示重新登录；接口异常给中文提示，降低刷新白屏概率。
+  - `frontend-new/src/views/Login.vue`：注册完成、新人步骤文案统一为“基础工作台 / 进入基础工作台”。
+- 验证：
+  - `node --check backend/src/routes/employee-dashboard.js backend/src/routes/employees.js backend/src/routes/users.js backend/src/routes/auth.js backend/src/index.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 本地接口验证：临时注册财务账号后，通过“生成员工档案”接口建档，账号自动变为 `finance`、`assignment_status=assigned`、绑定 `employee_id`；临时测试数据已清理。
+  - 本地真实浏览器验证：财务账号 `caiwu` 登录 `/main/employee-dashboard` 后显示“财务/财务部/员工ID”，刷新页面不白屏，控制台 0 error；此前 `/api/employees` 403 已消失。
+  - 本地真实浏览器验证：超级管理员 `fuyulnk` 登录 `/main/dashboard` 后刷新页面不白屏，控制台 0 error；仅保留既有 Vue 图标组件 reactive warning。
+  - 本地 `/health` 正常。
+- 注意：
+  - 本轮未提交、未上传服务器。
+  - 服务器需要重新上传并重启后才会吃到这次热修；上传后建议用新注册财务账号和已有 `caiwu` 各做一次刷新测试。
+
 ### 2026-06-22 Codex：Hermes 财务/盘点/模板审计修补
 
 - 背景：Hermes 指出财务群机器人高置信度消息会直接创建交易流水、盘点歧义匹配仍可提交、模板上传版本号可由用户自定义。用户确认“飞书式自动录入”体验要保留，所以本轮改成“自动生成待确认流水，人工确认后才影响余额”。

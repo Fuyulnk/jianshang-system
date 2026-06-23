@@ -3,11 +3,11 @@ const SESSION_KEY = 'jianshang-session'
 function readSession() {
   if (typeof sessionStorage === 'undefined') return {}
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY)
+    const raw = safeStorageGet(sessionStorage, SESSION_KEY)
     if (!raw) return {}
     return JSON.parse(raw) || {}
   } catch {
-    sessionStorage.removeItem(SESSION_KEY)
+    safeStorageRemove(sessionStorage, SESSION_KEY)
     return {}
   }
 }
@@ -15,10 +15,10 @@ function readSession() {
 function writeSession(value = {}) {
   if (typeof sessionStorage === 'undefined') return
   if (!value.token) {
-    sessionStorage.removeItem(SESSION_KEY)
+    safeStorageRemove(sessionStorage, SESSION_KEY)
     return
   }
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: value.token }))
+  safeStorageSet(sessionStorage, SESSION_KEY, JSON.stringify({ token: value.token }))
 }
 
 export function getAuthToken() {
@@ -35,12 +35,12 @@ export function setAuthToken(token) {
 }
 
 export function rememberAuthToken(token, username = '') {
-  if (username) localStorage.setItem('saved-username', username)
+  if (username && typeof localStorage !== 'undefined') safeStorageSet(localStorage, 'saved-username', username)
   purgeLegacySharedAuth()
 }
 
 export function clearRememberedAuth() {
-  localStorage.removeItem('remember-login')
+  if (typeof localStorage !== 'undefined') safeStorageRemove(localStorage, 'remember-login')
 }
 
 export function clearAuthSession(options = {}) {
@@ -50,12 +50,16 @@ export function clearAuthSession(options = {}) {
 }
 
 export function purgeLegacySharedAuth() {
-  sessionStorage.removeItem('token')
-  sessionStorage.removeItem('user')
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
-  localStorage.removeItem('remembered-auth-v1')
-  if (String(window.name || '').startsWith('jianshang-auth:')) window.name = ''
+  if (typeof sessionStorage !== 'undefined') {
+    safeStorageRemove(sessionStorage, 'token')
+    safeStorageRemove(sessionStorage, 'user')
+  }
+  if (typeof localStorage !== 'undefined') {
+    safeStorageRemove(localStorage, 'token')
+    safeStorageRemove(localStorage, 'user')
+    safeStorageRemove(localStorage, 'remembered-auth-v1')
+  }
+  if (typeof window !== 'undefined' && String(window.name || '').startsWith('jianshang-auth:')) window.name = ''
 }
 
 export function getTokenPayload(token = getAuthToken()) {
@@ -63,7 +67,7 @@ export function getTokenPayload(token = getAuthToken()) {
   try {
     const base64Payload = token.split('.')[1]
     if (!base64Payload) return null
-    return JSON.parse(atob(base64Payload))
+    return JSON.parse(decodeBase64Url(base64Payload))
   } catch {
     return null
   }
@@ -73,4 +77,36 @@ export function isAuthTokenExpired(token = getAuthToken()) {
   const payload = getTokenPayload(token)
   if (!payload?.exp) return !token
   return payload.exp * 1000 < Date.now()
+}
+
+function decodeBase64Url(value) {
+  const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+  const binary = atob(padded)
+  try {
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return binary
+  }
+}
+
+function safeStorageGet(storage, key) {
+  try {
+    return storage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function safeStorageSet(storage, key, value) {
+  try {
+    storage.setItem(key, value)
+  } catch {}
+}
+
+function safeStorageRemove(storage, key) {
+  try {
+    storage.removeItem(key)
+  } catch {}
 }

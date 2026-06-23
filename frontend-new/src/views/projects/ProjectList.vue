@@ -211,7 +211,7 @@
 </template>
 
 <script setup>
-import { getAuthToken } from '../../utils/authSession'
+import { getAuthToken, getTokenPayload } from '../../utils/authSession'
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -258,10 +258,7 @@ function emptyForm() {
 }
 
 const userRole = computed(() => {
-  try {
-    const t = getAuthToken()
-    return JSON.parse(atob(t.split('.')[1])).role || ''
-  } catch { return '' }
+  return getTokenPayload()?.role || ''
 })
 const canCreateProjects = computed(() => ['super_admin', 'admin'].includes(userRole.value))
 const canImportProjects = computed(() => ['super_admin', 'admin', 'finance'].includes(userRole.value))

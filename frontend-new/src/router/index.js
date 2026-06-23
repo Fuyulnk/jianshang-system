@@ -18,7 +18,7 @@ import ProjectSupplyList from '../views/projects/ProjectSupplyList.vue'
 import FinanceOverview from '../views/finance/FinanceOverview.vue'
 import FinanceLedger from '../views/finance/FinanceLedger.vue'
 import FileCenter from '../views/files/FileCenter.vue'
-import { getAuthToken, clearAuthSession } from '../utils/authSession'
+import { getAuthToken, clearAuthSession, getTokenPayload } from '../utils/authSession'
 
 const routes = [
   {
@@ -52,6 +52,10 @@ const routes = [
       { path: 'finance/overview', name: 'FinanceOverview', component: FinanceOverview, meta: { title: '财务总览' } },
       { path: 'finance/ledger', name: 'FinanceLedger', component: FinanceLedger, meta: { title: '入账登记表' } }
     ]
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: () => (getAuthToken() ? '/main/dashboard' : '/')
   }
 ]
 
@@ -68,7 +72,8 @@ router.beforeEach((to, from) => {
   }
   if (token) {
     try {
-      const payload = JSON.parse(atob(token.split('.')[1]))
+      const payload = getTokenPayload(token)
+      if (!payload) throw new Error('Invalid token')
       if (payload.exp && payload.exp * 1000 < Date.now()) {
         clearAuthSession({ clearRemembered: true })
         if (to.name !== 'Login') {

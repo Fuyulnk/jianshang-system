@@ -246,7 +246,7 @@
 </template>
 
 <script setup>
-import { getAuthToken } from '../../utils/authSession'
+import { getAuthToken, getTokenPayload } from '../../utils/authSession'
 import { computed, ref, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MaterialRequestPanel from '../../components/material/MaterialRequestPanel.vue'
@@ -273,10 +273,7 @@ const presetCategories = ['诺瓦艺术漆', '本杰明艺术漆', '艺术漆辅
 const presetUnits = ['kg', 'g', 'ml', 'L', '桶', '罐', '支', '把', '套', '份', '个', '颗', '箱', '卷', '米', '平方']
 
 const userRole = computed(() => {
-  try {
-    const t = getAuthToken()
-    return JSON.parse(atob(t.split('.')[1])).role || ''
-  } catch { return '' }
+  return getTokenPayload()?.role || ''
 })
 const canHandleMaterialRequests = computed(() => ['super_admin', 'admin', 'warehouse'].includes(userRole.value))
 const filteredList = computed(() => showTestMaterials.value ? list.value : list.value.filter(item => !item.is_test))

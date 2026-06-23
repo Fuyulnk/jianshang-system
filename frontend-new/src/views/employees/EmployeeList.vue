@@ -151,7 +151,7 @@
 </template>
 
 <script setup>
-import { getAuthToken } from '../../utils/authSession'
+import { getAuthToken, getTokenPayload } from '../../utils/authSession'
 import { toDepartmentCascaderOptions } from '../../utils/orgOptions'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -170,11 +170,7 @@ const orgOptions = ref(toDepartmentCascaderOptions())
 const cascaderProps = { value: 'value', label: 'label', children: 'children', expandTrigger: 'hover' }
 
 const currentRole = computed(() => {
-  try {
-    const token = getAuthToken() || ''
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.role || ''
-  } catch { return '' }
+  return getTokenPayload()?.role || ''
 })
 const canManage = computed(() => ['super_admin', 'admin'].includes(currentRole.value))
 

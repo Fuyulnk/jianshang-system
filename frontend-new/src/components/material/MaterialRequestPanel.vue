@@ -1,5 +1,5 @@
 <script setup>
-import { getAuthToken } from '../../utils/authSession'
+import { getAuthToken, getTokenPayload } from '../../utils/authSession'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -37,10 +37,7 @@ const rows = reactive({
 })
 
 const userRole = computed(() => {
-  try {
-    const t = getAuthToken()
-    return JSON.parse(atob(t.split('.')[1])).role || ''
-  } catch { return '' }
+  return getTokenPayload()?.role || ''
 })
 const canCreate = computed(() => props.projectId && props.canRequest && ['super_admin', 'admin', 'engineering', 'warehouse'].includes(userRole.value))
 const canSeeDisabledReason = computed(() => props.projectId && props.mode === 'project' && !props.canRequest && !props.canReturn && props.disabledReason)

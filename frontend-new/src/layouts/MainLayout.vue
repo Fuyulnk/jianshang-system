@@ -111,7 +111,7 @@
           type="warning"
           :closable="false"
           show-icon
-          title="当前为普通员工入口，管理员建档并分配岗位后，系统会提示你重新登录刷新权限。"
+          title="当前为基础工作台，管理员建档并分配岗位后，系统会提示你重新登录刷新权限。"
         />
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
@@ -132,7 +132,7 @@
 <script setup>
 import { getAuthToken, clearAuthSession } from '../utils/authSession'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter, useRoute } from 'vue-router'
 import { HomeFilled, Wallet, List, Goods, User, Operation, ChatDotSquare, Fold, Expand, Tools, Sunny, Moon, TrendCharts, Document } from '@element-plus/icons-vue'
 import UserAvatar from '../components/UserAvatar.vue'
@@ -210,6 +210,10 @@ function hasPerm(module) {
 
 function token() { return getAuthToken() }
 
+function syncSidebarForViewport() {
+  if (window.innerWidth < 900) collapsed.value = true
+}
+
 async function fetchUserInfo() {
   try {
     const res = await fetch('/api/me', {
@@ -221,6 +225,10 @@ async function fetchUserInfo() {
       return
     }
     const json = await res.json()
+    if (!res.ok || !json.success) {
+      await handleSessionExpired(json.message || '无法获取当前账号信息，请重新登录')
+      return
+    }
     if (json.success) {
       userInfo.value = json.user
       isAdmin.value = json.user.role === 'super_admin' || json.user.role === 'admin'
@@ -233,7 +241,9 @@ async function fetchUserInfo() {
         showOnboarding.value = true
       }
     }
-  } catch {}
+  } catch {
+    ElMessage.error('服务器连接异常，请刷新或重新登录')
+  }
 }
 
 async function handleSessionExpired(message) {
@@ -280,9 +290,15 @@ async function fetchMenu() {
     const res = await fetch('/api/user-menu', {
       headers: { Authorization: `Bearer ${token()}` }
     })
-    const json = await res.json()
+    const json = await res.json().catch(() => ({}))
+    if (res.status === 401) {
+      await handleSessionExpired(json.message || '用户权限已变更，请重新登录')
+      return
+    }
     if (json.success) allowedModules.value = json.data
-  } catch {}
+  } catch {
+    allowedModules.value = []
+  }
 }
 
 const handleLogout = () => {
@@ -293,6 +309,8 @@ const handleLogout = () => {
 onMounted(() => {
   initTheme()
   applyPersonalAppearance()
+  syncSidebarForViewport()
+  window.addEventListener('resize', syncSidebarForViewport)
   window.addEventListener('personal-appearance-change', applyPersonalAppearance)
   fetchUserInfo()
   fetchMenu()
@@ -302,12 +320,15 @@ onMounted(() => {
 onUnmounted(() => {
   if (themeTimer.value) window.clearInterval(themeTimer.value)
   if (assignmentTimer.value) window.clearInterval(assignmentTimer.value)
+  window.removeEventListener('resize', syncSidebarForViewport)
   window.removeEventListener('personal-appearance-change', applyPersonalAppearance)
 })
 </script>
 
 <style scoped>
 .main-layout {
+  min-height: 100vh;
+  height: 100vh;
   min-height: 100dvh;
   height: 100dvh;
 }
@@ -526,6 +547,7 @@ onUnmounted(() => {
 
 .content {
   background: var(--bg-page);
+  min-height: calc(100vh - var(--header-height));
   min-height: calc(100dvh - var(--header-height));
   padding: 24px;
   transition: padding 0.25s ease;

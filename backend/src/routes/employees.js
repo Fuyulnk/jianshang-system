@@ -77,6 +77,7 @@ export default function employeeRoutes(server, db) {
     const employeeCode = generateEmployeeCode(db)
     const employeeName = String(user.real_name || user.username || '').trim()
     const result = db.transaction(() => {
+      const targetRole = roleFromDepartmentPosition(user.department, user.position, user.role)
       const employeeResult = db.prepare(`
         INSERT INTO employees (name, department, position, phone, employee_code)
         VALUES (?, ?, ?, ?, ?)
@@ -89,11 +90,15 @@ export default function employeeRoutes(server, db) {
       )
       db.prepare(`
         UPDATE users
-        SET employee_id = ?,
+        SET role = ?,
+            employee_id = ?,
             assignment_status = 'assigned',
-            role_version = CASE WHEN role != 'employee' THEN COALESCE(role_version, 1) + 1 ELSE COALESCE(role_version, 1) END
+            role_version = CASE
+              WHEN role != ? OR COALESCE(role_version, 1) < 1 THEN COALESCE(role_version, 1) + 1
+              ELSE COALESCE(role_version, 1)
+            END
         WHERE id = ?
-      `).run(employeeResult.lastInsertRowid, user.id)
+      `).run(targetRole, employeeResult.lastInsertRowid, targetRole, user.id)
       return { id: employeeResult.lastInsertRowid }
     })()
 
@@ -116,12 +121,21 @@ export default function employeeRoutes(server, db) {
       db.prepare(
         'UPDATE employees SET name = ?, department = ?, position = ?, phone = ?, status = ? WHERE id = ?'
       ).run(name, department, position, phone, status || 'active', request.params.id)
-      db.prepare(`
+      const boundUsers = db.prepare('SELECT id, role FROM users WHERE employee_id = ?').all(request.params.id)
+      const updateUser = db.prepare(`
         UPDATE users
-        SET real_name = ?, department = ?, position = ?, phone = ?,
+        SET role = ?,
+            real_name = ?,
+            department = ?,
+            position = ?,
+            phone = ?,
+            assignment_status = 'assigned',
             role_version = COALESCE(role_version, 1) + 1
-        WHERE employee_id = ?
-      `).run(name, department, position, phone || '', request.params.id)
+        WHERE id = ?
+      `)
+      for (const user of boundUsers) {
+        updateUser.run(roleFromDepartmentPosition(department, position, user.role), name, department, position, phone || '', user.id)
+      }
     })()
 
     return { success: true }
@@ -156,4 +170,14 @@ function roleToPosition(role) {
     employee: '普通员工'
   }
   return labels[role] || '未设置职位'
+}
+
+function roleFromDepartmentPosition(department, position, currentRole = 'employee') {
+  if (['super_admin', 'admin'].includes(currentRole)) return currentRole
+  const dept = String(department || '').trim()
+  const pos = String(position || '').trim()
+  if (dept === '财务部' || pos === '财务') return 'finance'
+  if (dept === '仓库' || dept === '仓储部' || pos === '仓管') return 'warehouse'
+  if (dept === '工程部' || ['监理', '施工员工', '工程'].includes(pos)) return 'engineering'
+  return 'employee'
 }

@@ -163,36 +163,43 @@ export default function userRoutes(server, db) {
 
     const userId = Number(request.params.id)
     const employeeId = toInt(request.body?.employee_id)
-    const target = db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId)
+    const target = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(userId)
     if (!target) {
       reply.code(404).send({ success: false, message: '用户不存在' })
       return
     }
 
     if (employeeId > 0) {
-      const employee = db.prepare('SELECT id, name, employee_code FROM employees WHERE id = ?').get(employeeId)
+      const employee = db.prepare('SELECT id, name, department, position, phone, employee_code FROM employees WHERE id = ?').get(employeeId)
       if (!employee) return { success: false, message: '员工档案不存在' }
 
       const bound = db.prepare('SELECT id, username FROM users WHERE employee_id = ? AND id != ?').get(employeeId, userId)
       if (bound) {
         return { success: false, message: `该员工档案已绑定账号 ${bound.username}` }
       }
+      const targetRole = roleFromDepartmentPosition(employee.department, employee.position, target.role)
+      db.prepare(`
+        UPDATE users
+        SET role = ?,
+            employee_id = ?,
+            real_name = COALESCE(NULLIF(real_name, ''), ?),
+            department = ?,
+            position = ?,
+            phone = COALESCE(NULLIF(phone, ''), ?),
+            assignment_status = 'assigned',
+            role_version = COALESCE(role_version, 1) + 1
+        WHERE id = ?
+      `).run(targetRole, employeeId, employee.name || '', employee.department || '', employee.position || '', employee.phone || '', userId)
+      return { success: true }
     }
 
     db.prepare(`
       UPDATE users
-      SET employee_id = ?,
-          assignment_status = CASE
-            WHEN role IN ('super_admin', 'admin') THEN 'assigned'
-            WHEN ? > 0 THEN 'assigned'
-            ELSE 'pending'
-          END,
-          role_version = CASE
-            WHEN ? = 0 OR role != 'employee' THEN COALESCE(role_version, 1) + 1
-            ELSE COALESCE(role_version, 1)
-          END
+      SET employee_id = 0,
+          assignment_status = CASE WHEN role IN ('super_admin', 'admin') THEN 'assigned' ELSE 'pending' END,
+          role_version = COALESCE(role_version, 1) + 1
       WHERE id = ?
-    `).run(employeeId, employeeId, employeeId, userId)
+    `).run(userId)
 
     return { success: true }
   })
@@ -306,4 +313,14 @@ function isValidRole(db, role) {
 function toInt(value) {
   const n = Number(value)
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0
+}
+
+function roleFromDepartmentPosition(department, position, currentRole = 'employee') {
+  if (['super_admin', 'admin'].includes(currentRole)) return currentRole
+  const dept = String(department || '').trim()
+  const pos = String(position || '').trim()
+  if (dept === '财务部' || pos === '财务') return 'finance'
+  if (dept === '仓库' || dept === '仓储部' || pos === '仓管') return 'warehouse'
+  if (dept === '工程部' || ['监理', '施工员工', '工程'].includes(pos)) return 'engineering'
+  return 'employee'
 }

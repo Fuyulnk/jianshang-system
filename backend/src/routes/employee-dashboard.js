@@ -82,8 +82,12 @@ export default function employeeDashboardRoutes(server, db) {
 
     // 获取用户详细信息
     const user = db.prepare(`
-      SELECT u.id, u.username, u.role, u.real_name, u.department, u.phone, u.avatar_url, u.assignment_status
-      FROM users u WHERE u.id = ?
+      SELECT
+        u.id, u.username, u.role, u.real_name, u.department, u.phone, u.avatar_url, u.assignment_status,
+        e.employee_code
+      FROM users u
+      LEFT JOIN employees e ON u.employee_id = e.id
+      WHERE u.id = ?
     `).get(request.user.userId)
 
     if (isPendingAssignmentUser(request.user)) {
@@ -98,6 +102,7 @@ export default function employeeDashboardRoutes(server, db) {
             department: user?.department || '',
             avatar_url: user?.avatar_url || '',
             assignment_status: 'pending',
+            employee_code: user?.employee_code || '',
           },
           groups: [
             {
@@ -210,6 +215,7 @@ export default function employeeDashboardRoutes(server, db) {
           department: user?.department || '',
           avatar_url: user?.avatar_url || '',
           assignment_status: user?.assignment_status || 'assigned',
+          employee_code: user?.employee_code || '',
         },
         groups,
         stats: {

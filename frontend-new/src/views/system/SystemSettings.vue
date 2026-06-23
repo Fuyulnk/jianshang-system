@@ -518,7 +518,7 @@
 </template>
 
 <script setup>
-import { getAuthToken } from '../../utils/authSession'
+import { getAuthToken, getTokenPayload } from '../../utils/authSession'
 import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting, Aim, Collection, InfoFilled, User, Operation } from '@element-plus/icons-vue'
@@ -540,11 +540,7 @@ const navItems = [
 ]
 
 const currentRole = computed(() => {
-  try {
-    const token = getAuthToken() || ''
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.role || ''
-  } catch { return '' }
+  return getTokenPayload()?.role || ''
 })
 const isAdmin = computed(() => ['super_admin', 'admin'].includes(currentRole.value))
 const filteredNav = computed(() => {

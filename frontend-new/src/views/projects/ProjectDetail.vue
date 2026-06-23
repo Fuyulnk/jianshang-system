@@ -761,7 +761,7 @@
 </template>
 
 <script setup>
-import { getAuthToken } from '../../utils/authSession'
+import { getAuthToken, getTokenPayload } from '../../utils/authSession'
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -793,16 +793,10 @@ const deliveryChain = ref(null)
 
 // 当前用户角色
 const userRole = (() => {
-  try {
-    const t = getAuthToken()
-    return JSON.parse(atob(t.split('.')[1])).role || ''
-  } catch { return '' }
+  return getTokenPayload()?.role || ''
 })()
 const userId = (() => {
-  try {
-    const t = getAuthToken()
-    return JSON.parse(atob(t.split('.')[1])).userId || 0
-  } catch { return 0 }
+  return getTokenPayload()?.userId || 0
 })()
 const canManageProject = computed(() => ['super_admin', 'admin', 'engineering'].includes(userRole))
 const isAssignedEmployee = computed(() => {

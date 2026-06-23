@@ -48,7 +48,7 @@
 
 <script setup>
 import { getAuthToken } from '../utils/authSession'
-import { ref, onMounted } from 'vue'
+import { markRaw, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Wallet, List, Goods, User,
@@ -57,19 +57,20 @@ import {
 
 const router = useRouter()
 const currentTime = ref('')
+let clockTimer = null
 
 const stats = ref([
-  { label: '账户总数', value: '-', icon: Wallet, color: 'blue' },
-  { label: '交易记录', value: '-', icon: TrendCharts, color: 'green' },
-  { label: '产品种类', value: '-', icon: Goods, color: 'orange' },
-  { label: '员工人数', value: '-', icon: User, color: 'purple' }
+  { label: '账户总数', value: '-', icon: markRaw(Wallet), color: 'blue' },
+  { label: '交易记录', value: '-', icon: markRaw(TrendCharts), color: 'green' },
+  { label: '产品种类', value: '-', icon: markRaw(Goods), color: 'orange' },
+  { label: '员工人数', value: '-', icon: markRaw(User), color: 'purple' }
 ])
 
 const quickActions = [
-  { title: '账户管理', desc: '查看和管理所有账户', path: '/main/accounts', icon: Wallet, color: 'blue' },
-  { title: '交易流水', desc: '查看所有交易记录', path: '/main/transactions', icon: List, color: 'green' },
-  { title: '产品库存', desc: '管理产品信息和库存', path: '/main/products', icon: Goods, color: 'orange' },
-  { title: '员工管理', desc: '管理员工信息', path: '/main/employees', icon: User, color: 'purple' }
+  { title: '账户管理', desc: '查看和管理所有账户', path: '/main/accounts', icon: markRaw(Wallet), color: 'blue' },
+  { title: '交易流水', desc: '查看所有交易记录', path: '/main/transactions', icon: markRaw(List), color: 'green' },
+  { title: '产品库存', desc: '管理产品信息和库存', path: '/main/products', icon: markRaw(Goods), color: 'orange' },
+  { title: '员工管理', desc: '管理员工信息', path: '/main/employees', icon: markRaw(User), color: 'purple' }
 ]
 
 function updateTime() {
@@ -92,10 +93,10 @@ async function fetchStats() {
     const prod = await prodRes.json()
     const emp = await empRes.json()
     stats.value = [
-      { label: '账户总数', value: acc.data?.length || 0, icon: Wallet, color: 'blue' },
-      { label: txWindow.label, value: txWindow.count, icon: TrendCharts, color: 'green' },
-      { label: '产品种类', value: prod.data?.length || 0, icon: Goods, color: 'orange' },
-      { label: '员工人数', value: emp.data?.length || 0, icon: User, color: 'purple' }
+      { label: '账户总数', value: acc.data?.length || 0, icon: markRaw(Wallet), color: 'blue' },
+      { label: txWindow.label, value: txWindow.count, icon: markRaw(TrendCharts), color: 'green' },
+      { label: '产品种类', value: prod.data?.length || 0, icon: markRaw(Goods), color: 'orange' },
+      { label: '员工人数', value: emp.data?.length || 0, icon: markRaw(User), color: 'purple' }
     ]
   } catch {}
 }
@@ -147,7 +148,11 @@ function formatDate(date) {
 onMounted(() => {
   updateTime()
   fetchStats()
-  setInterval(updateTime, 60000)
+  clockTimer = window.setInterval(updateTime, 60000)
+})
+
+onUnmounted(() => {
+  if (clockTimer) window.clearInterval(clockTimer)
 })
 </script>
 

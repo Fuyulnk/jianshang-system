@@ -442,6 +442,7 @@ db.exec(`
 ensureAiToolRegistry(db)
 ensureDefaultAiAgents(db)
 ensureFinanceAccountAliases(db)
+reconcileAssignedUserRoles(db)
 
 // 种子 AI 工具权限（仅首次）
 const toolCount = db.prepare('SELECT COUNT(*) as c FROM ai_role_tools').get().c
@@ -1390,4 +1391,41 @@ function ensureFinanceAccountAliases(db) {
     VALUES (?, ?, 'system')
   `)
   for (const [alias, accountName] of aliases) stmt.run(alias, accountName)
+}
+
+function reconcileAssignedUserRoles(db) {
+  const key = 'reconcile_assigned_user_roles_20260622'
+  if (db.prepare('SELECT value FROM app_config WHERE key = ?').get(key)) return
+  const rows = db.prepare(`
+    SELECT u.id, u.role, e.department, e.position
+    FROM users u
+    JOIN employees e ON e.id = u.employee_id
+    WHERE COALESCE(u.employee_id, 0) > 0
+      AND COALESCE(u.assignment_status, 'assigned') = 'assigned'
+      AND u.role NOT IN ('super_admin', 'admin')
+  `).all()
+  const update = db.prepare(`
+    UPDATE users
+    SET role = ?,
+        department = COALESCE(NULLIF(department, ''), ?),
+        position = COALESCE(NULLIF(position, ''), ?),
+        role_version = COALESCE(role_version, 1) + 1
+    WHERE id = ? AND role != ?
+  `)
+  for (const row of rows) {
+    const role = roleFromDepartmentPosition(row.department, row.position, row.role)
+    update.run(role, row.department || '', row.position || '', row.id, role)
+  }
+  db.prepare('INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(key, '1', String(Date.now()))
+}
+
+function roleFromDepartmentPosition(department, position, currentRole = 'employee') {
+  if (['super_admin', 'admin'].includes(currentRole)) return currentRole
+  const dept = String(department || '').trim()
+  const pos = String(position || '').trim()
+  if (dept === '财务部' || pos === '财务') return 'finance'
+  if (dept === '仓库' || dept === '仓储部' || pos === '仓管') return 'warehouse'
+  if (dept === '工程部' || ['监理', '施工员工', '工程'].includes(pos)) return 'engineering'
+  return 'employee'
 }

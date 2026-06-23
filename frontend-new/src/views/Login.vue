@@ -60,7 +60,7 @@ const orgOptions = ref(toDepartmentCascaderOptions())
 const stepItems = [
   { title: '个人信息', desc: '填写账号与联系信息' },
   { title: 'AI 助手', desc: '选择新人默认 AI 偏好' },
-  { title: '进入系统', desc: '先用普通员工入口' }
+  { title: '进入系统', desc: '先用基础工作台' }
 ]
 const cascaderProps = {
   value: 'value',
@@ -575,14 +575,14 @@ function backToLogin() {
               <el-icon><Check /></el-icon>
             </div>
             <p class="submitted-kicker">注册信息已提交</p>
-            <h2>{{ pendingName }}，普通员工入口已开通</h2>
-            <p class="submitted-desc">你的账号已经进入后台待建档列表。现在可以先进入普通员工界面；管理员建档并分配岗位后，系统会提示你重新登录刷新权限。</p>
+            <h2>{{ pendingName }}，基础工作台已开通</h2>
+            <p class="submitted-desc">你的账号已经进入后台待建档列表。现在可以先进入基础工作台；管理员建档并分配岗位后，系统会提示你重新登录刷新权限。</p>
             <div class="pending-steps">
               <span class="done">资料提交</span>
-              <span class="done">普通员工入口</span>
+              <span class="done">基础工作台</span>
               <span class="active">等待岗位分配</span>
             </div>
-            <el-button type="primary" size="large" class="primary-action" @click="enterEmployeeWorkspace">进入普通员工界面</el-button>
+            <el-button type="primary" size="large" class="primary-action" @click="enterEmployeeWorkspace">进入基础工作台</el-button>
             <el-button size="large" class="secondary-action" @click="backToLogin">返回登录</el-button>
           </div>
         </Transition>
@@ -600,6 +600,7 @@ function backToLogin() {
 <style scoped>
 .login-shell {
   position: relative;
+  min-height: 100vh;
   min-height: 100dvh;
   overflow-x: hidden;
   overflow-y: auto;
@@ -618,6 +619,7 @@ function backToLogin() {
   position: relative;
   z-index: 2;
   width: min(100%, 1460px);
+  height: min(760px, calc(100vh - 96px));
   height: min(760px, calc(100dvh - 96px));
   min-height: 560px;
 }

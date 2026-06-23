@@ -127,18 +127,7 @@ async function fetchDashboard() {
       user.value = json.data.user
       groups.value = json.data.groups
       hasChat.value = user.value.assignment_status !== 'pending'
-
-      // 尝试获取员工ID
-      try {
-        const empRes = await fetch('/api/employees', {
-          headers: { Authorization: `Bearer ${token()}` }
-        })
-        const empJson = await empRes.json()
-        if (empJson.success) {
-          const me = empJson.data.find(e => e.name === user.value.real_name || e.name === user.value.username)
-          if (me) employeeCode.value = me.employee_code
-        }
-      } catch {}
+      employeeCode.value = json.data.user?.employee_code || ''
     }
   } catch {}
 }

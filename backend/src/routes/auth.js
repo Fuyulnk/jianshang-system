@@ -178,7 +178,7 @@ export default function authRoutes(server, db) {
       success: true,
       token,
       pending_assignment: true,
-      message: '账号已开通普通员工入口，等待管理员建档和岗位分配',
+      message: '账号已开通基础工作台，等待管理员建档和岗位分配',
       user: {
         id: result.lastInsertRowid,
         username,
