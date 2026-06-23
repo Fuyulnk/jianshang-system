@@ -13,62 +13,38 @@
           router
           :collapse="collapsed"
         >
-          <el-menu-item :index="isAdmin ? '/main/dashboard' : '/main/employee-dashboard'">
-            <el-icon><HomeFilled /></el-icon>
-            <span>{{ isAdmin ? '控制台' : '工作台' }}</span>
-          </el-menu-item>
-
-          <el-menu-item v-if="!isPendingAssignment" index="/main/chat">
-            <el-icon><ChatDotSquare /></el-icon>
-            <span>聊天</span>
-          </el-menu-item>
-
-          <el-menu-item index="/main/projects" v-if="hasPerm('projects')">
-            <el-icon><List /></el-icon>
-            <span>项目工单</span>
-          </el-menu-item>
-
-          <el-menu-item index="/main/files" v-if="hasFileCenterAccess">
-            <el-icon><Document /></el-icon>
-            <span>文件中心</span>
-          </el-menu-item>
-
-          <el-menu-item index="/main/accounts" v-if="hasPerm('accounts')">
-            <el-icon><Wallet /></el-icon>
-            <span>账户管理</span>
-          </el-menu-item>
-          <el-menu-item index="/main/transactions" v-if="hasPerm('transactions')">
-            <el-icon><List /></el-icon>
-            <span>交易流水</span>
-          </el-menu-item>
-          <el-menu-item index="/main/finance/overview" v-if="hasFinanceAccess">
-            <el-icon><TrendCharts /></el-icon>
-            <span>财务总览</span>
-          </el-menu-item>
-          <el-menu-item index="/main/finance/ledger" v-if="hasFinanceAccess">
-            <el-icon><Document /></el-icon>
-            <span>入账登记表</span>
-          </el-menu-item>
-          <el-menu-item index="/main/products" v-if="hasPerm('products')">
-            <el-icon><Goods /></el-icon>
-            <span>产品库存</span>
-          </el-menu-item>
-          <el-menu-item index="/main/employees" v-if="hasPerm('employees')">
-            <el-icon><User /></el-icon>
-            <span>员工管理</span>
+          <el-menu-item
+            v-for="item in orderedBusinessMenuItems"
+            :key="item.id"
+            :index="item.index"
+            :draggable="!collapsed"
+            :class="{ 'menu-dragging': draggingMenu.id === item.id }"
+            @dragstart="startMenuDrag(item.id, 'business')"
+            @dragover.prevent
+            @drop.prevent="dropMenuItem(item.id, 'business')"
+            @dragend="endMenuDrag"
+          >
+            <el-icon><component :is="item.icon" /></el-icon>
+            <span>{{ item.label }}</span>
           </el-menu-item>
 
           <template v-if="isAdmin">
             <el-divider class="menu-divider" />
             <div v-show="!collapsed" class="menu-group-label">系统管理</div>
-            <el-menu-item index="/main/roles">
-              <el-icon><Operation /></el-icon>
-              <span>角色权限</span>
-            </el-menu-item>
           </template>
-          <el-menu-item index="/main/system/settings">
-            <el-icon><Tools /></el-icon>
-            <span>系统设置</span>
+          <el-menu-item
+            v-for="item in orderedSystemMenuItems"
+            :key="item.id"
+            :index="item.index"
+            :draggable="!collapsed"
+            :class="{ 'menu-dragging': draggingMenu.id === item.id }"
+            @dragstart="startMenuDrag(item.id, 'system')"
+            @dragover.prevent
+            @drop.prevent="dropMenuItem(item.id, 'system')"
+            @dragend="endMenuDrag"
+          >
+            <el-icon><component :is="item.icon" /></el-icon>
+            <span>{{ item.label }}</span>
           </el-menu-item>
         </el-menu>
 
@@ -131,7 +107,7 @@
 
 <script setup>
 import { getAuthToken, clearAuthSession } from '../utils/authSession'
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, markRaw, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter, useRoute } from 'vue-router'
 import { HomeFilled, Wallet, List, Goods, User, Operation, ChatDotSquare, Fold, Expand, Tools, Sunny, Moon, TrendCharts, Document } from '@element-plus/icons-vue'
@@ -150,6 +126,8 @@ const isDark = ref(false)
 const themeTimer = ref(null)
 const assignmentTimer = ref(null)
 const sessionExpiredPrompting = ref(false)
+const draggingMenu = ref({ id: '', group: '' })
+const sidebarOrderVersion = ref(0)
 const isPendingAssignment = computed(() => userInfo.value.assignment_status === 'pending')
 const hasFinanceAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || userInfo.value.role === 'finance' || allowedModules.value.includes('finance')))
 const hasFileCenterAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || ['finance', 'warehouse', 'engineering'].includes(userInfo.value.role) || ['projects', 'transactions', 'products'].some(hasPerm)))
@@ -159,6 +137,43 @@ const themeTitle = computed(() => {
   if (mode === 'auto') return `自动主题 ${now}，18:00 后切换夜间`
   return isDark.value ? '切换亮色模式' : '切换暗色模式'
 })
+const menuIcons = {
+  home: markRaw(HomeFilled),
+  chat: markRaw(ChatDotSquare),
+  projects: markRaw(List),
+  files: markRaw(Document),
+  accounts: markRaw(Wallet),
+  transactions: markRaw(List),
+  financeOverview: markRaw(TrendCharts),
+  financeLedger: markRaw(Document),
+  products: markRaw(Goods),
+  employees: markRaw(User),
+  roles: markRaw(Operation),
+  settings: markRaw(Tools)
+}
+const businessMenuItems = computed(() => [
+  {
+    id: 'home',
+    index: isAdmin.value ? '/main/dashboard' : '/main/employee-dashboard',
+    label: isAdmin.value ? '控制台' : '工作台',
+    icon: menuIcons.home
+  },
+  !isPendingAssignment.value && { id: 'chat', index: '/main/chat', label: '聊天', icon: menuIcons.chat },
+  hasPerm('projects') && { id: 'projects', index: '/main/projects', label: '项目工单', icon: menuIcons.projects },
+  hasFileCenterAccess.value && { id: 'files', index: '/main/files', label: '文件中心', icon: menuIcons.files },
+  hasPerm('accounts') && { id: 'accounts', index: '/main/accounts', label: '账户管理', icon: menuIcons.accounts },
+  hasPerm('transactions') && { id: 'transactions', index: '/main/transactions', label: '交易流水', icon: menuIcons.transactions },
+  hasFinanceAccess.value && { id: 'finance-overview', index: '/main/finance/overview', label: '财务总览', icon: menuIcons.financeOverview },
+  hasFinanceAccess.value && { id: 'finance-ledger', index: '/main/finance/ledger', label: '入账登记表', icon: menuIcons.financeLedger },
+  hasPerm('products') && { id: 'products', index: '/main/products', label: '产品库存', icon: menuIcons.products },
+  hasPerm('employees') && { id: 'employees', index: '/main/employees', label: '员工管理', icon: menuIcons.employees }
+].filter(Boolean))
+const systemMenuItems = computed(() => [
+  isAdmin.value && { id: 'roles', index: '/main/roles', label: '角色权限', icon: menuIcons.roles },
+  { id: 'settings', index: '/main/system/settings', label: '系统设置', icon: menuIcons.settings }
+].filter(Boolean))
+const orderedBusinessMenuItems = computed(() => applyMenuOrder(businessMenuItems.value, 'business'))
+const orderedSystemMenuItems = computed(() => applyMenuOrder(systemMenuItems.value, 'system'))
 
 function initTheme() {
   const mode = localStorage.getItem('theme-mode') || 'auto'
@@ -206,6 +221,56 @@ function applyPersonalAppearance() {
 function hasPerm(module) {
   if (isPendingAssignment.value) return false
   return isAdmin.value || allowedModules.value.includes(module)
+}
+
+function getMenuOrderKey(group) {
+  const identity = userInfo.value.username || userInfo.value.role || 'guest'
+  return `jianshang-sidebar-order-v1:${identity}:${group}`
+}
+
+function readMenuOrder(group) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(getMenuOrderKey(group)) || '[]')
+    return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function applyMenuOrder(items, group) {
+  sidebarOrderVersion.value
+  const savedOrder = readMenuOrder(group)
+  const itemMap = new Map(items.map(item => [item.id, item]))
+  const ordered = savedOrder.map(id => itemMap.get(id)).filter(Boolean)
+  const newItems = items.filter(item => !savedOrder.includes(item.id))
+  return [...ordered, ...newItems]
+}
+
+function saveMenuOrder(group, ids) {
+  localStorage.setItem(getMenuOrderKey(group), JSON.stringify(ids))
+  sidebarOrderVersion.value += 1
+}
+
+function startMenuDrag(id, group) {
+  if (collapsed.value) return
+  draggingMenu.value = { id, group }
+}
+
+function dropMenuItem(targetId, group) {
+  if (collapsed.value || draggingMenu.value.group !== group) return
+  const sourceId = draggingMenu.value.id
+  if (!sourceId || sourceId === targetId) return
+  const sourceItems = group === 'system' ? orderedSystemMenuItems.value : orderedBusinessMenuItems.value
+  const ids = sourceItems.map(item => item.id)
+  const fromIndex = ids.indexOf(sourceId)
+  const toIndex = ids.indexOf(targetId)
+  if (fromIndex === -1 || toIndex === -1) return
+  ids.splice(toIndex, 0, ids.splice(fromIndex, 1)[0])
+  saveMenuOrder(group, ids)
+}
+
+function endMenuDrag() {
+  draggingMenu.value = { id: '', group: '' }
 }
 
 function token() { return getAuthToken() }
@@ -400,6 +465,15 @@ onUnmounted(() => {
 
 .sidebar :deep(.el-menu-item) {
   color: var(--sidebar-text) !important;
+}
+.sidebar :deep(.el-menu-item[draggable="true"]) {
+  cursor: grab;
+}
+.sidebar :deep(.el-menu-item[draggable="true"]:active) {
+  cursor: grabbing;
+}
+.sidebar :deep(.el-menu-item.menu-dragging) {
+  opacity: 0.55;
 }
 .sidebar :deep(.el-menu-item.is-active) {
   color: var(--sidebar-text-active) !important;

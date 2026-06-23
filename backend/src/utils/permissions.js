@@ -180,7 +180,7 @@ export function logAccessAudit(db, user, {
 
 function getPrivateResourceOwner(db, resourceType, resourceId) {
   if (resourceType === 'private_workspace') {
-    const row = db.prepare('SELECT owner_user_id FROM private_workspaces WHERE id = ? AND archived_at = ""').get(resourceId)
+    const row = db.prepare("SELECT owner_user_id FROM private_workspaces WHERE id = ? AND COALESCE(archived_at, '') = ''").get(resourceId)
     return row?.owner_user_id || 0
   }
   return 0

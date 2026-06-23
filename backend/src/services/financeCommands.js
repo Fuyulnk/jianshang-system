@@ -3,6 +3,7 @@ export function createTransaction(db, payload = {}) {
   const type = cleanText(payload.type)
   const amount = toPositiveMoney(payload.amount)
   const status = normalizeTransactionStatus(payload.status)
+  const createdAt = normalizeCreatedAt(payload.created_at)
   if (!accountId || !type || payload.amount === undefined) {
     throw commandError('账户、类型和金额不能为空', 400)
   }
@@ -20,7 +21,7 @@ export function createTransaction(db, payload = {}) {
   const tx = db.transaction(() => {
     const result = db.prepare(`
       INSERT INTO transactions (account_id, type, amount, category, description, party, proxy, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
     `).run(
       accountId,
       type,
@@ -29,7 +30,8 @@ export function createTransaction(db, payload = {}) {
       cleanNullable(payload.description),
       cleanNullable(payload.party),
       cleanNullable(payload.proxy),
-      status
+      status,
+      createdAt
     )
 
     if (status === 'approved') {
@@ -121,7 +123,17 @@ function cleanNullable(value) {
 }
 
 function normalizeTransactionStatus(value) {
-  return cleanText(value) === 'pending' ? 'pending' : 'approved'
+  const status = cleanText(value)
+  return ['pending', 'approved', 'cancelled'].includes(status) ? status : 'approved'
+}
+
+function normalizeCreatedAt(value) {
+  const text = cleanText(value)
+  if (!text) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text} 00:00:00`
+  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$/.test(text)) return `${text}:00`
+  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(text)) return text
+  return null
 }
 
 function isBalanceAppliedStatus(status) {

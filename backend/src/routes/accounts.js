@@ -1,5 +1,8 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { requireModuleAccess } from '../utils/permissions.js'
+import * as XLSX from 'xlsx'
+
+const LARGE_ACCOUNT_IMPORT_BODY_LIMIT = 12 * 1024 * 1024
 
 function requireAccountAccess(db, request, reply, permission) {
   if (authMiddleware(request, reply) === false) return false
@@ -7,6 +10,8 @@ function requireAccountAccess(db, request, reply, permission) {
 }
 
 export default function accountRoutes(server, db) {
+  ensureAccountSnapshotTables(db)
+
   // 获取账户列表
   server.get('/api/accounts', async (request, reply) => {
     if (!requireAccountAccess(db, request, reply, 'can_view')) return
@@ -60,7 +65,25 @@ export default function accountRoutes(server, db) {
 
     const periodMap = new Map(periodRows.map(row => [Number(row.account_id), row]))
     const beforeMap = new Map(beforeRows.map(row => [Number(row.account_id), row]))
+    const snapshotRows = useMonth
+      ? db.prepare('SELECT * FROM account_monthly_snapshots WHERE month = ?').all(monthInfo.value)
+      : []
+    const snapshotMap = new Map(snapshotRows.map(row => [Number(row.account_id), row]))
     const summaries = accounts.map(account => {
+      const snapshot = snapshotMap.get(Number(account.id))
+      if (snapshot) {
+        const income = roundMoney(snapshot.income_total)
+        const expense = roundMoney(snapshot.expense_total)
+        return {
+          account_id: account.id,
+          income_total: income,
+          expense_total: expense,
+          net_change: roundMoney(income - expense),
+          opening_balance: roundMoney(snapshot.opening_balance),
+          period_balance: roundMoney(snapshot.closing_balance),
+          source: 'imported_snapshot'
+        }
+      }
       const period = periodMap.get(Number(account.id)) || {}
       const income = roundMoney(period.income_total)
       const expense = roundMoney(period.expense_total)
@@ -74,7 +97,8 @@ export default function accountRoutes(server, db) {
         expense_total: expense,
         net_change: net,
         opening_balance: openingBalance,
-        period_balance: useMonth ? roundMoney(openingBalance + net) : roundMoney(account.current_balance)
+        period_balance: useMonth ? roundMoney(openingBalance + net) : roundMoney(account.current_balance),
+        source: useMonth ? 'calculated' : 'account_current'
       }
     })
 
@@ -119,6 +143,81 @@ export default function accountRoutes(server, db) {
     ).run(cleanText(name), type || 'personal', initialBalance, currentBalance)
 
     return { success: true, id: result.lastInsertRowid }
+  })
+
+  server.post('/api/accounts/monthly-summary/import', { bodyLimit: LARGE_ACCOUNT_IMPORT_BODY_LIMIT }, async (request, reply) => {
+    if (!requireAccountAccess(db, request, reply, 'can_edit')) return
+
+    const { file_name = '', file_data = '', month = '' } = request.body || {}
+    const monthInfo = normalizeMonth(month)
+    if (!monthInfo) return { success: false, message: '请选择要导入的月份' }
+    if (!file_name || !file_data) return { success: false, message: '请选择资金总览表 Excel 文件' }
+
+    try {
+      const rows = parseAccountMonthlySummaryRows(file_data)
+      if (!rows.length) return { success: false, message: '没有识别到账户余额明细，请确认表头包含账户、期初余额、总收入、总支出、当前余额' }
+      const targetMonth = detectSummaryMonth(rows) || monthInfo.value
+      const targetMonthInfo = normalizeMonth(targetMonth)
+      let createdAccounts = 0
+      let updatedSnapshots = 0
+      const warnings = []
+      if (targetMonthInfo.value !== monthInfo.value) {
+        warnings.push(`已按表格最后更新时间识别为 ${targetMonthInfo.value}，没有导入到页面当前选择的 ${monthInfo.value}`)
+      }
+      const tx = db.transaction(() => {
+        const findAccount = db.prepare('SELECT * FROM accounts WHERE name = ?')
+        const createAccount = db.prepare('INSERT INTO accounts (name, type, initial_balance, current_balance) VALUES (?, ?, ?, ?)')
+        const updateAccountType = db.prepare("UPDATE accounts SET type = ?, updated_at = datetime('now', 'localtime') WHERE id = ? AND COALESCE(type, '') != ?")
+        const upsertSnapshot = db.prepare(`
+          INSERT INTO account_monthly_snapshots (
+            account_id, month, opening_balance, income_total, expense_total, closing_balance,
+            source_file_name, imported_by, updated_at, note
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(account_id, month) DO UPDATE SET
+            opening_balance = excluded.opening_balance,
+            income_total = excluded.income_total,
+            expense_total = excluded.expense_total,
+            closing_balance = excluded.closing_balance,
+            source_file_name = excluded.source_file_name,
+            imported_by = excluded.imported_by,
+            imported_at = datetime('now', 'localtime'),
+            updated_at = excluded.updated_at,
+            note = excluded.note
+        `)
+
+        for (const row of rows) {
+          let account = findAccount.get(row.name)
+          if (!account) {
+            const result = createAccount.run(row.name, row.type, row.opening_balance, row.closing_balance)
+            account = { id: result.lastInsertRowid, name: row.name, type: row.type }
+            createdAccounts += 1
+          } else {
+            updateAccountType.run(row.type, account.id, row.type)
+          }
+          upsertSnapshot.run(
+            account.id,
+            targetMonthInfo.value,
+            row.opening_balance,
+            row.income_total,
+            row.expense_total,
+            row.closing_balance,
+            safeText(file_name, 240),
+            request.user.userId,
+            row.updated_at,
+            row.note
+          )
+          updatedSnapshots += 1
+        }
+      })
+      tx()
+      return {
+        success: true,
+        message: `已导入 ${targetMonthInfo.value} 账户余额 ${updatedSnapshots} 条${createdAccounts ? `，新增账户 ${createdAccounts} 个` : ''}`,
+        data: { imported_count: updatedSnapshots, created_accounts: createdAccounts, month: targetMonthInfo.value, warnings }
+      }
+    } catch (err) {
+      reply.code(400).send({ success: false, message: err.message || '导入账户余额失败' })
+    }
   })
 
   // 更新账户
@@ -181,16 +280,119 @@ function normalizeMonth(value) {
   }
 }
 
+function ensureAccountSnapshotTables(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS account_monthly_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      month TEXT NOT NULL,
+      opening_balance REAL DEFAULT 0,
+      income_total REAL DEFAULT 0,
+      expense_total REAL DEFAULT 0,
+      closing_balance REAL DEFAULT 0,
+      source_file_name TEXT DEFAULT '',
+      imported_by INTEGER DEFAULT 0,
+      imported_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      UNIQUE(account_id, month)
+    )
+  `)
+}
+
+function parseAccountMonthlySummaryRows(fileData) {
+  const workbook = XLSX.read(decodeData(fileData), { type: 'buffer', cellDates: true, raw: false })
+  for (const sheetName of workbook.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false })
+    const headerIndex = findAccountSummaryHeaderRow(rows)
+    if (headerIndex < 0) continue
+    const headers = rows[headerIndex].map(normalizeHeader)
+    return rows.slice(headerIndex + 1).map(cells => {
+      const row = {}
+      headers.forEach((header, index) => { if (header) row[header] = cells[index] })
+      const name = cleanText(pickField(row, ['账户', '账户名称']))
+      if (!name) return null
+      return {
+        name,
+        type: normalizeAccountType(pickField(row, ['账户类型', '类型'])),
+        opening_balance: toMoney(pickField(row, ['期初余额', '月初余额', '初始余额'])),
+        income_total: toMoney(pickField(row, ['总收入', '收入', '本月收入'])),
+        expense_total: toMoney(pickField(row, ['总支出', '支出', '本月支出'])),
+        closing_balance: toMoney(pickField(row, ['当前余额', '月末余额', '期末余额'])),
+        updated_at: normalizeDateText(pickField(row, ['最后更新时间', '更新时间'])),
+        note: cleanText(pickField(row, ['备注']))
+      }
+    }).filter(Boolean)
+  }
+  return []
+}
+
+function findAccountSummaryHeaderRow(rows) {
+  const required = ['账户', '期初余额', '当前余额']
+  return rows.findIndex(row => {
+    const headers = row.map(normalizeHeader)
+    return required.filter(item => headers.includes(normalizeHeader(item))).length >= 2
+      && headers.some(item => ['总收入', '收入'].includes(item))
+      && headers.some(item => ['总支出', '支出'].includes(item))
+  })
+}
+
+function normalizeHeader(value) {
+  return cleanText(value).replace(/\s+/g, '').replace(/[：:]/g, '')
+}
+
+function pickField(row, names) {
+  for (const name of names) {
+    const value = row[normalizeHeader(name)]
+    if (cleanText(value)) return value
+  }
+  return ''
+}
+
+function normalizeAccountType(value) {
+  const text = cleanText(value)
+  return /公账|公司|企业|company/i.test(text) ? 'company' : 'personal'
+}
+
+function normalizeDateText(value) {
+  const text = cleanText(value).replace(/[./年]/g, '-').replace(/[月]/g, '-').replace(/[日]/g, '')
+  const match = text.match(/\d{4}-\d{1,2}-\d{1,2}/)
+  if (!match) return text
+  const [year, month, day] = match[0].split('-')
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+}
+
+function detectSummaryMonth(rows) {
+  const counts = new Map()
+  for (const row of rows) {
+    const match = cleanText(row.updated_at).match(/^(\d{4}-\d{2})-\d{2}/)
+    if (!match) continue
+    counts.set(match[1], (counts.get(match[1]) || 0) + 1)
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1])
+  return ranked[0]?.[1] >= Math.ceil(rows.length / 2) ? ranked[0][0] : ''
+}
+
+function decodeData(value = '') {
+  const text = String(value || '')
+  const base64 = text.includes(',') ? text.split(',').pop() : text
+  return Buffer.from(base64, 'base64')
+}
+
 function roundMoney(value) {
   const n = Number(value || 0)
   return Math.round(n * 100) / 100
 }
 
 function toMoney(value) {
-  const n = Number(value)
+  const n = Number(String(value ?? '').replace(/[,，￥¥\s]/g, ''))
   return Number.isFinite(n) ? roundMoney(n) : 0
 }
 
 function cleanText(value) {
   return String(value ?? '').trim()
+}
+
+function safeText(value, limit = 200) {
+  return cleanText(value).slice(0, limit)
 }

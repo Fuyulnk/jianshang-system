@@ -6,7 +6,11 @@
           <h2>账户管理</h2>
           <p class="page-desc">管理所有个人和公司账户，按月份查看收入、支出和跨月余额变化</p>
         </div>
-        <el-button type="primary" @click="showAdd = true">+ 新增账户</el-button>
+        <div class="header-actions">
+          <input ref="importInput" class="hidden-input" type="file" accept=".xls,.xlsx,.csv" @change="onImportSummaryFile" />
+          <el-button :loading="importing" @click="openImportSummary">导入账户余额</el-button>
+          <el-button type="primary" @click="showAdd = true">+ 新增账户</el-button>
+        </div>
       </div>
 
       <div class="summary-toolbar">
@@ -28,7 +32,7 @@
           回到本月
         </el-button>
         <span class="summary-hint">
-          {{ summaryMode === 'all' ? '显示全部流水累计' : `只汇总 ${selectedMonth} 的交易流水` }}
+          {{ summaryMode === 'all' ? '显示全部流水累计' : `显示 ${formatMonthLabel(selectedMonth)} 的月度账户快照和流水` }}
         </span>
       </div>
 
@@ -46,10 +50,10 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="initial_balance" label="初始余额" width="120" align="right">
-          <template #default="{ row }">{{ formatMoney(row.initial_balance) }}</template>
+        <el-table-column :label="summaryMode === 'all' ? '初始余额' : '月初余额'" width="120" align="right">
+          <template #default="{ row }">{{ formatMoney(summaryMode === 'all' ? row.initial_balance : row.opening_balance) }}</template>
         </el-table-column>
-        <el-table-column prop="current_balance" label="当前余额" width="120" align="right">
+        <el-table-column v-if="summaryMode === 'all'" prop="current_balance" label="当前余额" width="120" align="right">
           <template #default="{ row }">{{ formatMoney(row.current_balance) }}</template>
         </el-table-column>
         <el-table-column :label="summaryMode === 'all' ? '累计收入' : '本月收入'" width="120" align="right">
@@ -67,7 +71,7 @@
             <span :class="row.net_change >= 0 ? 'income' : 'expense'">{{ formatMoney(row.net_change) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="summaryMode === 'all' ? '当前余额' : '月末估算余额'" width="140" align="right">
+        <el-table-column :label="summaryMode === 'all' ? '当前余额' : '月末余额'" width="140" align="right">
           <template #default="{ row }">{{ formatMoney(row.period_balance) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="150">
@@ -148,6 +152,8 @@ const summaryLoading = ref(false)
 const showAdd = ref(false)
 const showEdit = ref(false)
 const saving = ref(false)
+const importing = ref(false)
+const importInput = ref(null)
 const addForm = ref({ name: '', type: 'personal', initial_balance: 0, current_balance: 0 })
 const editForm = ref({ id: null, name: '', type: 'personal', initial_balance: 0, current_balance: 0 })
 const currentMonth = getCurrentMonth()
@@ -259,6 +265,76 @@ async function handleEdit() {
   }
 }
 
+function openImportSummary() {
+  summaryMode.value = 'month'
+  importInput.value?.click()
+}
+
+async function onImportSummaryFile(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  if (file.size > 12 * 1024 * 1024) {
+    ElMessage.warning('导入文件不能超过 12MB')
+    return
+  }
+  importing.value = true
+  try {
+    const fileData = await readAsDataUrl(file)
+    const res = await fetch('/api/accounts/monthly-summary/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({
+        file_name: file.name,
+        file_data: fileData,
+        month: selectedMonth.value
+      })
+    })
+    const json = await parseImportResponse(res)
+    if (!res.ok || !json.success) {
+      ElMessage.error(json.message || '导入账户余额失败')
+      return
+    }
+    if (json.data?.month) selectedMonth.value = json.data.month
+    ElMessage.success(json.message || '导入完成')
+    if (json.data?.warnings?.length) {
+      await ElMessageBox.alert(json.data.warnings.join('\n'), '导入提示', { confirmButtonText: '知道了' })
+    }
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(error.message || '导入账户余额失败')
+  } finally {
+    importing.value = false
+  }
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = event => resolve(event.target.result)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+async function parseImportResponse(res) {
+  const text = await res.text()
+  if (res.status === 404) {
+    return { success: false, message: '账户余额导入接口不存在（404）：后端没有更新或服务没有重启。' }
+  }
+  if (!text) return { success: false, message: `账户余额导入接口没有返回内容（${res.status}）` }
+  try {
+    return JSON.parse(text)
+  } catch {
+    return {
+      success: false,
+      message: res.ok
+        ? '账户余额导入接口返回格式异常，请刷新后重试'
+        : `账户余额导入接口异常（${res.status}）：${text.replace(/\s+/g, ' ').slice(0, 120)}`
+    }
+  }
+}
+
 async function handleDelete(row) {
   try {
     await ElMessageBox.confirm(`确定删除「${row.name}」？`, '提示')
@@ -284,6 +360,12 @@ function backToCurrentMonth() {
 function formatMoney(value) {
   const n = Number(value || 0)
   return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function formatMonthLabel(value) {
+  const text = String(value || '')
+  const match = text.match(/^(\d{4})-(\d{2})$/)
+  return match ? `${match[1]}年${Number(match[2])}月` : text
 }
 
 function getCurrentMonth() {
@@ -312,6 +394,17 @@ fetchList()
   align-items: center;
   gap: 10px;
   margin: 14px 0 16px;
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.hidden-input {
+  display: none;
 }
 
 .summary-hint {

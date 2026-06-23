@@ -853,6 +853,22 @@ function ensureCoreTables(db) {
       updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
     );
 
+    CREATE TABLE IF NOT EXISTS account_monthly_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      month TEXT NOT NULL,
+      opening_balance REAL DEFAULT 0,
+      income_total REAL DEFAULT 0,
+      expense_total REAL DEFAULT 0,
+      closing_balance REAL DEFAULT 0,
+      source_file_name TEXT DEFAULT '',
+      imported_by INTEGER DEFAULT 0,
+      imported_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      UNIQUE(account_id, month)
+    );
+
     CREATE TABLE IF NOT EXISTS transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       account_id INTEGER NOT NULL,

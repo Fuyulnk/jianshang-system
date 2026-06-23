@@ -336,7 +336,7 @@ export default function financeRoutes(server, db) {
       ? db.prepare('SELECT * FROM finance_ledger_cells WHERE sheet_id = ? ORDER BY row_index ASC, col_index ASC').all(activeSheet.id)
       : []
     const comments = activeSheet
-      ? db.prepare('SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, "") != "" ORDER BY row_index ASC, col_index ASC').all(activeSheet.id)
+      ? db.prepare("SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, '') != '' ORDER BY row_index ASC, col_index ASC").all(activeSheet.id)
       : []
     return {
       success: true,
@@ -559,7 +559,7 @@ function buildLedgerWorkbookDetail(db, workbookId) {
   const sheets = db.prepare('SELECT * FROM finance_ledger_sheets WHERE workbook_id = ? ORDER BY sheet_index ASC, id ASC').all(workbookId)
   const activeSheet = sheets[0]
   const cells = activeSheet ? db.prepare('SELECT * FROM finance_ledger_cells WHERE sheet_id = ? ORDER BY row_index ASC, col_index ASC').all(activeSheet.id) : []
-  const comments = activeSheet ? db.prepare('SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, "") != "" ORDER BY row_index ASC, col_index ASC').all(activeSheet.id) : []
+  const comments = activeSheet ? db.prepare("SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, '') != '' ORDER BY row_index ASC, col_index ASC").all(activeSheet.id) : []
   return {
     workbook,
     sheets,

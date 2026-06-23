@@ -177,6 +177,68 @@
 
 ## 对接记录
 
+### 2026-06-23 Codex：账户管理 5 月资金总览表导入
+
+- 背景：用户提供 `资金总览表.xlsx`，说明这是 5 月账户管理要导入的数据，不属于交易流水明细。
+- 文件结构：
+  - 工作表：`资金总览表`。
+  - 表头：`账户、账户类型、期初余额、总收入、总支出、当前余额、最后更新时间、备注、父记录`。
+  - 本地离线检查识别到账户 12 个，当前余额合计约 `76786.44`；附件不涉及本表。
+- 本轮实现：
+  - `backend/src/index.js`：新增 `account_monthly_snapshots` 月度账户快照表，用于保存某个月的账户期初、收入、支出、月末余额。
+  - `backend/src/routes/accounts.js`：新增 `POST /api/accounts/monthly-summary/import`，导入资金总览表；按当前选择月份写入快照；账户不存在时自动创建，账户已存在时只校正账户类型，不覆盖主账户当前余额。
+  - `backend/src/routes/accounts.js`：`GET /api/accounts/summary` 在月份视图下优先读取导入快照；没有快照的账户仍按交易流水计算。
+  - `frontend-new/src/views/accounts/AccountList.vue`：账户管理页新增“导入账户余额”按钮，使用当前选择月份上传 `.xls/.xlsx/.csv`。
+- 验证：
+  - `node --check backend/src/routes/accounts.js && node --check backend/src/index.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 本地重启 `3001` 后，`POST /api/accounts/monthly-summary/import` 从路由层返回 401 未登录，说明接口已加载；浏览器登录态下可继续实测。
+- 注意：
+  - 本轮未提交、未上传服务器。
+  - 账户月度快照不会自动改交易流水，也不会把历史月份导入误覆盖今天的账户余额；如果以后要“以某个月快照重置主账户余额”，需要单独做一个管理员确认动作。
+- 2026-06-23 追加修正：
+  - 用户反馈“初期余额没映射过去”。实际原因是前端月份视图仍显示账户主表 `initial_balance`，没有显示月度快照里的 `opening_balance`。
+  - 已修正账户管理表格：月份视图第一列显示“月初余额”并读取 `opening_balance`；总览视图仍显示账户主表“初始余额”。月份视图最后一列改为“月末余额”。
+- 2026-06-23 二次修正：
+  - 用户反馈账户管理切换月份仍像显示 6 月余额，并怀疑导入是叠加/覆盖混乱。排查确认：资金总览表是 5 月数据，但页面默认选中当前月 `2026-06`，所以本地快照被写到了 `2026-06`；而表格中每行 `最后更新时间` 是 5 月。
+  - `backend/src/routes/accounts.js`：账户余额导入现在会根据资金总览表行内 `最后更新时间` 自动识别主要月份；若识别到的月份与页面当前选择不一致，则按表格月份入库，并返回中文提示。写入仍是 `account_id + month` 快照覆盖，不是金额叠加。
+  - `frontend-new/src/views/accounts/AccountList.vue`：导入完成后自动切换到实际导入月份；月份视图不再显示账户主表“当前余额”，只显示月初余额、本月收入、本月支出、本月净变化、月末余额，避免历史月份混入今天余额。
+  - `frontend-new/src/main.js`：Element Plus 全局 locale 切到中文，账户月份选择和交易流水日期选择不再显示英文月份。
+  - 本地数据修正：`/Users/fuyulnk./fuyulnk/jianshang.db` 中 `source_file_name='资金总览表.xlsx'` 且更新时间在 2026 年 5 月的 12 条快照，已从 `2026-06` 移回 `2026-05`。
+
+### 2026-06-23 Codex：财务入账表导入报错修复 + 侧栏拖拽 + 交易流水飞书导入
+
+- 背景：用户反馈财务导入入账登记表报 `no such column: "" - should this be a string literal in single-quotes`，并要求左侧栏可拖拽调整位置；完成当前任务后继续给交易流水加“按飞书多维表格格式”的一键导入。
+- 本轮修复：
+  - `backend/src/routes/finance.js`：把 `finance_ledger_comments` 查询里的 `COALESCE(comment_text, "") != ""` 改为单引号空字符串，避免 SQLite 把双引号空字符串当列名解析。
+  - `backend/src/utils/permissions.js`：同步修复 `archived_at = ""` 的同类 SQL 隐患，改为 `COALESCE(archived_at, '') = ''`。
+  - `frontend-new/src/layouts/MainLayout.vue`：左侧菜单改成可排序列表，支持拖拽调整业务菜单和系统菜单顺序；顺序保存在当前浏览器 `localStorage`，按当前账号隔离，不改变权限，也不影响其他员工电脑。
+  - `backend/src/services/financeCommands.js`：`createTransaction` 支持导入历史 `created_at` 和 `cancelled` 状态；手工新增未传日期时仍使用 SQLite `datetime('now', 'localtime')`。
+  - `backend/src/routes/transactions.js`：新增 `POST /api/transactions/import-feishu`，接收飞书多维表格导出的 `.xls/.xlsx/.csv`，识别日期、账户、金额/收入/支出、分类、对方、事由、经手人、状态等字段；账户匹配失败、金额/日期异常会返回中文提示；重复流水自动跳过。
+  - `frontend-new/src/views/transactions/TransactionList.vue`：交易流水页新增“导入飞书流水”按钮，选择导出文件后导入并刷新流水、账户和分类。
+  - 后续小改：按钮文案改为“导入流水”；飞书状态里的“待支付 / 待收款 / 未确认”按系统 `pending` 处理；导入解析兼容多选/单选值以数组或对象形式出现。
+  - 用户提供 `简尚财务管理系统 5月-2.xlsx` 后已确认导出文件包含 `收支明细表` 和 `资金总览表` 两个工作表；导入器已改为自动寻找含日期、账户、金额等字段的收支明细表，不再固定读取第一张 sheet。
+  - 用户反馈导入失败时只有“导入失败”没有详情；`frontend-new/src/views/transactions/TransactionList.vue` 已改为读取非 2xx / 非 JSON / 后端 `success=false` 的具体中文信息，并在有行级 warning 时弹窗展示前 12 条；后端无可导入行时也会把前三条 warning 拼入 `message`。
+  - 用户后续反馈只返回 `404`；本地确认 `3001` 运行的是未重启旧后端进程，重启 `/Users/fuyulnk./Projects/jianshang-system/backend/src/index.js` 后，`POST /api/transactions/import-feishu` 从 404 变为 401 `未登录或 token 已过期`，说明路由已加载，浏览器登录态下可继续测试真实导入。
+  - 用户测试流水导入时反馈账户未匹配：`微望建设银行·王威青`、`明鸿·平安公账`、`明鸿·赖济发平安` 等。原因是飞书流水使用简称/词序不同，而系统账户使用标准名。
+  - `backend/src/routes/transactions.js` 已新增导入账户安全匹配：完全一致优先；其次去除 `银行/公账/私账/账户` 等噪音词；再处理词序不同但字符集合一致的账户名；最后才做长度受限的包含匹配。若命中多个可能账户，仍跳过并提示人工确认，避免导错账户。
+  - 用户反馈交易流水默认像只显示 5 月、按账户又能看到 4 月。排查确认：数据库已有 4 月 263 条、5 月 271 条；前端原来 `pageSize=200`，默认只拉最新一页，所以造成“只显示某个月”的错觉。
+  - `frontend-new/src/views/transactions/TransactionList.vue`：交易流水默认筛选文案改为“全部月份、全部账户”；接口拉取上限提升到 1000 条；账户分组明细默认折叠，点击账户才渲染具体表格，避免默认打开时一次性渲染大量流水导致浏览器卡顿。
+  - 数据库落点说明：导入流水会写入 `transactions` 表，并绑定 `account_id、type、amount、category、description、party、proxy、status、created_at` 等字段；已进入财务域数据框架，不是临时文件数据。当前 `category` 仍是文本字段，后续如要更强规范，可独立做 `transaction_categories` 标准分类表。
+- 飞书说明：
+  - 本轮尝试只读用户提供的 Base 字段结构时，`lark-cli` 返回缺少 `base:field:read` 授权；因此本轮先落地“飞书导出文件导入”，后续如要直连飞书 API，需要先做用户授权。
+  - `lark-cli` 提示当前版本 `1.0.44`，最新 `1.0.56`，后续可单独执行 `lark-cli update` 更新 CLI 和 skills。
+  - 用户授权后已读取 2026 年 5 月流水 Base 字段：`日期、账户、收支类型、金额、分类、事由、对方、状态、录入人` 与当前导入器匹配；样例记录显示金额支出为负数，导入器会按绝对金额入库并用收支类型判定收入/支出。
+- 验证：
+  - `node --check backend/src/routes/transactions.js && node --check backend/src/services/financeCommands.js && node --check backend/src/routes/finance.js && node --check backend/src/utils/permissions.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 使用内存 SQLite 冒烟验证：批量事务里调用 `createTransaction` 可正常写入，收入流水会同步更新账户余额。
+  - 追加验证：`node --check backend/src/routes/transactions.js` 通过；本地样例匹配确认 `微望建设银行·王威青 -> 微望·王威青建设银行`、`明鸿·平安公账 -> 明鸿·平安银行公账`、`明鸿·赖济发平安 -> 明鸿·赖济发平安银行`。
+  - 追加验证：`npm --prefix frontend-new run build` 通过；本地 SQLite 查询确认 `transactions` 当前共 534 条，覆盖 2026-04 和 2026-05。
+- 注意：
+  - 本轮未提交、未上传服务器。
+  - 本轮未做真实飞书导出文件导入实测；建议用户拿一份从该 Base 导出的 Excel/CSV 在本地试导一次，重点看账户名是否与系统账户完全匹配。
+
 ### 2026-06-23 Codex：服务器财务角色未同步 + Windows 最小化被拉回排查
 
 - 背景：用户反馈线上有两个财务账号，其中一个仍是普通员工权限；Windows 浏览器最小化后仍会被系统页面强制拉回。

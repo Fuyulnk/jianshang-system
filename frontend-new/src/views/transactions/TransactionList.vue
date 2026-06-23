@@ -7,6 +7,8 @@
           <p class="page-desc">按账户分组的交易记录</p>
         </div>
         <div class="header-actions">
+          <input ref="importInput" class="hidden-input" type="file" accept=".xls,.xlsx,.csv" @change="onImportTransactionFile" />
+          <el-button :loading="importing" @click="openImportTransactions">导入流水</el-button>
           <el-button :icon="Download" :loading="exporting" @click="exportTransactions">导出当前筛选</el-button>
           <el-button type="primary" @click="openAddDialog">+ 新增交易</el-button>
         </div>
@@ -59,6 +61,11 @@
           <el-button @click="resetFilters">重置</el-button>
         </el-form-item>
       </el-form>
+      <div class="transaction-summary">
+        <span>当前筛选：{{ filterSummaryText }}</span>
+        <span>已加载 {{ transactions.length }} 条{{ totalCount > transactions.length ? ` / 共 ${totalCount} 条，建议缩小筛选后查看` : '' }}</span>
+        <span>默认折叠明细，点击账户查看流水</span>
+      </div>
 
       <!-- 账户分组列表 -->
       <div v-loading="loading" class="account-groups">
@@ -86,7 +93,7 @@
 
           <!-- 交易列表 -->
           <el-collapse-transition>
-            <div v-show="isExpanded(group.id)" class="group-body">
+            <div v-if="isExpanded(group.id)" class="group-body">
               <el-table v-if="group.txs.length" :data="group.txs" stripe size="small" style="width: 100%">
                 <el-table-column prop="created_at" label="日期" width="155" />
                 <el-table-column label="类型" width="70">
@@ -226,14 +233,17 @@ const route = useRoute()
 const transactions = ref([])
 const allAccounts = ref([])
 const categories = ref([])
+const totalCount = ref(0)
 const loading = ref(false)
 const showAdd = ref(false)
 const saving = ref(false)
 const exporting = ref(false)
+const importing = ref(false)
 const parsing = ref(false)
 const showAttachments = ref(false)
 const selectedTransaction = ref(null)
 const receiptInput = ref(null)
+const importInput = ref(null)
 const pendingReceipts = ref([])
 const smartText = ref('')
 const parseWarnings = ref([])
@@ -241,6 +251,7 @@ const addForm = ref({ account_id: null, type: 'expense', amount: 0, category: ''
 
 const filters = ref({ type: '', status: '', account_id: null, account_type: '', category: '' })
 const dateRange = ref(null)
+const LIST_PAGE_SIZE = 1000
 
 function token() { return getAuthToken() }
 
@@ -256,7 +267,7 @@ function toggleGroup(id) {
 }
 
 function isExpanded(id) {
-  return expandedMap[id] !== false // 默认展开
+  return expandedMap[id] === true
 }
 
 // 按账户分组
@@ -291,10 +302,24 @@ const attachmentDialogTitle = computed(() => {
   return `${type} ¥${Number(tx.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })} 的附件`
 })
 
+const filterSummaryText = computed(() => {
+  const labels = []
+  if (filters.value.type) labels.push(filters.value.type === 'income' ? '收入' : '支出')
+  if (filters.value.status) labels.push(transactionStatusLabel(filters.value.status))
+  if (filters.value.account_id) {
+    const account = allAccounts.value.find(item => item.id === filters.value.account_id)
+    if (account) labels.push(account.name)
+  }
+  if (filters.value.account_type) labels.push(filters.value.account_type === 'company' ? '公账' : '私账')
+  if (filters.value.category) labels.push(filters.value.category)
+  if (dateRange.value?.length === 2) labels.push(`${dateRange.value[0]} 至 ${dateRange.value[1]}`)
+  return labels.length ? labels.join(' / ') : '全部月份、全部账户'
+})
+
 function buildQuery() {
   const params = new URLSearchParams()
-  // 一次性拉 200 条，前端分组
-  params.set('pageSize', '200')
+  // 一次拉够当前阶段的全部流水；明细默认折叠，避免一次性渲染大量表格。
+  params.set('pageSize', String(LIST_PAGE_SIZE))
   if (filters.value.type) params.set('type', filters.value.type)
   if (filters.value.status) params.set('status', filters.value.status)
   if (filters.value.account_id) params.set('account_id', filters.value.account_id)
@@ -315,7 +340,10 @@ async function fetchList() {
       headers: { Authorization: `Bearer ${token()}` }
     })
     const json = await res.json()
-    if (json.success) transactions.value = json.data
+    if (json.success) {
+      transactions.value = json.data
+      totalCount.value = Number(json.total || json.data?.length || 0)
+    }
   } finally {
     loading.value = false
   }
@@ -374,6 +402,87 @@ async function exportTransactions() {
   } finally {
     exporting.value = false
   }
+}
+
+function openImportTransactions() {
+  importInput.value?.click()
+}
+
+async function onImportTransactionFile(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  if (file.size > 20 * 1024 * 1024) {
+    ElMessage.warning('导入文件不能超过 20MB')
+    return
+  }
+  importing.value = true
+  try {
+    const fileData = await readAsDataUrl(file)
+    const res = await fetch('/api/transactions/import-feishu', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({
+        file_name: file.name,
+        file_data: fileData
+      })
+    })
+    const json = await parseImportResponse(res)
+    if (!res.ok || !json.success) {
+      await showImportFailure(json, res.status)
+      return
+    }
+    const warnings = json.data?.warning_count ? `，${json.data.warning_count} 条需要留意` : ''
+    ElMessage.success(`${json.message || '导入完成'}${warnings}`)
+    if (json.data?.warnings?.length) {
+      console.warn('交易流水导入提示', json.data.warnings)
+      await ElMessageBox.alert(json.data.warnings.slice(0, 10).join('\n'), '导入完成，但有部分行需要留意', {
+        confirmButtonText: '知道了',
+        customClass: 'import-message-box'
+      })
+    }
+    await fetchList()
+    await fetchAccounts()
+    await fetchCategories()
+  } catch (error) {
+    ElMessage.error(error.message || '导入失败')
+  } finally {
+    importing.value = false
+  }
+}
+
+async function parseImportResponse(res) {
+  const text = await res.text()
+  if (res.status === 404) {
+    return {
+      success: false,
+      message: '导入接口不存在（404）：当前后端还没有更新到最新版，或服务没有重启。请上传/重启后端后再试。'
+    }
+  }
+  if (!text) return { success: false, message: `导入接口没有返回内容（${res.status}）` }
+  try {
+    return JSON.parse(text)
+  } catch {
+    return {
+      success: false,
+      message: res.ok
+        ? '导入接口返回格式异常，请刷新后重试'
+        : `导入接口异常（${res.status}）：${text.replace(/\s+/g, ' ').slice(0, 120)}`
+    }
+  }
+}
+
+async function showImportFailure(json, status) {
+  const warnings = Array.isArray(json?.data?.warnings) ? json.data.warnings.filter(Boolean) : []
+  const message = json?.message || `导入失败（${status}）`
+  if (warnings.length) {
+    await ElMessageBox.alert(warnings.slice(0, 12).join('\n'), message, {
+      confirmButtonText: '知道了',
+      customClass: 'import-message-box'
+    })
+    return
+  }
+  ElMessage.error(message)
 }
 
 function doSearch() { fetchList() }
@@ -593,6 +702,22 @@ onMounted(() => { fetchList(); fetchAccounts(); fetchCategories() })
 }
 .filter-bar :deep(.el-form-item) { margin-bottom: 0; }
 .filter-bar :deep(.el-form-item__label) { color: var(--text-secondary); }
+
+.transaction-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: -4px 0 14px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.transaction-summary span {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 82%, var(--bg-page));
+  border: 1px solid var(--border-light);
+}
 
 .smart-entry {
   padding: 14px;
