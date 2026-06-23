@@ -139,7 +139,7 @@ function resolveImportAccount(accountName, accounts) {
   const charUnique = uniqueById(charMatches)
   if (charUnique.length === 1) return { account: charUnique[0], ambiguous: [] }
 
-  const containsMatches = simpleKey.length >= 3
+  const containsMatches = simpleKey.length >= 4
     ? accounts.filter(account => {
         const accountKey = simplifyAccountName(account.name)
         if (accountKey.length < 3) return false
@@ -223,6 +223,7 @@ function findHeaderRow(rows) {
 
 function rowsFromImportFile(fileName, fileData) {
   const buffer = decodeData(fileData)
+  if (buffer.length > 50 * 1024 * 1024) throw new Error('文件过大，请检查后重试（限制 50MB）')
   if (!buffer.length) throw new Error('文件内容为空')
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: false })
   for (const sheetName of workbook.SheetNames) {

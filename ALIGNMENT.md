@@ -177,6 +177,13 @@
 
 ## 对接记录
 
+### 2026-06-23 Claude：Hermes 审计修复——账户匹配阈值 + base64 大小检查
+
+- P1-1 交易导入账户匹配：`simpleKey.length >= 3` → `>= 4`，降低误匹配风险
+- P2-2 交易导入无文件大小限制：`decodeData` 解码后检查 `buffer.length > 50MB` 则拒绝
+- 其他 P2 设计如此，不修
+- 验证：`node --check` 通过，已部署服务器
+
 ### 2026-06-23 Claude：性能优化第三波——Element Plus 独立 chunk + 常驻警告说明
 
 - `vite.config.js`：Element Plus 拆成 `vendor-element` 独立 chunk（968KB），业务代码降至 **82KB**
