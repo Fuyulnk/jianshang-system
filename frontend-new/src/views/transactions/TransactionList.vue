@@ -82,10 +82,11 @@
               </el-tag>
             </div>
             <div class="group-stats">
+              <span class="stat-init">初期 {{ fmt(group.initial_balance) }}</span>
               <span class="stat-income">收入 {{ fmt(group.income) }}</span>
               <span class="stat-expense">支出 {{ fmt(group.expense) }}</span>
-              <span :class="['stat-balance', group.balance >= 0 ? 'income' : 'expense']">
-                余额 {{ fmt(group.balance) }}
+              <span :class="['stat-balance', (group.initial_balance + group.income - group.expense) >= 0 ? 'income' : 'expense']">
+                余额 {{ fmt(group.initial_balance + group.income - group.expense) }}
               </span>
             </div>
             <div class="group-count">{{ group.txs.length }} 笔</div>
@@ -286,7 +287,7 @@ const groups = computed(() => {
         id: key,
         name: tx.account_name || '未知',
         type: tx.account_type || acc?.type || 'personal',
-        balance: acc?.current_balance ?? 0,
+        initial_balance: Number(acc?.initial_balance || 0),
         income: 0,
         expense: 0,
         txs: []
@@ -878,6 +879,7 @@ onMounted(() => { fetchList(); fetchAccounts(); fetchCategories() })
   font-size: 13px;
   flex: 1;
 }
+.stat-init { color: var(--text-tertiary); }
 .stat-income { color: var(--color-success); }
 .stat-expense { color: #ef4444; }
 .stat-balance { font-weight: 600; }
