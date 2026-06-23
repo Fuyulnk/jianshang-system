@@ -51,7 +51,10 @@ export default function authRoutes(server, db) {
       return { success: false, message: `登录过于频繁，请 ${limit.retryAfter} 秒后再试` }
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username)
+    let user = db.prepare('SELECT * FROM users WHERE username = ?').get(username)
+    if (!user) {
+      user = db.prepare("SELECT * FROM users WHERE phone = ? AND COALESCE(phone, '') != ''").get(username)
+    }
 
     if (!user) {
       recordFailedLogin(limit.ip)
