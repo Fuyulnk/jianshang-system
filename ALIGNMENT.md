@@ -177,6 +177,13 @@
 
 ## 对接记录
 
+### 2026-06-23 Claude：性能优化第三波——Element Plus 独立 chunk + 常驻警告说明
+
+- `vite.config.js`：Element Plus 拆成 `vendor-element` 独立 chunk（968KB），业务代码降至 **82KB**
+- 部署后用户首次加载需下 968KB（Element Plus），之后缓存一年不更新
+- 后续每次部署用户只下载 82KB 业务代码
+- ⚠️ Vite chunk 大小警告（>500KB）仍在，因为 Element Plus 自身 968KB 无法拆分。**此警告不阻塞功能，可忽略。** 如需彻底消除，需将 Element Plus 改为按需导入（全量替换为 `import { ElButton } from 'element-plus'` 方式），当前阶段性价比不高，暂不处理。
+
 ### 2026-06-23 Claude：性能优化第二波——表格滚动优化 + 懒编辑 + 列表查询 100x
 
 - 入账登记表单元格改为懒编辑：默认显示 `<span>`，双击才变 `<textarea>`，避免 2725 个 textarea 同时渲染导致滚动卡顿
