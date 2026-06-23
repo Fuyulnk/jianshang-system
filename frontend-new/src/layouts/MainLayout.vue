@@ -132,7 +132,7 @@
 <script setup>
 import { getAuthToken, clearAuthSession } from '../utils/authSession'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useRouter, useRoute } from 'vue-router'
 import { HomeFilled, Wallet, List, Goods, User, Operation, ChatDotSquare, Fold, Expand, Tools, Sunny, Moon, TrendCharts, Document } from '@element-plus/icons-vue'
 import UserAvatar from '../components/UserAvatar.vue'
@@ -251,15 +251,7 @@ async function handleSessionExpired(message) {
   sessionExpiredPrompting.value = true
   const isAssigned = String(message || '').includes('权限已变更')
   if (isAssigned) {
-    try {
-      await ElMessageBox.alert('账号已分配，请重新登录后进入新的岗位界面。', '账号已分配', {
-        confirmButtonText: '回到登录页',
-        type: 'success',
-        showClose: false,
-        closeOnClickModal: false,
-        closeOnPressEscape: false
-      })
-    } catch {}
+    ElMessage.success('账号权限已更新，请重新登录后进入新的岗位界面')
   }
   clearAuthSession({ clearRemembered: true })
   router.replace('/')

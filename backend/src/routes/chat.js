@@ -2,7 +2,7 @@ import { authMiddleware } from '../middleware/auth.js'
 import { requireAssignedAccount } from '../utils/permissions.js'
 import { fileURLToPath } from 'url'
 import { dirname, extname, join } from 'path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import crypto from 'crypto'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -77,6 +77,127 @@ export default function chatRoutes(server, db, realtime = {}) {
       for (const uid of ids) stmt.run(convId, uid)
       return { success: true, id: convId }
     }
+  })
+
+  // 获取群成员
+  server.get('/api/conversations/:id/members', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能查看群成员')) return
+
+    const convId = Number(request.params.id)
+    const conv = getConversationForMember(db, convId, request.user.userId)
+    if (!conv) return reply.code(404).send({ success: false, message: '群聊不存在或无权限' })
+    if (conv.type !== 'group') return reply.code(400).send({ success: false, message: '当前只支持群聊成员管理' })
+
+    const members = db.prepare(`
+      SELECT u.id, u.username, u.real_name, u.department, u.position, u.avatar_url,
+        r.label as role_label, cp.joined_at
+      FROM conversation_participants cp
+      JOIN users u ON cp.user_id = u.id
+      LEFT JOIN roles r ON u.role = r.name
+      WHERE cp.conversation_id = ?
+      ORDER BY cp.id ASC
+    `).all(convId)
+
+    return {
+      success: true,
+      data: {
+        conversation: {
+          id: conv.id,
+          name: conv.name,
+          type: conv.type,
+          created_by: conv.created_by,
+          can_manage: canManageConversation(conv, request.user)
+        },
+        members
+      }
+    }
+  })
+
+  // 邀请群成员
+  server.post('/api/conversations/:id/members', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能邀请群成员')) return
+
+    const convId = Number(request.params.id)
+    const conv = getConversationForMember(db, convId, request.user.userId)
+    if (!conv) return reply.code(404).send({ success: false, message: '群聊不存在或无权限' })
+    if (conv.type !== 'group') return reply.code(400).send({ success: false, message: '当前只支持群聊成员管理' })
+    if (!canManageConversation(conv, request.user)) return reply.code(403).send({ success: false, message: '只有管理员或群创建人可以邀请成员' })
+
+    const ids = Array.isArray(request.body?.user_ids) ? request.body.user_ids : []
+    const userIds = [...new Set(ids.map(id => Number(id)).filter(id => Number.isInteger(id) && id > 0))]
+    if (!userIds.length) return reply.code(400).send({ success: false, message: '请选择要邀请的成员' })
+
+    const placeholders = userIds.map(() => '?').join(',')
+    const users = db.prepare(`
+      SELECT id FROM users
+      WHERE id IN (${placeholders})
+        AND role != 'ai'
+        AND COALESCE(status, 'active') = 'active'
+        AND COALESCE(assignment_status, 'assigned') = 'assigned'
+    `).all(...userIds)
+    if (!users.length) return reply.code(400).send({ success: false, message: '没有可邀请的有效账号' })
+
+    const stmt = db.prepare('INSERT OR IGNORE INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)')
+    const tx = db.transaction((rows) => {
+      let added = 0
+      for (const row of rows) added += stmt.run(convId, row.id).changes
+      return added
+    })
+    const added = tx(users)
+    const memberCount = countConversationMembers(db, convId)
+    realtime.io?.to(`conv:${convId}`).emit('conversation:members_changed', { conversation_id: convId, member_count: memberCount })
+    return { success: true, data: { added, member_count: memberCount }, message: added ? `已邀请 ${added} 人` : '所选成员已在群里' }
+  })
+
+  // 移除群成员
+  server.delete('/api/conversations/:id/members/:userId', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能移除群成员')) return
+
+    const convId = Number(request.params.id)
+    const targetUserId = Number(request.params.userId)
+    const conv = getConversationForMember(db, convId, request.user.userId)
+    if (!conv) return reply.code(404).send({ success: false, message: '群聊不存在或无权限' })
+    if (conv.type !== 'group') return reply.code(400).send({ success: false, message: '当前只支持群聊成员管理' })
+    if (!canManageConversation(conv, request.user)) return reply.code(403).send({ success: false, message: '只有管理员或群创建人可以移除成员' })
+    if (targetUserId === request.user.userId) return reply.code(400).send({ success: false, message: '暂不支持在这里移除自己' })
+
+    const result = db.prepare('DELETE FROM conversation_participants WHERE conversation_id = ? AND user_id = ?').run(convId, targetUserId)
+    if (!result.changes) return reply.code(404).send({ success: false, message: '该成员不在群里' })
+
+    const memberCount = countConversationMembers(db, convId)
+    realtime.io?.to(`conv:${convId}`).emit('conversation:member_removed', { conversation_id: convId, user_id: targetUserId, member_count: memberCount })
+    realtime.io?.to(`conv:${convId}`).emit('conversation:members_changed', { conversation_id: convId, member_count: memberCount })
+    return { success: true, data: { member_count: memberCount }, message: '已移除成员' }
+  })
+
+  // 清空群聊消息：高风险动作，仅管理员或群创建人可操作。
+  server.delete('/api/conversations/:id/messages', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能清空群消息')) return
+
+    const convId = Number(request.params.id)
+    const conv = getConversationForMember(db, convId, request.user.userId)
+    if (!conv) return reply.code(404).send({ success: false, message: '群聊不存在或无权限' })
+    if (conv.type !== 'group') return reply.code(400).send({ success: false, message: '当前只支持清空群聊消息' })
+    if (!canManageConversation(conv, request.user)) return reply.code(403).send({ success: false, message: '只有管理员或群创建人可以清空消息' })
+
+    const files = db.prepare('SELECT stored_name FROM chat_files WHERE conversation_id = ?').all(convId)
+    const deleted = db.transaction(() => {
+      const messageChanges = db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(convId).changes
+      db.prepare('DELETE FROM chat_files WHERE conversation_id = ?').run(convId)
+      return messageChanges
+    })()
+
+    for (const file of files) {
+      const filePath = join(CHAT_UPLOAD_DIR, file.stored_name)
+      try { if (existsSync(filePath)) unlinkSync(filePath) } catch {}
+    }
+
+    realtime.io?.to(`conv:${convId}`).emit('conversation:messages_cleared', { conversation_id: convId })
+    return { success: true, data: { deleted }, message: deleted ? `已清空 ${deleted} 条消息` : '群里暂无消息' }
   })
 
   // 获取会话消息
@@ -210,15 +331,35 @@ export default function chatRoutes(server, db, realtime = {}) {
     if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能查看聊天用户')) return
 
     const users = db.prepare(`
-      SELECT u.id, u.username, r.label as role_label
+      SELECT u.id, u.username, u.real_name, u.department, u.position, r.label as role_label
       FROM users u
       LEFT JOIN roles r ON u.role = r.name
       WHERE u.role != 'ai'
+        AND COALESCE(u.status, 'active') = 'active'
+        AND COALESCE(u.assignment_status, 'assigned') = 'assigned'
       ORDER BY u.id ASC
     `).all()
 
     return { success: true, data: users }
   })
+}
+
+function getConversationForMember(db, convId, userId) {
+  if (!Number.isInteger(Number(convId)) || Number(convId) <= 0) return null
+  return db.prepare(`
+    SELECT c.*
+    FROM conversations c
+    JOIN conversation_participants cp ON cp.conversation_id = c.id
+    WHERE c.id = ? AND cp.user_id = ?
+  `).get(Number(convId), Number(userId))
+}
+
+function canManageConversation(conv, user) {
+  return ['super_admin', 'admin'].includes(user?.role) || Number(conv?.created_by || 0) === Number(user?.userId || 0)
+}
+
+function countConversationMembers(db, convId) {
+  return db.prepare('SELECT COUNT(*) as count FROM conversation_participants WHERE conversation_id = ?').get(convId)?.count || 0
 }
 
 function ensureUploadDir() {

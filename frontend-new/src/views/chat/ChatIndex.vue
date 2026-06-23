@@ -64,6 +64,16 @@
               </div>
             </div>
           </div>
+          <el-button
+            v-if="currentConvType === 'group'"
+            size="small"
+            text
+            :icon="Setting"
+            title="群聊设置"
+            @click="showGroupSettings = true"
+          >
+            群设置
+          </el-button>
         </div>
         <div
           ref="msgListRef"
@@ -191,6 +201,14 @@
         <el-button type="primary" :loading="creating" @click="handleCreateConv">创建</el-button>
       </template>
     </el-dialog>
+
+    <GroupSettingsDrawer
+      v-model="showGroupSettings"
+      :conversation-id="currentConvId"
+      :conversation-name="currentConvName"
+      @changed="handleGroupSettingsChanged"
+      @cleared="handleGroupMessagesCleared"
+    />
   </div>
 </template>
 
@@ -198,9 +216,10 @@
 import { getAuthToken } from '../../utils/authSession'
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ChatDotSquare, Cpu, Document, Download, Paperclip, Promotion, UploadFilled } from '@element-plus/icons-vue'
+import { ChatDotSquare, Cpu, Document, Download, Paperclip, Promotion, Setting, UploadFilled } from '@element-plus/icons-vue'
 import { io } from 'socket.io-client'
 import UserAvatar from '../../components/UserAvatar.vue'
+import GroupSettingsDrawer from '../../components/chat/GroupSettingsDrawer.vue'
 
 const conversations = ref([])
 const messages = ref([])
@@ -225,6 +244,7 @@ const recentLoading = ref(false)
 const showNewConv = ref(false)
 const newConvName = ref('')
 const creating = ref(false)
+const showGroupSettings = ref(false)
 
 // AI 对话
 const isAiMode = ref(false)
@@ -257,6 +277,29 @@ function connectSocket() {
       loadImagePreviews([msg])
       scrollBottom()
     }
+    refreshConversations()
+  })
+  socket.value.on('conversation:members_changed', (event) => {
+    if (event?.conversation_id === currentConvId.value && event.member_count) {
+      currentConvMeta.value = `${event.member_count} 人`
+    }
+    refreshConversations()
+  })
+  socket.value.on('conversation:member_removed', (event) => {
+    if (event?.conversation_id !== currentConvId.value) {
+      refreshConversations()
+      return
+    }
+    if (Number(event.user_id) === Number(userId.value)) {
+      ElMessage.warning('你已被移出该群聊')
+      resetCurrentConversation()
+      refreshConversations()
+      return
+    }
+    if (event.member_count) currentConvMeta.value = `${event.member_count} 人`
+  })
+  socket.value.on('conversation:messages_cleared', (event) => {
+    if (event?.conversation_id === currentConvId.value) handleGroupMessagesCleared()
     refreshConversations()
   })
 }
@@ -386,6 +429,31 @@ async function selectConversation(conv) {
   } catch {}
 }
 
+function resetCurrentConversation() {
+  currentConvId.value = null
+  currentConvType.value = ''
+  currentConvName.value = ''
+  currentConvMeta.value = ''
+  messages.value = []
+  inputText.value = ''
+  showGroupSettings.value = false
+  clearPendingFiles()
+  clearMessageImages()
+}
+
+function handleGroupSettingsChanged(event) {
+  if (event?.member_count && currentConvType.value === 'group') {
+    currentConvMeta.value = `${event.member_count} 人`
+  }
+  refreshConversations()
+}
+
+function handleGroupMessagesCleared() {
+  messages.value = []
+  clearMessageImages()
+  refreshConversations()
+}
+
 async function sendMessage() {
   const text = inputText.value.trim()
   const files = [...pendingFiles.value]
@@ -474,6 +542,11 @@ function clearPendingFiles() {
     if (item.preview_url) URL.revokeObjectURL(item.preview_url)
   }
   pendingFiles.value = []
+}
+
+function clearMessageImages() {
+  for (const url of Object.values(messageImageUrls.value)) URL.revokeObjectURL(url)
+  messageImageUrls.value = {}
 }
 
 async function uploadFiles(items) {
@@ -653,7 +726,7 @@ onMounted(async () => {
 onUnmounted(() => {
   socket.value?.disconnect()
   clearPendingFiles()
-  for (const url of Object.values(messageImageUrls.value)) URL.revokeObjectURL(url)
+  clearMessageImages()
 })
 </script>
 
@@ -752,7 +825,13 @@ onUnmounted(() => {
   font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 12px;
 }
 .msg-header-meta { font-weight: 400; font-size: 13px; color: var(--text-tertiary); }
-.msg-header-right { margin-left: auto; position: relative; }
+.msg-header-right {
+  margin-left: auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .recent-dropdown { position: relative; }
 .recent-panel {
   position: absolute; right: 0; top: 36px; z-index: 100;

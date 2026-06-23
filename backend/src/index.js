@@ -1394,14 +1394,11 @@ function ensureFinanceAccountAliases(db) {
 }
 
 function reconcileAssignedUserRoles(db) {
-  const key = 'reconcile_assigned_user_roles_20260622'
-  if (db.prepare('SELECT value FROM app_config WHERE key = ?').get(key)) return
   const rows = db.prepare(`
     SELECT u.id, u.role, e.department, e.position
     FROM users u
     JOIN employees e ON e.id = u.employee_id
     WHERE COALESCE(u.employee_id, 0) > 0
-      AND COALESCE(u.assignment_status, 'assigned') = 'assigned'
       AND u.role NOT IN ('super_admin', 'admin')
   `).all()
   const update = db.prepare(`
@@ -1409,15 +1406,15 @@ function reconcileAssignedUserRoles(db) {
     SET role = ?,
         department = COALESCE(NULLIF(department, ''), ?),
         position = COALESCE(NULLIF(position, ''), ?),
+        assignment_status = 'assigned',
         role_version = COALESCE(role_version, 1) + 1
-    WHERE id = ? AND role != ?
+    WHERE id = ?
+      AND (role != ? OR COALESCE(assignment_status, 'assigned') != 'assigned')
   `)
   for (const row of rows) {
     const role = roleFromDepartmentPosition(row.department, row.position, row.role)
     update.run(role, row.department || '', row.position || '', row.id, role)
   }
-  db.prepare('INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?, ?, ?)')
-    .run(key, '1', String(Date.now()))
 }
 
 function roleFromDepartmentPosition(department, position, currentRole = 'employee') {

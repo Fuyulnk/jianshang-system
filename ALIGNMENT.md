@@ -177,6 +177,49 @@
 
 ## 对接记录
 
+### 2026-06-23 Codex：服务器财务角色未同步 + Windows 最小化被拉回排查
+
+- 背景：用户反馈线上有两个财务账号，其中一个仍是普通员工权限；Windows 浏览器最小化后仍会被系统页面强制拉回。
+- 线上只读排查：
+  - 线上真实数据库是 `/root/fuyulnk/jianshang.db`，不是 `/root/jianshang-system/backend/data/jianshang.db`。
+  - 线上异常账号状态：`department=财务部`、`position=财务`、`employee_id>0`、`assignment_status=assigned`，但 `role=employee`。
+  - 线上 `/root/jianshang-system/backend/src/index.js` 没有本地已实现的 `reconcileAssignedUserRoles`，说明服务器代码没有吃到之前的财务角色映射热修。
+- 本轮修复：
+  - `backend/src/index.js`：`reconcileAssignedUserRoles` 不再依赖一次性 `app_config` key；每次启动只校准已绑定员工档案但角色/分配状态不一致的账号。财务部/财务会同步为 `finance`，仓库/仓管同步为 `warehouse`，工程部/监理同步为 `engineering`。
+  - `frontend-new/src/layouts/MainLayout.vue`：权限变更时不再弹 `ElMessageBox.alert` 模态框，改为轻提示后回登录页，避免 Windows 最小化/后台时被模态弹窗抢焦点拉回。
+- 验证：
+  - `node --check backend/src/index.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+- 注意：
+  - 本轮未提交、未上传服务器。
+  - 线上财务账号目前仍需上传最新代码并重启后才会自动修正；或由管理员临时执行一次角色修正 SQL。
+  - Windows 最小化问题本地无法直接用 Windows 真机验证，本轮是按代码可疑点消除“模态框抢焦点”风险；上传后仍建议用员工 Windows 电脑复测。
+
+### 2026-06-23 Codex：群聊管理 V1 补漏
+
+- 背景：用户指出群聊只有基础聊天能力，缺少群设置、邀请人员、清空信息等管理入口。
+- 后端：
+  - `backend/src/routes/chat.js`：新增 `GET /api/conversations/:id/members`，返回群成员、群信息和当前账号是否可管理。
+  - `backend/src/routes/chat.js`：新增 `POST /api/conversations/:id/members`，支持管理员或群创建人邀请已建档、启用状态的账号进群。
+  - `backend/src/routes/chat.js`：新增 `DELETE /api/conversations/:id/members/:userId`，支持管理员或群创建人移除群成员；暂不支持在此处移除自己。
+  - `backend/src/routes/chat.js`：新增 `DELETE /api/conversations/:id/messages`，支持管理员或群创建人清空群聊天记录和聊天附件；不影响项目、财务、仓库业务数据。
+  - `backend/src/routes/chat.js`：群成员变更、被移出群、清空消息时通过 Socket 推送事件，避免在线页面停在旧状态。
+  - `backend/src/routes/chat.js`：`/api/users/chat` 只返回非 AI、启用且已分配的账号，避免把待建档账号拉进业务群。
+- 前端：
+  - `frontend-new/src/components/chat/GroupSettingsDrawer.vue`：新增群设置抽屉，包含成员列表、邀请成员、移除成员、清空群消息。
+  - `frontend-new/src/views/chat/ChatIndex.vue`：群聊头部新增“群设置”入口；接入群成员变更、成员被移除、消息被清空的 Socket 联动。
+- 权限口径：
+  - 普通群成员可以查看成员列表。
+  - 邀请、移除、清空消息只允许 `super_admin` / `admin` / 群创建人执行。
+- 验证：
+  - `node --check backend/src/routes/chat.js` 通过。
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - 本地 `/health` 正常。
+- 注意：
+  - 本轮未提交、未上传服务器。
+  - 本轮未做完整浏览器点击联调；若上线前交给 Claude/Hermes 复查，重点测：管理员邀请成员、非管理员按钮禁用、被移出群后当前页面退出、清空消息后双方页面同步。
+  - 群公告、群名称修改、群主转让、成员主动退群、按部门批量建群暂未做，后续可作为聊天 V2。
+
 ### 2026-06-23 Codex：白屏隐患与 Windows/移动端基础兼容排查
 
 - 背景：用户要求继续检查是否还有隐藏白屏风险，并注意当前 Mac 开发环境与员工 Windows、后续小程序/手机浏览器之间的兼容差异。
