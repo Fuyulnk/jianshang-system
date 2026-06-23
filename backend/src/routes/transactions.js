@@ -249,12 +249,14 @@ function parseFeishuTransactionRows(fileName, fileData, db) {
     })
     const accountName = cellText(pickField(row, ['账户', '账户名称', '收支账户', '收付款账户']))
     const { account, ambiguous } = resolveImportAccount(accountName, accounts)
+    const statusText = cellText(row[normalizeHeader('状态')])
     const incomeAmount = Math.abs(parseMoney(pickField(row, ['收入', '入账', '收款金额', '收入金额'])))
     const expenseAmount = Math.abs(parseMoney(pickField(row, ['支出', '出账', '付款金额', '支出金额'])))
     const signedAmount = parseMoney(pickField(row, ['金额', '发生金额', '收支金额']))
-    const amount = incomeAmount || expenseAmount || Math.abs(signedAmount)
+    const typeText = cellText(pickField(row, ['收支类型', '类型', '交易类型']))
     const createdAt = normalizeDate(pickField(row, ['日期', '交易日期', '发生日期', '时间', '创建时间']))
-    const type = normalizeType(pickField(row, ['收支类型', '类型', '交易类型']), signedAmount, incomeAmount, expenseAmount)
+    const type = normalizeType(typeText, signedAmount, incomeAmount, expenseAmount)
+    const amount = incomeAmount || expenseAmount || (type === 'income' ? signedAmount : -signedAmount)
     const category = cellText(pickField(row, ['分类', '收支分类', '类目', '项目']))
     const description = cellText(pickField(row, ['事由', '备注', '说明', '摘要', '用途']))
     const party = cellText(pickField(row, ['对方', '交易对方', '客户', '供应商', '收付款方']))
@@ -278,6 +280,10 @@ function parseFeishuTransactionRows(fileName, fileData, db) {
       warnings.push(`第 ${sourceRow} 行日期为空或格式不对`)
       return
     }
+    if (status !== 'approved') {
+      warnings.push(`第 ${sourceRow} 行状态为 ${statusText || status}，已跳过`)
+      return
+    }
 
     parsed.push({
       source_row: sourceRow,
@@ -290,7 +296,8 @@ function parseFeishuTransactionRows(fileName, fileData, db) {
       party,
       proxy,
       status,
-      created_at: createdAt
+      created_at: createdAt,
+      allow_signed_import: true
     })
   })
 
@@ -353,7 +360,7 @@ function makeExcelHtml(rows, query = {}) {
   const tableRows = rows.map((row, index) => {
     const isExpense = row.type === 'expense'
     const signedAmount = Number(row.amount || 0) * (isExpense ? -1 : 1)
-    const amountClass = isExpense ? 'expense' : 'income'
+    const amountClass = signedAmount < 0 ? 'expense' : 'income'
     return `
       <tr>
         <td class="center">${index + 1}</td>

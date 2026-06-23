@@ -1,7 +1,9 @@
 export function createTransaction(db, payload = {}) {
   const accountId = toPositiveInt(payload.account_id)
   const type = cleanText(payload.type)
-  const amount = toPositiveMoney(payload.amount)
+  const amount = payload.allow_signed_import
+    ? toSignedMoney(payload.amount)
+    : toPositiveMoney(payload.amount)
   const status = normalizeTransactionStatus(payload.status)
   const createdAt = normalizeCreatedAt(payload.created_at)
   if (!accountId || !type || payload.amount === undefined) {
@@ -11,7 +13,7 @@ export function createTransaction(db, payload = {}) {
     throw commandError('类型必须为 income 或 expense', 400)
   }
   if (!amount) {
-    throw commandError('金额必须为正数', 400)
+    throw commandError(payload.allow_signed_import ? '金额不能为 0' : '金额必须为正数', 400)
   }
   const account = db.prepare('SELECT id FROM accounts WHERE id = ?').get(accountId)
   if (!account) {
@@ -111,6 +113,11 @@ function toPositiveInt(value) {
 function toPositiveMoney(value) {
   const n = Number(value)
   return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+function toSignedMoney(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
 }
 
 function cleanText(value) {

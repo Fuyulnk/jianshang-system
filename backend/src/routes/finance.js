@@ -1,7 +1,7 @@
 // 财务总览模块 — 照搬飞书资金总览表逻辑
 import * as XLSX from 'xlsx'
 import crypto from 'crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, extname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { authMiddleware } from '../middleware/auth.js'
@@ -430,6 +430,27 @@ export default function financeRoutes(server, db) {
     } catch (err) {
       reply.code(400).send({ success: false, message: err.message || '入账登记表导入失败' })
     }
+  })
+
+  server.delete('/api/finance/ledger/workbooks/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const workbookId = toInt(request.params.id)
+    const workbook = db.prepare('SELECT * FROM finance_ledger_workbooks WHERE id = ?').get(workbookId)
+    if (!workbook) return reply.code(404).send({ success: false, message: '入账登记表不存在' })
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM finance_ledger_comments WHERE workbook_id = ?').run(workbookId)
+      db.prepare('DELETE FROM finance_ledger_cells WHERE workbook_id = ?').run(workbookId)
+      db.prepare('DELETE FROM finance_ledger_sheets WHERE workbook_id = ?').run(workbookId)
+      db.prepare('DELETE FROM finance_ledger_logs WHERE workbook_id = ?').run(workbookId)
+      db.prepare('DELETE FROM finance_ledger_workbooks WHERE id = ?').run(workbookId)
+    })
+    tx()
+    if (workbook.source_file_path) {
+      const sourcePath = join(LEDGER_SOURCE_DIR, workbook.source_file_path)
+      if (existsSync(sourcePath)) rmSync(sourcePath, { force: true })
+    }
+    return { success: true, message: '入账登记表已删除' }
   })
 
   server.get('/api/finance/ledger/workbooks/:id/export', async (request, reply) => {

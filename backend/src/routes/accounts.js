@@ -69,6 +69,10 @@ export default function accountRoutes(server, db) {
       ? db.prepare('SELECT * FROM account_monthly_snapshots WHERE month = ?').all(monthInfo.value)
       : []
     const snapshotMap = new Map(snapshotRows.map(row => [Number(row.account_id), row]))
+    const nextSnapshotRows = useMonth && !snapshotRows.length
+      ? db.prepare('SELECT account_id, opening_balance FROM account_monthly_snapshots WHERE month = ?').all(nextMonthValue(monthInfo.value))
+      : []
+    const nextSnapshotMap = new Map(nextSnapshotRows.map(row => [Number(row.account_id), row]))
     const summaries = accounts.map(account => {
       const snapshot = snapshotMap.get(Number(account.id))
       if (snapshot) {
@@ -88,9 +92,13 @@ export default function accountRoutes(server, db) {
       const income = roundMoney(period.income_total)
       const expense = roundMoney(period.expense_total)
       const net = roundMoney(income - expense)
-      const openingBalance = useMonth
+      const nextSnapshot = nextSnapshotMap.get(Number(account.id))
+      const calculatedOpening = useMonth
         ? roundMoney(Number(account.initial_balance || 0) + Number(beforeMap.get(Number(account.id))?.before_net || 0))
         : roundMoney(Number(account.initial_balance || 0))
+      const openingBalance = useMonth && nextSnapshot
+        ? roundMoney(Number(nextSnapshot.opening_balance || 0) - net)
+        : calculatedOpening
       return {
         account_id: account.id,
         income_total: income,
@@ -98,7 +106,7 @@ export default function accountRoutes(server, db) {
         net_change: net,
         opening_balance: openingBalance,
         period_balance: useMonth ? roundMoney(openingBalance + net) : roundMoney(account.current_balance),
-        source: useMonth ? 'calculated' : 'account_current'
+        source: useMonth && nextSnapshot ? 'derived_from_next_snapshot' : useMonth ? 'calculated' : 'account_current'
       }
     })
 
@@ -278,6 +286,14 @@ function normalizeMonth(value) {
     start: `${year}-${String(month).padStart(2, '0')}-01 00:00:00`,
     next: `${nextYear}-${String(nextMonth).padStart(2, '0')}-01 00:00:00`
   }
+}
+
+function nextMonthValue(value) {
+  const [year, month] = String(value || '').split('-').map(Number)
+  if (!year || !month) return ''
+  const nextYear = month === 12 ? year + 1 : year
+  const nextMonth = month === 12 ? 1 : month + 1
+  return `${nextYear}-${String(nextMonth).padStart(2, '0')}`
 }
 
 function ensureAccountSnapshotTables(db) {

@@ -105,8 +105,8 @@
                 </el-table-column>
                 <el-table-column prop="amount" label="金额" width="110">
                   <template #default="{ row }">
-                    <span :class="row.type === 'income' ? 'income' : 'expense'">
-                      {{ row.type === 'expense' ? '- ' : '+ ' }}¥{{ Number(row.amount).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+                    <span :class="transactionSignedAmount(row) >= 0 ? 'income' : 'expense'">
+                      {{ transactionSignedAmount(row) >= 0 ? '+ ' : '- ' }}¥{{ Math.abs(transactionSignedAmount(row)).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
                     </span>
                   </template>
                 </el-table-column>
@@ -257,6 +257,11 @@ function token() { return getAuthToken() }
 
 function fmt(v) {
   return '¥' + Number(v || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
+}
+
+function transactionSignedAmount(row) {
+  const amount = Number(row?.amount || 0)
+  return row?.type === 'expense' ? -amount : amount
 }
 
 // 展开状态（持久化，不被 computed 重置）

@@ -1,5 +1,5 @@
 <template>
-  <div class="finance-ledger">
+  <div class="finance-ledger" :class="{ 'ledger-fullscreen': fullscreen }">
     <el-card class="ledger-head" shadow="never">
       <div>
         <div class="kicker">财务工作台</div>
@@ -8,7 +8,11 @@
       </div>
       <div class="head-actions">
         <input ref="fileInput" class="hidden-input" type="file" accept=".xlsx,.xls" @change="onImportFile" />
+        <el-button :disabled="!workbook" @click="fullscreen = !fullscreen">{{ fullscreen ? '退出全屏' : '全屏填表' }}</el-button>
+        <el-button :disabled="!workbook" @click="zoomOut">缩小</el-button>
+        <el-button :disabled="!workbook" @click="zoomIn">放大</el-button>
         <el-button :disabled="!workbook" :loading="exporting" @click="exportWorkbook">导出原格式</el-button>
+        <el-button :disabled="!workbook" type="danger" plain @click="deleteWorkbook">删除</el-button>
         <el-button type="primary" :loading="importing" @click="fileInput?.click()">导入入账登记表</el-button>
       </div>
     </el-card>
@@ -47,7 +51,7 @@
             <el-tab-pane v-for="sheet in sheets" :key="sheet.id" :name="String(sheet.id)" :label="sheet.name" />
           </el-tabs>
 
-          <div class="ledger-table-wrap">
+          <div class="ledger-table-wrap" :style="{ '--ledger-zoom': zoom }">
             <table class="ledger-table">
               <thead>
                 <tr>
@@ -66,7 +70,7 @@
                     @contextmenu.prevent="editComment(row, col)"
                   >
                     <textarea
-                      :value="cellFor(row, col).value"
+                      :value="displayCellValue(cellFor(row, col))"
                       @change="updateCell(row, col, $event.target.value)"
                       @keydown.enter.exact.prevent="$event.target.blur()"
                     />
@@ -99,6 +103,10 @@ const loadingList = ref(false)
 const loadingDetail = ref(false)
 const importing = ref(false)
 const exporting = ref(false)
+const fullscreen = ref(false)
+const zoom = ref(1)
+const activeCacheKey = ref('')
+const detailCache = new Map()
 const maxRows = 160
 const maxCols = 26
 
@@ -134,20 +142,31 @@ async function fetchWorkbooks() {
 }
 
 async function loadWorkbook(id, sheetId = 0) {
+  const cacheKey = `${id}:${sheetId || 0}`
+  if (detailCache.has(cacheKey)) {
+    applyWorkbookDetail(detailCache.get(cacheKey), cacheKey)
+    return
+  }
   loadingDetail.value = true
   try {
     const query = sheetId ? `?sheet_id=${sheetId}` : ''
     const json = await requestJson(`/api/finance/ledger/workbooks/${id}${query}`)
-    workbook.value = json.data.workbook
-    sheets.value = json.data.sheets || []
-    activeSheetId.value = json.data.active_sheet_id || sheets.value[0]?.id || 0
-    cells.value = json.data.cells || []
-    comments.value = json.data.comments || []
+    detailCache.set(cacheKey, json.data)
+    applyWorkbookDetail(json.data, cacheKey)
   } catch (err) {
     ElMessage.error(err.message || '入账登记表读取失败')
   } finally {
     loadingDetail.value = false
   }
+}
+
+function applyWorkbookDetail(detail, cacheKey = '') {
+  workbook.value = detail.workbook
+  sheets.value = detail.sheets || []
+  activeSheetId.value = detail.active_sheet_id || sheets.value[0]?.id || 0
+  cells.value = detail.cells || []
+  comments.value = detail.comments || []
+  activeCacheKey.value = cacheKey
 }
 
 function loadSheet(name) {
@@ -166,6 +185,7 @@ async function onImportFile(event) {
       file_data: await readAsDataUrl(file)
     }, 'POST')
     ElMessage.success('入账登记表已导入')
+    detailCache.clear()
     await fetchWorkbooks()
     if (json.data?.workbook?.id) await loadWorkbook(json.data.workbook.id)
   } catch (err) {
@@ -190,6 +210,28 @@ async function exportWorkbook() {
   }
 }
 
+async function deleteWorkbook() {
+  if (!workbook.value?.id) return
+  try {
+    await ElMessageBox.confirm(`确定删除「${workbook.value.title}」吗？这只删除系统里的导入记录，不会动你电脑上的原始文件。`, '删除入账登记表', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消'
+    })
+    await requestJson(`/api/finance/ledger/workbooks/${workbook.value.id}`, null, 'DELETE')
+    ElMessage.success('入账登记表已删除')
+    detailCache.clear()
+    workbook.value = null
+    sheets.value = []
+    activeSheetId.value = 0
+    cells.value = []
+    comments.value = []
+    await fetchWorkbooks()
+  } catch (err) {
+    if (err !== 'cancel') ElMessage.error(err.message || '删除失败')
+  }
+}
+
 function cellFor(row, col) {
   return cellMap.value.get(`${row}:${col}`) || {
     id: 0,
@@ -199,6 +241,13 @@ function cellFor(row, col) {
     address: `${colName(col)}${row}`,
     value: ''
   }
+}
+
+function displayCellValue(cell) {
+  const text = String(cell?.value ?? '')
+  const dateMatch = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/)
+  if (!dateMatch) return text
+  return `${dateMatch[1]}年${dateMatch[2].padStart(2, '0')}月${dateMatch[3].padStart(2, '0')}日`
 }
 
 function commentFor(row, col) {
@@ -216,6 +265,9 @@ async function updateCell(row, col, value) {
       value
     }, 'PUT')
     upsertLocal(cells.value, json.data)
+    if (activeCacheKey.value && detailCache.has(activeCacheKey.value)) {
+      upsertLocal(detailCache.get(activeCacheKey.value).cells, json.data)
+    }
     ElMessage.success('单元格已保存')
   } catch (err) {
     ElMessage.error(err.message || '单元格保存失败')
@@ -242,6 +294,9 @@ async function editComment(row, col) {
       comment_text: value
     }, 'PUT')
     upsertLocal(comments.value, json.data)
+    if (activeCacheKey.value && detailCache.has(activeCacheKey.value)) {
+      upsertLocal(detailCache.get(activeCacheKey.value).comments, json.data)
+    }
     ElMessage.success('备注已保存')
   } catch (err) {
     if (err !== 'cancel') ElMessage.error(err.message || '备注保存失败')
@@ -307,6 +362,14 @@ function readAsDataUrl(file) {
   })
 }
 
+function zoomIn() {
+  zoom.value = Math.min(1.35, Math.round((zoom.value + 0.1) * 10) / 10)
+}
+
+function zoomOut() {
+  zoom.value = Math.max(0.8, Math.round((zoom.value - 0.1) * 10) / 10)
+}
+
 function colName(index) {
   let n = Number(index)
   let name = ''
@@ -325,6 +388,25 @@ onMounted(fetchWorkbooks)
 .finance-ledger {
   display: grid;
   gap: 16px;
+}
+.ledger-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  padding: 16px;
+  overflow: hidden;
+  background: var(--bg-page);
+}
+.ledger-fullscreen .ledger-layout {
+  grid-template-columns: 220px minmax(0, 1fr);
+  height: calc(100dvh - 116px);
+}
+.ledger-fullscreen .sheet-card,
+.ledger-fullscreen .workbook-list {
+  min-height: 0;
+}
+.ledger-fullscreen .ledger-table-wrap {
+  max-height: calc(100dvh - 236px);
 }
 .ledger-head {
   border: 1px solid var(--border-light);
@@ -350,6 +432,12 @@ onMounted(fetchWorkbooks)
 }
 .hidden-input {
   display: none;
+}
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .ledger-layout {
   display: grid;
@@ -397,19 +485,21 @@ onMounted(fetchWorkbooks)
   overflow: auto;
   max-height: calc(100vh - 260px);
   max-height: calc(100dvh - 260px);
-  border: 1px solid var(--border-light);
+  border: 1px solid color-mix(in srgb, var(--border-light) 72%, #64748b);
   border-radius: var(--radius-sm);
 }
 .ledger-table {
   border-collapse: collapse;
+  width: max-content;
   min-width: 100%;
   background: var(--bg-card);
+  font-size: calc(13px * var(--ledger-zoom, 1));
 }
 .ledger-table th,
 .ledger-table td {
-  border: 1px solid var(--border-light);
-  min-width: 118px;
-  height: 36px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 64%, #64748b);
+  min-width: calc(118px * var(--ledger-zoom, 1));
+  height: calc(36px * var(--ledger-zoom, 1));
   padding: 0;
   position: relative;
 }
@@ -435,14 +525,23 @@ onMounted(fetchWorkbooks)
 .ledger-table textarea {
   width: 100%;
   height: 100%;
-  min-height: 36px;
+  min-height: calc(36px * var(--ledger-zoom, 1));
   padding: 8px;
   border: 0;
   resize: vertical;
   background: transparent;
   color: var(--text-primary);
+  caret-color: #2563eb;
   font: inherit;
   outline: none;
+}
+.ledger-table textarea::selection {
+  color: #0f172a;
+  background: rgba(37, 99, 235, 0.22);
+}
+.ledger-table textarea:focus {
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--bg-card));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 50%, transparent);
 }
 .ledger-table td.commented {
   background: color-mix(in srgb, #f59e0b 8%, var(--bg-card));

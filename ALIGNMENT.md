@@ -2599,6 +2599,34 @@
   - PPT 可视图是系统版草稿，不是任意 PPTX 反向解析；上传的原始 PPTX 可追溯下载。
   - 如果继续做这一线，下一步建议：让 Hermes 审 `supply-orders.js` 权限/状态机，再用测试账号实测财务、仓库、普通员工的可见性。
 
+### 2026-06-23 Codex
+
+- 任务：修正财务 4/5 月账户快照与交易流水口径，并优化入账登记表填表体验。
+- 修改文件：
+  - `backend/src/routes/transactions.js` — 飞书流水导入支持收入/支出冲正，正数支出按资金总览净支出口径处理。
+  - `backend/src/services/financeCommands.js` — 手工录入仍要求正数，导入场景允许 signed amount。
+  - `backend/src/routes/accounts.js` — 月度汇总缺快照时可用下月月初倒推，避免跨月余额断链。
+  - `backend/src/routes/finance.js` — 入账登记表新增删除接口。
+  - `backend/scripts/rebuild-finance-data.mjs` — 新增 4/5 月财务数据重建脚本。
+  - `frontend-new/src/views/transactions/TransactionList.vue` — 流水列表按实际正负展示冲正金额。
+  - `frontend-new/src/views/finance/FinanceLedger.vue` — 入账登记表增加缓存、全屏、缩放、删除、横向滚动、强边框和中文日期显示。
+  - `handoff/2026-06-23-finance-ledger-monthly-data-v2.md` — 本次对接记录。
+- 数据处理：
+  - 本地正式库已备份：`/Users/fuyulnk./fuyulnk/jianshang.db.backup-20260623-170137`。
+  - 已用 `/Users/fuyulnk./Downloads/简尚财务管理系统.xlsx` 和 `/Users/fuyulnk./Downloads/简尚财务管理系统 5月-2.xlsx` 重建 4/5 月流水与资金快照。
+  - 4 月：297 条流水，收入 1,024,845.45，支出 1,006,185.28，月末余额 64,008.12。
+  - 5 月：272 条流水，收入 700,166.92，支出 687,388.60，月末余额 76,786.44。
+- 验证：
+  - `node --check backend/src/routes/accounts.js`
+  - `node --check backend/src/routes/transactions.js`
+  - `node --check backend/src/routes/finance.js`
+  - `node --check backend/src/services/financeCommands.js`
+  - `node --check backend/scripts/rebuild-finance-data.mjs`
+  - `npm --prefix frontend-new run build`（成功，仍有 Vite chunk size 提醒）
+- 注意事项：
+  - signed amount 只用于飞书导入/重建脚本；普通手工录入仍不能填负数。
+  - 账户页月度事实源优先使用 `account_monthly_snapshots`，避免历史月份被后续流水或账户初始余额改动污染。
+
 ### 2026-05-23 Codex
 
 - 任务：实现 AI 桌宠聊天窗口可缩放。
