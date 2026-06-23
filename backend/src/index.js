@@ -5,6 +5,7 @@ import { spawn } from 'child_process'
 import dotenv from 'dotenv'
 import fastify from 'fastify'
 import fastifyStatic from '@fastify/static'
+import fastifyCompress from '@fastify/compress'
 import Database from 'better-sqlite3'
 import fs from 'fs'
 import { Server as SocketIOServer } from 'socket.io'
@@ -472,6 +473,9 @@ const server = fastify({
   bodyLimit: 1048576 * 30
 })
 const realtime = { io: null }
+
+// gzip 压缩（加速前端资源加载）
+server.register(fastifyCompress, { global: true, threshold: 1024 })
 
 // 静态文件
 server.register(fastifyStatic, {
