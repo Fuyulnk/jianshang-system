@@ -2,22 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Login from '../views/Login.vue'
 import ProfilePage from '../views/ProfilePage.vue'
 import MainLayout from '../layouts/MainLayout.vue'
-import Dashboard from '../views/Dashboard.vue'
-import AccountList from '../views/accounts/AccountList.vue'
-import TransactionList from '../views/transactions/TransactionList.vue'
-import ProductList from '../views/products/ProductList.vue'
-import EmployeeList from '../views/employees/EmployeeList.vue'
-import RolePermissions from '../views/system/RolePermissions.vue'
-import SystemSettings from '../views/system/SystemSettings.vue'
-import ChatIndex from '../views/chat/ChatIndex.vue'
-import EmployeeDashboard from '../views/EmployeeDashboard.vue'
-import ProjectWorkOrderHome from '../views/projects/ProjectWorkOrderHome.vue'
-import ProjectList from '../views/projects/ProjectList.vue'
-import ProjectDetail from '../views/projects/ProjectDetail.vue'
-import ProjectSupplyList from '../views/projects/ProjectSupplyList.vue'
-import FinanceOverview from '../views/finance/FinanceOverview.vue'
-import FinanceLedger from '../views/finance/FinanceLedger.vue'
-import FileCenter from '../views/files/FileCenter.vue'
 import { getAuthToken, clearAuthSession, getTokenPayload } from '../utils/authSession'
 
 const routes = [
@@ -31,26 +15,26 @@ const routes = [
     component: MainLayout,
     redirect: '/main/dashboard',
     children: [
-      { path: 'dashboard', name: 'Dashboard', component: Dashboard, meta: { title: '控制台' } },
-      { path: 'accounts', name: 'Accounts', component: AccountList, meta: { title: '账户管理' } },
-      { path: 'transactions', name: 'Transactions', component: TransactionList, meta: { title: '交易流水' } },
-      { path: 'products', name: 'Products', component: ProductList, meta: { title: '产品库存' } },
-      { path: 'employees', name: 'Employees', component: EmployeeList, meta: { title: '员工管理' } },
-      { path: 'roles', name: 'Roles', component: RolePermissions, meta: { title: '角色权限' } },
-      { path: 'system/settings', name: 'SystemSettings', component: SystemSettings, meta: { title: '系统设置' } },
+      { path: 'dashboard', name: 'Dashboard', component: () => import("../views/Dashboard.vue"), meta: { title: '控制台' } },
+      { path: 'accounts', name: 'Accounts', component: () => import("../views/accounts/AccountList.vue"), meta: { title: '账户管理' } },
+      { path: 'transactions', name: 'Transactions', component: () => import("../views/transactions/TransactionList.vue"), meta: { title: '交易流水' } },
+      { path: 'products', name: 'Products', component: () => import("../views/products/ProductList.vue"), meta: { title: '产品库存' } },
+      { path: 'employees', name: 'Employees', component: () => import("../views/employees/EmployeeList.vue"), meta: { title: '员工管理' } },
+      { path: 'roles', name: 'Roles', component: () => import("../views/system/RolePermissions.vue"), meta: { title: '角色权限' } },
+      { path: 'system/settings', name: 'SystemSettings', component: () => import("../views/system/SystemSettings.vue"), meta: { title: '系统设置' } },
       // 旧路由重定向到系统设置
       { path: 'users', redirect: '/main/system/settings' },
       { path: 'system/ai-permissions', redirect: '/main/system/settings' },
-      { path: 'employee-dashboard', name: 'EmployeeDashboard', component: EmployeeDashboard, meta: { title: '工作台' } },
+      { path: 'employee-dashboard', name: 'EmployeeDashboard', component: () => import("../views/EmployeeDashboard.vue"), meta: { title: '工作台' } },
       { path: 'profile', name: 'Profile', component: ProfilePage, meta: { title: '个人设置' } },
-      { path: 'chat', name: 'Chat', component: ChatIndex, meta: { title: '聊天' } },
-      { path: 'files', name: 'FileCenter', component: FileCenter, meta: { title: '文件中心' } },
-      { path: 'projects', name: 'ProjectWorkOrderHome', component: ProjectWorkOrderHome, meta: { title: '项目工单' } },
-      { path: 'projects/construction', name: 'Projects', component: ProjectList, meta: { title: '施工项目工单' } },
-      { path: 'projects/supply', name: 'ProjectSupplyList', component: ProjectSupplyList, meta: { title: '项目供货单' } },
-      { path: 'projects/:id', name: 'ProjectDetail', component: ProjectDetail, meta: { title: '工单详情' } },
-      { path: 'finance/overview', name: 'FinanceOverview', component: FinanceOverview, meta: { title: '财务总览' } },
-      { path: 'finance/ledger', name: 'FinanceLedger', component: FinanceLedger, meta: { title: '入账登记表' } }
+      { path: 'chat', name: 'Chat', component: () => import("../views/chat/ChatIndex.vue"), meta: { title: '聊天' } },
+      { path: 'files', name: 'FileCenter', component: () => import("../views/files/FileCenter.vue"), meta: { title: '文件中心' } },
+      { path: 'projects', name: 'ProjectWorkOrderHome', component: () => import("../views/projects/ProjectWorkOrderHome.vue"), meta: { title: '项目工单' } },
+      { path: 'projects/construction', name: 'Projects', component: () => import("../views/projects/ProjectList.vue"), meta: { title: '施工项目工单' } },
+      { path: 'projects/supply', name: 'ProjectSupplyList', component: () => import("../views/projects/ProjectSupplyList.vue"), meta: { title: '项目供货单' } },
+      { path: 'projects/:id', name: 'ProjectDetail', component: () => import("../views/projects/ProjectDetail.vue"), meta: { title: '工单详情' } },
+      { path: 'finance/overview', name: 'FinanceOverview', component: () => import("../views/finance/FinanceOverview.vue"), meta: { title: '财务总览' } },
+      { path: 'finance/ledger', name: 'FinanceLedger', component: () => import("../views/finance/FinanceLedger.vue"), meta: { title: '入账登记表' } }
     ]
   },
   {

@@ -111,10 +111,17 @@ const maxRows = 160
 const maxCols = 26
 
 const activeSheet = computed(() => sheets.value.find(sheet => Number(sheet.id) === Number(activeSheetId.value)) || null)
-const visibleRowCount = computed(() => Math.min(Number(activeSheet.value?.row_count || 0) || maxRows, maxRows))
-const visibleColCount = computed(() => Math.min(Number(activeSheet.value?.col_count || 0) || maxCols, maxCols))
-const rows = computed(() => Array.from({ length: visibleRowCount.value }, (_, i) => i + 1))
-const columns = computed(() => Array.from({ length: visibleColCount.value }, (_, i) => i + 1))
+// 根据实际数据范围计算可见行列，不渲染空白格子
+const dataRange = computed(() => {
+  let maxR = 0, maxC = 0
+  for (const cell of cells.value) {
+    if (cell.row_index > maxR) maxR = cell.row_index
+    if (cell.col_index > maxC) maxC = cell.col_index
+  }
+  return { rows: Math.min(Math.max(maxR + 2, 10), maxRows), cols: Math.min(Math.max(maxC + 2, 5), maxCols) }
+})
+const rows = computed(() => Array.from({ length: dataRange.value.rows }, (_, i) => i + 1))
+const columns = computed(() => Array.from({ length: dataRange.value.cols }, (_, i) => i + 1))
 const cellMap = computed(() => {
   const map = new Map()
   for (const cell of cells.value) map.set(`${cell.row_index}:${cell.col_index}`, cell)

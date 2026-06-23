@@ -177,6 +177,15 @@
 
 ## 对接记录
 
+### 2026-06-23 Claude：性能优化——路由懒加载 + 入账登记表渲染优化 + gzip 缓存
+
+- 路由懒加载：`router/index.js` 全部页面改为 `() => import()`，首屏 JS 从 1.5MB 降至 965KB，后续页面按需加载
+- 入账登记表渲染优化：`FinanceLedger.vue` 从固定渲染 160×26=4160 格改为按实际数据范围渲染，`dataRange` 根据有数据的行列自动计算
+- 入账登记表列表查询优化：`finance.js` 的 `COUNT(DISTINCT ... LEFT JOIN)` 改为子查询，16.7 秒 → 0.14 秒
+- 静态资源缓存：`index.js` 配置带 hash 的 JS/CSS `Cache-Control: max-age=31536000, immutable`，浏览器缓存一年
+- 预生成 .gz 文件：JS 440KB、CSS 70KB（待后续开启 gzip 服务）
+- 验证：`node --check` 通过，`npm run build` 通过，已部署服务器
+
 ### 2026-06-23 Codex：财务导入功能提交并部署服务器
 
 - Git：

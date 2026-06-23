@@ -309,14 +309,10 @@ export default function financeRoutes(server, db) {
 
     const rows = db.prepare(`
       SELECT w.*,
-             COUNT(DISTINCT s.id) as sheet_count,
-             COUNT(DISTINCT c.id) as cell_count,
-             COUNT(DISTINCT cm.id) as comment_count
+        (SELECT COUNT(*) FROM finance_ledger_sheets WHERE workbook_id = w.id) as sheet_count,
+        (SELECT COUNT(*) FROM finance_ledger_cells WHERE workbook_id = w.id) as cell_count,
+        (SELECT COUNT(*) FROM finance_ledger_comments WHERE workbook_id = w.id AND COALESCE(comment_text, '') != '') as comment_count
       FROM finance_ledger_workbooks w
-      LEFT JOIN finance_ledger_sheets s ON s.workbook_id = w.id
-      LEFT JOIN finance_ledger_cells c ON c.workbook_id = w.id
-      LEFT JOIN finance_ledger_comments cm ON cm.workbook_id = w.id AND COALESCE(cm.comment_text, '') != ''
-      GROUP BY w.id
       ORDER BY w.id DESC
       LIMIT 50
     `).all()
