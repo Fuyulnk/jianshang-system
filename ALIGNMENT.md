@@ -177,6 +177,31 @@
 
 ## 对接记录
 
+### 2026-06-23 Codex：财务导入功能提交并部署服务器
+
+- Git：
+  - 代码提交：`7da2646 feat: import finance ledgers and account snapshots`。
+  - 已推送：`origin/main`。
+- 构建与同步：
+  - `npm --prefix frontend-new run build` 通过，仅保留既有 Vite 大 chunk 警告。
+  - `rsync -a --delete frontend-new/dist/ backend/public/` 已执行，本地 `backend/public/index.html` 引用 `assets/index-C2PDrm0P.js` / `assets/index-Cr-9aYf9.css`。
+  - 已同步服务器 `backend/src/` 与 `backend/public/`，未同步 `.env`、`backend/data/`、`node_modules`。
+- 服务器备份：
+  - 项目备份：`/root/jianshang-system-backup-20260623-154947.tgz`。
+  - 数据库备份：`/root/fuyulnk/jianshang.db.backup-20260623-154947`。
+- 财务数据上传：
+  - 本地数据库副本上传到服务器临时路径：`/tmp/jianshang-local-finance.db`。
+  - 未整库覆盖线上数据库；采用定向合并方式导入账户、2026-04/2026-05 交易流水、2026-05 账户月度快照。
+  - 合并后线上 `transactions`：共 534 条，2026-04 为 263 条，2026-05 为 271 条。
+  - 合并后线上 `account_monthly_snapshots`：2026-05 共 12 条，月末余额合计 `76786.44`。
+  - 合并过程中发现线上旧种子账户和本地标准账户名不一致，曾临时出现 22 个账户；已删除无流水、无月度快照、且不在本地标准账户清单里的旧占位账户，最终线上账户数为 12。
+- PM2 与线上验证：
+  - 已执行 `pm2 restart jianshang-web --update-env`。
+  - PM2 状态：`online`；脚本路径 `/root/jianshang-system/backend/src/index.js`；执行目录 `/root/jianshang-system`。
+  - `/health` 返回正常。
+  - 线上首页资源：`assets/index-C2PDrm0P.js` / `assets/index-Cr-9aYf9.css`。
+  - 登录态接口冒烟：`/api/transactions?pageSize=1000` 返回 `total=534`；`/api/accounts/summary?mode=month&month=2026-05` 返回 12 条 `imported_snapshot`；`/api/accounts` 返回 12 个账户。
+
 ### 2026-06-23 Codex：账户管理 5 月资金总览表导入
 
 - 背景：用户提供 `资金总览表.xlsx`，说明这是 5 月账户管理要导入的数据，不属于交易流水明细。
