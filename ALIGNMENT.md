@@ -177,6 +177,12 @@
 
 ## 对接记录
 
+### 2026-06-23 Claude：性能优化第二波——表格滚动优化 + 懒编辑 + 列表查询 100x
+
+- 入账登记表单元格改为懒编辑：默认显示 `<span>`，双击才变 `<textarea>`，避免 2725 个 textarea 同时渲染导致滚动卡顿
+- 表格容器加 `will-change: transform` + `overscroll-behavior: contain` 硬件加速
+- 列表查询优化：`COUNT(DISTINCT ... LEFT JOIN)` 改子查询，16.7s → 0.14s（100 倍）
+
 ### 2026-06-23 Claude：性能优化——路由懒加载 + 入账登记表渲染优化 + gzip 缓存
 
 - 路由懒加载：`router/index.js` 全部页面改为 `() => import()`，首屏 JS 从 1.5MB 降至 965KB，后续页面按需加载

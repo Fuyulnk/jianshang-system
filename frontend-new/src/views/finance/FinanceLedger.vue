@@ -69,10 +69,13 @@
                     :title="commentFor(row, col) || ''"
                     @contextmenu.prevent="editComment(row, col)"
                   >
+                    <span v-if="editingCell !== row+'-'+col" class="cell-text" @dblclick="editCell(row, col)">{{ displayCellValue(cellFor(row, col)) }}</span>
                     <textarea
+                      v-else
                       :value="displayCellValue(cellFor(row, col))"
                       @change="updateCell(row, col, $event.target.value)"
                       @keydown.enter.exact.prevent="$event.target.blur()"
+                      @blur="editingCell = ''"
                     />
                     <i v-if="commentFor(row, col)" class="comment-dot"></i>
                   </td>
@@ -122,6 +125,9 @@ const dataRange = computed(() => {
 })
 const rows = computed(() => Array.from({ length: dataRange.value.rows }, (_, i) => i + 1))
 const columns = computed(() => Array.from({ length: dataRange.value.cols }, (_, i) => i + 1))
+const editingCell = ref('')
+function editCell(row, col) { editingCell.value = `${row}-${col}` }
+
 const cellMap = computed(() => {
   const map = new Map()
   for (const cell of cells.value) map.set(`${cell.row_index}:${cell.col_index}`, cell)
@@ -494,6 +500,9 @@ onMounted(fetchWorkbooks)
   max-height: calc(100dvh - 260px);
   border: 1px solid color-mix(in srgb, var(--border-light) 72%, #64748b);
   border-radius: var(--radius-sm);
+  will-change: transform;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .ledger-table {
   border-collapse: collapse;
@@ -528,6 +537,10 @@ onMounted(fetchWorkbooks)
   left: 0;
   z-index: 3;
   min-width: 54px;
+}
+.cell-text {
+  display: block; min-height: 28px; line-height: 28px; padding: 0 4px;
+  font-size: 13px; cursor: default; white-space: nowrap; overflow: hidden;
 }
 .ledger-table textarea {
   width: 100%;
