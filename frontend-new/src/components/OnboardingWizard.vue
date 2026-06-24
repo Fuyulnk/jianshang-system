@@ -130,7 +130,7 @@
 </template>
 
 <script setup>
-import { getAuthToken } from '../utils/authSession'
+import { getAuthToken, safeLocalStorageSet } from '../utils/authSession'
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
@@ -241,8 +241,8 @@ async function finish() {
 function done() {
   const aiName = prefs.value.ai_name || '简尚小助手'
   const hidden = !prefs.value.pet_enabled
-  localStorage.setItem('ai-pet-hidden', hidden ? 'true' : 'false')
-  localStorage.setItem('ai-name', aiName)
+  safeLocalStorageSet('ai-pet-hidden', hidden ? 'true' : 'false')
+  safeLocalStorageSet('ai-name', aiName)
   window.dispatchEvent(new CustomEvent('ai-pet-settings', { detail: { hidden, aiName } }))
   emit('done')
 }

@@ -110,3 +110,28 @@ function safeStorageRemove(storage, key) {
     storage.removeItem(key)
   } catch {}
 }
+
+export function safeLocalStorageGet(key, fallback = null) {
+  if (typeof localStorage === 'undefined') return fallback
+  const value = safeStorageGet(localStorage, key)
+  return value === null ? fallback : value
+}
+
+export function safeLocalStorageSet(key, value) {
+  if (typeof localStorage === 'undefined') return
+  safeStorageSet(localStorage, key, value)
+}
+
+export function safeLocalStorageRemove(key) {
+  if (typeof localStorage === 'undefined') return
+  safeStorageRemove(localStorage, key)
+}
+
+export function safeJsonParse(raw, fallback = null) {
+  if (!raw) return fallback
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return fallback
+  }
+}

@@ -518,7 +518,7 @@
 </template>
 
 <script setup>
-import { getAuthToken, getTokenPayload } from '../../utils/authSession'
+import { getAuthToken, getTokenPayload, safeJsonParse, safeLocalStorageGet, safeLocalStorageRemove, safeLocalStorageSet } from '../../utils/authSession'
 import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting, Aim, Collection, InfoFilled, User, Operation } from '@element-plus/icons-vue'
@@ -1256,24 +1256,22 @@ function createCroppedAvatar(src) {
 }
 
 function loadAppearance() {
-  try {
-    const saved = JSON.parse(localStorage.getItem('personal-appearance') || '{}')
-    Object.assign(appearance, {
-      primaryColor: saved.primaryColor || '#4f6df5',
-      textColor: saved.textColor || '',
-      bgColor: saved.bgColor || ''
-    })
-  } catch {}
+  const saved = safeJsonParse(safeLocalStorageGet('personal-appearance', '{}'), {})
+  Object.assign(appearance, {
+    primaryColor: saved?.primaryColor || '#4f6df5',
+    textColor: saved?.textColor || '',
+    bgColor: saved?.bgColor || ''
+  })
 }
 
 function saveAppearance() {
-  localStorage.setItem('personal-appearance', JSON.stringify(appearance))
+  safeLocalStorageSet('personal-appearance', JSON.stringify(appearance))
   window.dispatchEvent(new Event('personal-appearance-change'))
   ElMessage.success('个性化设置已保存')
 }
 
 function resetAppearance() {
-  localStorage.removeItem('personal-appearance')
+  safeLocalStorageRemove('personal-appearance')
   document.documentElement.style.removeProperty('--color-primary')
   document.documentElement.style.removeProperty('--text-primary')
   document.documentElement.style.removeProperty('--bg-page')

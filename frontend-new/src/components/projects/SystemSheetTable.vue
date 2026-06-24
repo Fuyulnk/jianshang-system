@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import DecimalCellInput from './DecimalCellInput.vue'
+import { safeJsonParse, safeLocalStorageGet, safeLocalStorageSet } from '../../utils/authSession'
 
 const props = defineProps({
   columns: { type: Array, required: true },
@@ -25,17 +26,12 @@ watch(() => props.storageKey, loadWidths, { immediate: true })
 function loadWidths() {
   widths.value = {}
   if (!props.storageKey) return
-  try {
-    const raw = localStorage.getItem(`sheet-widths:${props.storageKey}`)
-    widths.value = raw ? JSON.parse(raw) : {}
-  } catch {
-    widths.value = {}
-  }
+  widths.value = safeJsonParse(safeLocalStorageGet(`sheet-widths:${props.storageKey}`, '{}'), {}) || {}
 }
 
 function saveWidths() {
   if (!props.storageKey) return
-  localStorage.setItem(`sheet-widths:${props.storageKey}`, JSON.stringify(widths.value))
+  safeLocalStorageSet(`sheet-widths:${props.storageKey}`, JSON.stringify(widths.value))
 }
 
 function columnWidth(col) {

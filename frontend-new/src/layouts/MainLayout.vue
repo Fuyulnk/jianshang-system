@@ -106,7 +106,14 @@
 </template>
 
 <script setup>
-import { getAuthToken, clearAuthSession } from '../utils/authSession'
+import {
+  getAuthToken,
+  clearAuthSession,
+  safeJsonParse,
+  safeLocalStorageGet,
+  safeLocalStorageRemove,
+  safeLocalStorageSet
+} from '../utils/authSession'
 import { ref, computed, markRaw, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter, useRoute } from 'vue-router'
@@ -132,7 +139,7 @@ const isPendingAssignment = computed(() => userInfo.value.assignment_status === 
 const hasFinanceAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || userInfo.value.role === 'finance' || allowedModules.value.includes('finance')))
 const hasFileCenterAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || ['finance', 'warehouse', 'engineering'].includes(userInfo.value.role) || ['projects', 'transactions', 'products'].some(hasPerm)))
 const themeTitle = computed(() => {
-  const mode = localStorage.getItem('theme-mode') || 'auto'
+  const mode = getThemeMode()
   const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   if (mode === 'auto') return `自动主题 ${now}，18:00 后切换夜间`
   return isDark.value ? '切换亮色模式' : '切换暗色模式'
@@ -176,18 +183,27 @@ const orderedBusinessMenuItems = computed(() => applyMenuOrder(businessMenuItems
 const orderedSystemMenuItems = computed(() => applyMenuOrder(systemMenuItems.value, 'system'))
 
 function initTheme() {
-  const mode = localStorage.getItem('theme-mode') || 'auto'
-  const stored = localStorage.getItem('theme')
+  const mode = getThemeMode()
+  const stored = getThemeValue()
   if (mode === 'manual' && (stored === 'dark' || stored === 'light')) {
     applyTheme(stored === 'dark')
   } else {
     applyTheme(isNightTime())
   }
   themeTimer.value = window.setInterval(() => {
-    if ((localStorage.getItem('theme-mode') || 'auto') === 'auto') {
+    if (getThemeMode() === 'auto') {
       applyTheme(isNightTime())
     }
   }, 60 * 1000)
+}
+
+function getThemeMode() {
+  return safeLocalStorageGet('theme-mode', 'auto') === 'manual' ? 'manual' : 'auto'
+}
+
+function getThemeValue() {
+  const value = safeLocalStorageGet('theme', '')
+  return value === 'dark' || value === 'light' ? value : ''
 }
 
 function isNightTime() {
@@ -202,20 +218,22 @@ function applyTheme(dark) {
 
 function toggleTheme() {
   applyTheme(!isDark.value)
-  localStorage.setItem('theme-mode', 'manual')
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+  safeLocalStorageSet('theme-mode', 'manual')
+  safeLocalStorageSet('theme', isDark.value ? 'dark' : 'light')
 }
 
 function applyPersonalAppearance() {
-  const raw = localStorage.getItem('personal-appearance')
+  const raw = safeLocalStorageGet('personal-appearance', '')
   const root = document.documentElement
   if (!raw) return
-  try {
-    const value = JSON.parse(raw)
-    value.primaryColor ? root.style.setProperty('--color-primary', value.primaryColor) : root.style.removeProperty('--color-primary')
-    value.textColor ? root.style.setProperty('--text-primary', value.textColor) : root.style.removeProperty('--text-primary')
-    value.bgColor ? root.style.setProperty('--bg-page', value.bgColor) : root.style.removeProperty('--bg-page')
-  } catch {}
+  const value = safeJsonParse(raw, null)
+  if (!value || typeof value !== 'object') {
+    safeLocalStorageRemove('personal-appearance')
+    return
+  }
+  value.primaryColor ? root.style.setProperty('--color-primary', value.primaryColor) : root.style.removeProperty('--color-primary')
+  value.textColor ? root.style.setProperty('--text-primary', value.textColor) : root.style.removeProperty('--text-primary')
+  value.bgColor ? root.style.setProperty('--bg-page', value.bgColor) : root.style.removeProperty('--bg-page')
 }
 
 function hasPerm(module) {
@@ -229,12 +247,8 @@ function getMenuOrderKey(group) {
 }
 
 function readMenuOrder(group) {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(getMenuOrderKey(group)) || '[]')
-    return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') : []
-  } catch {
-    return []
-  }
+  const parsed = safeJsonParse(safeLocalStorageGet(getMenuOrderKey(group), '[]'), [])
+  return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') : []
 }
 
 function applyMenuOrder(items, group) {
@@ -247,7 +261,7 @@ function applyMenuOrder(items, group) {
 }
 
 function saveMenuOrder(group, ids) {
-  localStorage.setItem(getMenuOrderKey(group), JSON.stringify(ids))
+  safeLocalStorageSet(getMenuOrderKey(group), JSON.stringify(ids))
   sidebarOrderVersion.value += 1
 }
 
@@ -299,8 +313,8 @@ async function fetchUserInfo() {
       isAdmin.value = json.user.role === 'super_admin' || json.user.role === 'admin'
       const hidden = json.user.ai_pet_enabled === 0
       const aiName = json.user.ai_name || '简尚小助手'
-      localStorage.setItem('ai-pet-hidden', hidden ? 'true' : 'false')
-      localStorage.setItem('ai-name', aiName)
+      safeLocalStorageSet('ai-pet-hidden', hidden ? 'true' : 'false')
+      safeLocalStorageSet('ai-name', aiName)
       window.dispatchEvent(new CustomEvent('ai-pet-settings', { detail: { hidden, aiName } }))
       if (!json.user.onboarding_done) {
         showOnboarding.value = true

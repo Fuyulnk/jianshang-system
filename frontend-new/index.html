@@ -6,7 +6,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>简尚系统</title>
     <script>
-      (function(){var t=localStorage.getItem('theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')})();
+      (function(){
+        var resetKeys = [
+          'theme',
+          'theme-mode',
+          'personal-appearance',
+          'ai-pet-size',
+          'ai-pet-pos',
+          'account-summary-mode',
+          'account-summary-month',
+          'token',
+          'user',
+          'remembered-auth-v1'
+        ];
+        function safeGet(key) {
+          try { return window.localStorage ? window.localStorage.getItem(key) : null; } catch (e) { return null; }
+        }
+        function safeRemove(key) {
+          try { if (window.localStorage) window.localStorage.removeItem(key); } catch (e) {}
+          try { if (window.sessionStorage) window.sessionStorage.removeItem(key); } catch (e) {}
+        }
+        function resetLocalState() {
+          for (var i = 0; i < resetKeys.length; i += 1) safeRemove(resetKeys[i]);
+          safeRemove('jianshang-session');
+        }
+        try {
+          var params = new URLSearchParams(window.location.search || '');
+          if (params.get('resetLocal') === '1') {
+            resetLocalState();
+            window.history.replaceState(null, '', '/');
+          }
+        } catch (e) {}
+        try {
+          var mode = safeGet('theme-mode');
+          var theme = safeGet('theme');
+          if (mode !== null && mode !== 'auto' && mode !== 'manual') safeRemove('theme-mode');
+          if (theme !== null && theme !== 'dark' && theme !== 'light') {
+            safeRemove('theme');
+            theme = null;
+          }
+          if (theme === 'dark' || (!theme && window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {
+          resetLocalState();
+          document.documentElement.classList.remove('dark');
+        }
+      })();
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

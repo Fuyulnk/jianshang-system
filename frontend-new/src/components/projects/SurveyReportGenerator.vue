@@ -1,5 +1,5 @@
 <script setup>
-import { getAuthToken } from '../../utils/authSession'
+import { getAuthToken, safeJsonParse, safeLocalStorageGet, safeLocalStorageRemove, safeLocalStorageSet } from '../../utils/authSession'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Check, Download, Picture, Printer, RefreshLeft } from '@element-plus/icons-vue'
@@ -136,7 +136,7 @@ function resetDraft() {
     solution: ''
   })
   images.value = []
-  localStorage.removeItem(STORAGE_KEY)
+  safeLocalStorageRemove(STORAGE_KEY)
 }
 
 async function fetchProjects() {
@@ -262,19 +262,15 @@ function toBase64DataUrl(text, mimeType) {
 }
 
 function saveDraft() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ form: { ...form }, images: images.value }))
-  } catch {}
+  safeLocalStorageSet(STORAGE_KEY, JSON.stringify({ form: { ...form }, images: images.value }))
 }
 
 function loadDraft() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return
-    const draft = JSON.parse(raw)
-    if (draft.form) Object.assign(form, draft.form)
-    if (Array.isArray(draft.images)) images.value = draft.images
-  } catch {}
+  const raw = safeLocalStorageGet(STORAGE_KEY, '')
+  if (!raw) return
+  const draft = safeJsonParse(raw, null)
+  if (draft?.form) Object.assign(form, draft.form)
+  if (Array.isArray(draft?.images)) images.value = draft.images
 }
 
 function buildExportHtml() {

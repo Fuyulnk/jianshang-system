@@ -8,15 +8,63 @@
       </div>
       <div class="head-actions">
         <input ref="fileInput" class="hidden-input" type="file" accept=".xlsx,.xls" @change="onImportFile" />
-        <el-button :disabled="!workbook" @click="toggleFullscreen">{{ fullscreen ? '退出全屏' : '全屏填表' }}</el-button>
-        <el-button :disabled="!workbook" @click="zoomOut">缩小</el-button>
-        <el-button :disabled="!workbook" @click="zoomIn">放大</el-button>
-        <el-button :disabled="!activeSheet || !canMergeSelection" @click="mergeSelectedCells">合并单元格</el-button>
-        <el-button :disabled="!activeSheet || !selectedRange" @click="unmergeSelectedCell">拆开单元格</el-button>
-        <el-button :disabled="!workbook" :loading="exporting" @click="exportWorkbook">导出原格式</el-button>
-        <el-button :disabled="!workbook" type="danger" plain @click="deleteWorkbook">删除</el-button>
-        <el-button type="primary" :loading="importing" @click="fileInput?.click()">导入入账登记表</el-button>
+        <div class="action-row action-row-search">
+          <el-input
+            v-model="searchKeyword"
+            class="ledger-search"
+            clearable
+            placeholder="搜索客户、金额、备注"
+            :disabled="!activeSheet"
+            @input="resetSearchCursor"
+            @keyup.enter="focusSearchMatch(1)"
+          />
+          <span v-if="searchKeyword" class="search-count">{{ searchMatchLabel }}</span>
+          <el-button :disabled="!searchMatches.length" @click="focusSearchMatch(-1)">上一个</el-button>
+          <el-button :disabled="!searchMatches.length" @click="focusSearchMatch(1)">下一个</el-button>
+          <el-checkbox v-model="filterToSearch" :disabled="!searchKeyword || !searchMatches.length" @change="resetSearchCursor">只看匹配行</el-checkbox>
+        </div>
+        <div class="action-row action-row-tools">
+          <el-button :disabled="!workbook" @click="toggleFullscreen">{{ fullscreen ? '退出全屏' : '全屏填表' }}</el-button>
+          <el-button :disabled="!workbook" @click="zoomOut">缩小</el-button>
+          <el-button :disabled="!workbook" @click="zoomIn">放大</el-button>
+          <el-popover placement="bottom-end" trigger="click" width="260" :disabled="!workbook">
+            <template #reference>
+              <el-button :disabled="!workbook">视图设置</el-button>
+            </template>
+            <div class="view-controls">
+              <label>
+                <span>行高</span>
+                <el-slider v-model="rowHeightScale" :min="0.8" :max="1.8" :step="0.05" />
+              </label>
+              <label>
+                <span>列宽</span>
+                <el-slider v-model="colWidthScale" :min="0.75" :max="1.8" :step="0.05" />
+              </label>
+            </div>
+          </el-popover>
+          <el-dropdown :disabled="!workbook" @command="handleToolbarCommand">
+            <el-button :disabled="!workbook">表格工具</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="merge" :disabled="!activeSheet || !canMergeSelection">合并单元格</el-dropdown-item>
+                <el-dropdown-item command="unmerge" :disabled="!activeSheet || !selectedRange">拆开单元格</el-dropdown-item>
+                <el-dropdown-item divided command="freeze-row">冻结首行</el-dropdown-item>
+                <el-dropdown-item command="freeze-col">冻结首列</el-dropdown-item>
+                <el-dropdown-item command="freeze-both">冻结首行首列</el-dropdown-item>
+                <el-dropdown-item command="freeze-selection" :disabled="!selectedRange">按选区冻结</el-dropdown-item>
+                <el-dropdown-item command="freeze-clear">取消冻结</el-dropdown-item>
+                <el-dropdown-item divided command="align-left">左对齐</el-dropdown-item>
+                <el-dropdown-item command="align-center">居中</el-dropdown-item>
+                <el-dropdown-item command="align-right">右对齐</el-dropdown-item>
+                <el-dropdown-item divided command="export">导出原格式</el-dropdown-item>
+                <el-dropdown-item command="delete">删除当前表</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-button type="primary" :loading="importing" @click="fileInput?.click()">导入入账登记表</el-button>
+        </div>
       </div>
+      <el-button v-if="fullscreen" class="fullscreen-exit" type="primary" @click="toggleFullscreen">退出全屏</el-button>
     </el-card>
 
     <div class="ledger-layout">
@@ -44,6 +92,7 @@
               <strong>{{ workbook?.title || '选择左侧表格' }}</strong>
               <span v-if="activeSheet">当前工作表：{{ activeSheet.name }}，右键单元格可备注</span>
               <span v-if="selectedRange" class="selection-hint">已选：{{ selectedRangeLabel }}</span>
+              <span v-if="freezeRows || freezeCols" class="selection-hint">冻结：{{ freezeLabel }}</span>
             </div>
             <el-tag v-if="activeSheet" type="info" size="small">显示前 {{ maxRows }} 行 / {{ maxCols }} 列</el-tag>
           </div>
@@ -69,7 +118,8 @@
                 v-for="col in visibleCols"
                 :key="`h-${col}`"
                 class="grid-col-header"
-                :style="{ transform: `translate(${cellLeft(col)}px, ${scrollState.top}px)`, width: `${colWidthPx}px`, height: `${headerHeightPx}px` }"
+                :class="{ frozen: isFrozenCol(col) }"
+                :style="{ transform: `translate(${positionedLeft(col)}px, ${scrollState.top}px)`, width: `${colWidthPx}px`, height: `${headerHeightPx}px` }"
               >
                 {{ colName(col) }}
               </div>
@@ -77,7 +127,8 @@
                 v-for="row in visibleRows"
                 :key="`r-${row}`"
                 class="grid-row-header"
-                :style="{ transform: `translate(${scrollState.left}px, ${cellTop(row)}px)`, width: `${rowHeaderWidthPx}px`, height: `${rowHeightPx}px` }"
+                :class="{ frozen: isFrozenRow(row) }"
+                :style="{ transform: `translate(${scrollState.left}px, ${positionedTop(row)}px)`, width: `${rowHeaderWidthPx}px`, height: `${rowHeightPx}px` }"
               >
                 {{ row }}
               </div>
@@ -88,11 +139,17 @@
                 :class="{
                   commented: Boolean(commentFor(item.row, item.col)),
                   selected: isItemSelected(item),
-                  merged: Boolean(item.merge)
+                  merged: Boolean(item.merge),
+                  'search-hit': isSearchHit(item.row, item.col),
+                  'search-active': isActiveSearchHit(item.row, item.col),
+                  'frozen-row': isFrozenRow(item.row),
+                  'frozen-col': isFrozenCol(item.col),
+                  'frozen-corner-cell': isFrozenRow(item.row) && isFrozenCol(item.col),
+                  [`align-${cellAlign}`]: true
                 }"
                 :title="commentFor(item.row, item.col) || ''"
                 :style="{
-                  transform: `translate(${cellLeft(item.col)}px, ${cellTop(item.row)}px)`,
+                  transform: `translate(${positionedLeft(item.col)}px, ${positionedTop(item.row)}px)`,
                   width: `${item.width}px`,
                   height: `${item.height}px`
                 }"
@@ -139,6 +196,14 @@ const importing = ref(false)
 const exporting = ref(false)
 const fullscreen = ref(false)
 const zoom = ref(1)
+const searchKeyword = ref('')
+const activeSearchIndex = ref(-1)
+const filterToSearch = ref(false)
+const freezeRows = ref(0)
+const freezeCols = ref(0)
+const rowHeightScale = ref(1)
+const colWidthScale = ref(1)
+const cellAlign = ref('left')
 const activeCacheKey = ref('')
 const detailCache = new Map()
 const maxRows = 160
@@ -167,27 +232,83 @@ const editingCell = ref('')
 function editCell(row, col) { editingCell.value = `${row}-${col}` }
 const selectedRange = ref(null)
 
-const rowHeightPx = computed(() => Math.round(baseRowHeight * zoom.value))
-const colWidthPx = computed(() => Math.round(baseColWidth * zoom.value))
+const rowHeightPx = computed(() => Math.round(baseRowHeight * zoom.value * rowHeightScale.value))
+const colWidthPx = computed(() => Math.round(baseColWidth * zoom.value * colWidthScale.value))
 const rowHeaderWidthPx = computed(() => Math.round(baseRowHeaderWidth * zoom.value))
 const headerHeightPx = computed(() => Math.round(baseHeaderHeight * zoom.value))
 const gridWidth = computed(() => rowHeaderWidthPx.value + dataRange.value.cols * colWidthPx.value)
-const gridHeight = computed(() => headerHeightPx.value + dataRange.value.rows * rowHeightPx.value)
+const gridHeight = computed(() => headerHeightPx.value + tableRows.value.length * rowHeightPx.value)
+
+const normalizedSearchKeyword = computed(() => searchKeyword.value.trim().toLowerCase())
+const searchMatches = computed(() => {
+  const keyword = normalizedSearchKeyword.value
+  if (!keyword) return []
+  const matches = []
+  const seen = new Set()
+  const pushMatch = (row, col) => {
+    const key = `${row}:${col}`
+    if (seen.has(key)) return
+    seen.add(key)
+    matches.push({ row: Number(row), col: Number(col), key })
+  }
+  for (const cell of cells.value) {
+    const text = `${displayCellValue(cell)} ${cell.address || ''}`.toLowerCase()
+    if (text.includes(keyword)) pushMatch(cell.row_index, cell.col_index)
+  }
+  for (const comment of comments.value) {
+    const text = `${comment.comment_text || ''} ${comment.address || ''}`.toLowerCase()
+    if (text.includes(keyword)) pushMatch(comment.row_index, comment.col_index)
+  }
+  return matches.sort((a, b) => a.row - b.row || a.col - b.col)
+})
+const searchMatchSet = computed(() => new Set(searchMatches.value.map(item => item.key)))
+const currentSearchMatch = computed(() => {
+  if (!searchMatches.value.length) return null
+  const index = activeSearchIndex.value >= 0 ? activeSearchIndex.value : 0
+  return searchMatches.value[index % searchMatches.value.length] || null
+})
+const searchMatchLabel = computed(() => {
+  if (!normalizedSearchKeyword.value) return ''
+  if (!searchMatches.value.length) return '0 项'
+  const index = activeSearchIndex.value >= 0 ? activeSearchIndex.value + 1 : 1
+  return `${index}/${searchMatches.value.length} 项`
+})
+const matchedRows = computed(() => [...new Set(searchMatches.value.map(item => item.row))].sort((a, b) => a - b))
+const tableRows = computed(() => {
+  if (filterToSearch.value && normalizedSearchKeyword.value && matchedRows.value.length) return matchedRows.value
+  return rows.value
+})
+const rowPositionMap = computed(() => {
+  const map = new Map()
+  tableRows.value.forEach((row, index) => map.set(row, index + 1))
+  return map
+})
+const frozenRows = computed(() => tableRows.value.slice(0, Math.min(freezeRows.value, tableRows.value.length)))
+const frozenCols = computed(() => columns.value.slice(0, Math.min(freezeCols.value, columns.value.length)))
+const freezeLabel = computed(() => {
+  if (!freezeRows.value && !freezeCols.value) return '未冻结'
+  const parts = []
+  if (freezeRows.value) parts.push(`前 ${freezeRows.value} 行`)
+  if (freezeCols.value) parts.push(`前 ${freezeCols.value} 列`)
+  return parts.join('、')
+})
 
 const visibleBounds = computed(() => {
   const rowStart = Math.max(1, Math.floor(Math.max(0, scrollState.top - headerHeightPx.value) / rowHeightPx.value) + 1 - overscan)
-  const rowEnd = Math.min(dataRange.value.rows, Math.ceil(Math.max(0, scrollState.top + scrollState.height - headerHeightPx.value) / rowHeightPx.value) + overscan)
+  const rowEnd = Math.min(tableRows.value.length, Math.ceil(Math.max(0, scrollState.top + scrollState.height - headerHeightPx.value) / rowHeightPx.value) + overscan)
   const colStart = Math.max(1, Math.floor(Math.max(0, scrollState.left - rowHeaderWidthPx.value) / colWidthPx.value) + 1 - overscan)
   const colEnd = Math.min(dataRange.value.cols, Math.ceil(Math.max(0, scrollState.left + scrollState.width - rowHeaderWidthPx.value) / colWidthPx.value) + overscan)
   return { rowStart, rowEnd, colStart, colEnd }
 })
 const visibleRows = computed(() => {
   const { rowStart, rowEnd } = visibleBounds.value
-  return Array.from({ length: Math.max(0, rowEnd - rowStart + 1) }, (_, i) => rowStart + i)
+  const rowsInView = tableRows.value.slice(rowStart - 1, rowEnd)
+  return unionNumbers(rowsInView, frozenRows.value)
 })
 const visibleCols = computed(() => {
   const { colStart, colEnd } = visibleBounds.value
-  return Array.from({ length: Math.max(0, colEnd - colStart + 1) }, (_, i) => colStart + i)
+  const colsInView = Array.from({ length: Math.max(0, colEnd - colStart + 1) }, (_, i) => colStart + i)
+  return unionNumbers(colsInView, frozenCols.value)
 })
 
 const cellMap = computed(() => {
@@ -220,20 +341,15 @@ const coveredCellSet = computed(() => {
 const visibleCellItems = computed(() => {
   const bounds = visibleBounds.value
   const items = new Map()
-  for (let row = bounds.rowStart; row <= bounds.rowEnd; row++) {
-    for (let col = bounds.colStart; col <= bounds.colEnd; col++) {
+  for (const row of visibleRows.value) {
+    for (const col of visibleCols.value) {
       if (coveredCellSet.value.has(`${row}:${col}`)) continue
       const merge = mergeMasterMap.value.get(`${row}:${col}`)
       items.set(`${row}:${col}`, makeCellItem(row, col, merge))
     }
   }
   for (const merge of merges.value) {
-    if (!rangesOverlap(
-      Number(merge.start_row), Number(merge.end_row),
-      bounds.rowStart, bounds.rowEnd,
-      Number(merge.start_col), Number(merge.end_col),
-      bounds.colStart, bounds.colEnd
-    )) continue
+    if (!isMergeVisible(merge, bounds)) continue
     const key = `${merge.start_row}:${merge.start_col}`
     if (!items.has(key)) items.set(key, makeCellItem(Number(merge.start_row), Number(merge.start_col), merge))
   }
@@ -292,6 +408,7 @@ function applyWorkbookDetail(detail, cacheKey = '') {
   activeCacheKey.value = cacheKey
   selectedRange.value = null
   editingCell.value = ''
+  activeSearchIndex.value = -1
   nextTick(updateGridViewport)
 }
 
@@ -366,7 +483,7 @@ function makeCellItem(row, col, merge = null) {
     col,
     merge,
     width: merge ? (Number(merge.end_col) - Number(merge.start_col) + 1) * colWidthPx.value : colWidthPx.value,
-    height: merge ? (Number(merge.end_row) - Number(merge.start_row) + 1) * rowHeightPx.value : rowHeightPx.value
+    height: merge ? mergeHeight(merge) : rowHeightPx.value
   }
 }
 
@@ -374,12 +491,53 @@ function rangesOverlap(aStartRow, aEndRow, bStartRow, bEndRow, aStartCol, aEndCo
   return !(aEndRow < bStartRow || aStartRow > bEndRow || aEndCol < bStartCol || aStartCol > bEndCol)
 }
 
+function unionNumbers(primary = [], pinned = []) {
+  return [...new Set([...pinned, ...primary].map(Number).filter(Boolean))].sort((a, b) => a - b)
+}
+
+function isMergeVisible(merge, bounds) {
+  const startRow = Number(merge.start_row)
+  const endRow = Number(merge.end_row)
+  const startCol = Number(merge.start_col)
+  const endCol = Number(merge.end_col)
+  if (!rowPositionMap.value.has(startRow)) return false
+  const hasVisibleRow = visibleRows.value.some(row => row >= startRow && row <= endRow)
+  const hasVisibleCol = visibleCols.value.some(col => col >= startCol && col <= endCol)
+  if (hasVisibleRow && hasVisibleCol) return true
+  return rangesOverlap(startRow, endRow, bounds.rowStart, bounds.rowEnd, startCol, endCol, bounds.colStart, bounds.colEnd)
+}
+
+function mergeHeight(merge) {
+  const start = rowPositionMap.value.get(Number(merge.start_row))
+  const end = rowPositionMap.value.get(Number(merge.end_row))
+  if (!start || !end) return rowHeightPx.value
+  return Math.max(1, end - start + 1) * rowHeightPx.value
+}
+
 function cellLeft(col) {
   return rowHeaderWidthPx.value + (Number(col) - 1) * colWidthPx.value
 }
 
 function cellTop(row) {
-  return headerHeightPx.value + (Number(row) - 1) * rowHeightPx.value
+  const position = rowPositionMap.value.get(Number(row)) || Number(row)
+  return headerHeightPx.value + (position - 1) * rowHeightPx.value
+}
+
+function isFrozenRow(row) {
+  const position = rowPositionMap.value.get(Number(row))
+  return Boolean(position && freezeRows.value && position <= freezeRows.value)
+}
+
+function isFrozenCol(col) {
+  return Boolean(freezeCols.value && Number(col) <= freezeCols.value)
+}
+
+function positionedLeft(col) {
+  return cellLeft(col) + (isFrozenCol(col) ? scrollState.left : 0)
+}
+
+function positionedTop(row) {
+  return cellTop(row) + (isFrozenRow(row) ? scrollState.top : 0)
 }
 
 function onGridScroll(event) {
@@ -484,9 +642,14 @@ function cellFor(row, col) {
 
 function displayCellValue(cell) {
   const text = String(cell?.value ?? '')
-  const dateMatch = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/)
-  if (!dateMatch) return text
-  return `${dateMatch[1]}年${dateMatch[2].padStart(2, '0')}月${dateMatch[3].padStart(2, '0')}日`
+  const fullDate = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/)
+  if (fullDate) return `${Number(fullDate[1])}/${Number(fullDate[2])}/${Number(fullDate[3])}`
+  const shortDate = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/)
+  if (shortDate) {
+    const year = Number(shortDate[3]) >= 70 ? 1900 + Number(shortDate[3]) : 2000 + Number(shortDate[3])
+    return `${year}/${Number(shortDate[1])}/${Number(shortDate[2])}`
+  }
+  return text
 }
 
 function commentFor(row, col) {
@@ -562,7 +725,10 @@ async function requestJson(url, body = null, method = 'GET') {
   } catch {
     throw new Error(text.slice(0, 120) || '服务器返回异常')
   }
-  if (!res.ok || !json.success) throw new Error(json.message || `请求失败（HTTP ${res.status}）`)
+  if (!res.ok || !json.success) {
+    if (res.status === 404) throw new Error(json.message || '当前服务器还没有这个接口，请同步后端并重启服务')
+    throw new Error(json.message || `请求失败（HTTP ${res.status}）`)
+  }
   return json
 }
 
@@ -616,6 +782,87 @@ function toggleFullscreen() {
   nextTick(updateGridViewport)
 }
 
+function resetSearchCursor() {
+  activeSearchIndex.value = searchMatches.value.length ? 0 : -1
+  if (filterToSearch.value && !normalizedSearchKeyword.value) filterToSearch.value = false
+  nextTick(updateGridViewport)
+}
+
+function focusSearchMatch(step = 1) {
+  if (!searchMatches.value.length) return
+  const total = searchMatches.value.length
+  const current = activeSearchIndex.value >= 0 ? activeSearchIndex.value : (step > 0 ? -1 : 0)
+  activeSearchIndex.value = (current + step + total) % total
+  const match = searchMatches.value[activeSearchIndex.value]
+  selectedRange.value = normalizeRange(match.row, match.col, match.row, match.col)
+  nextTick(() => scrollToCell(match.row, match.col))
+}
+
+function scrollToCell(row, col) {
+  const el = gridViewport.value
+  if (!el) return
+  const top = Math.max(0, cellTop(row) - headerHeightPx.value - rowHeightPx.value)
+  const left = Math.max(0, cellLeft(col) - rowHeaderWidthPx.value - colWidthPx.value)
+  el.scrollTo({ top, left, behavior: 'smooth' })
+}
+
+function isSearchHit(row, col) {
+  return Boolean(normalizedSearchKeyword.value && searchMatchSet.value.has(`${row}:${col}`))
+}
+
+function isActiveSearchHit(row, col) {
+  const match = currentSearchMatch.value
+  return Boolean(match && Number(match.row) === Number(row) && Number(match.col) === Number(col))
+}
+
+function handleToolbarCommand(command) {
+  const range = selectedRange.value
+  switch (command) {
+    case 'merge':
+      mergeSelectedCells()
+      break
+    case 'unmerge':
+      unmergeSelectedCell()
+      break
+    case 'freeze-row':
+      freezeRows.value = 1
+      freezeCols.value = 0
+      break
+    case 'freeze-col':
+      freezeRows.value = 0
+      freezeCols.value = 1
+      break
+    case 'freeze-both':
+      freezeRows.value = 1
+      freezeCols.value = 1
+      break
+    case 'freeze-selection':
+      freezeRows.value = range ? Math.max(0, range.startRow - 1) : 0
+      freezeCols.value = range ? Math.max(0, range.startCol - 1) : 0
+      break
+    case 'freeze-clear':
+      freezeRows.value = 0
+      freezeCols.value = 0
+      break
+    case 'align-left':
+      cellAlign.value = 'left'
+      break
+    case 'align-center':
+      cellAlign.value = 'center'
+      break
+    case 'align-right':
+      cellAlign.value = 'right'
+      break
+    case 'export':
+      exportWorkbook()
+      break
+    case 'delete':
+      deleteWorkbook()
+      break
+  }
+  nextTick(updateGridViewport)
+}
+
 function colName(index) {
   let n = Number(index)
   let name = ''
@@ -646,21 +893,21 @@ onUnmounted(() => {
 .ledger-fullscreen {
   position: fixed;
   inset: 0;
-  z-index: 3000;
+  z-index: 1000;
   padding: 10px 12px;
   overflow: hidden;
   background: var(--bg-page);
 }
 .ledger-fullscreen .ledger-layout {
   grid-template-columns: 220px minmax(0, 1fr);
-  height: calc(100dvh - 88px);
+  height: calc(100dvh - 94px);
 }
 .ledger-fullscreen .sheet-card,
 .ledger-fullscreen .workbook-list {
   min-height: 0;
 }
 .ledger-fullscreen .ledger-grid-wrap {
-  height: calc(100dvh - 190px);
+  height: calc(100dvh - 206px);
 }
 .ledger-fullscreen .ledger-head :deep(.el-card__body) {
   align-items: flex-start;
@@ -669,10 +916,9 @@ onUnmounted(() => {
   display: none;
 }
 .ledger-fullscreen .head-actions {
-  max-width: min(760px, 62vw);
-  max-height: 42px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  max-width: min(980px, 70vw);
+  max-height: none;
+  overflow: visible;
   flex-wrap: nowrap;
   padding-bottom: 2px;
 }
@@ -702,10 +948,45 @@ onUnmounted(() => {
   display: none;
 }
 .head-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  justify-items: end;
   gap: 8px;
+}
+.action-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.action-row-tools {
+  padding-top: 2px;
+}
+.ledger-search {
+  width: 240px;
+}
+.search-count {
+  min-width: 54px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+.view-controls {
+  display: grid;
+  gap: 10px;
+}
+.view-controls label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.fullscreen-exit {
+  position: fixed;
+  right: 28px;
+  bottom: 24px;
+  z-index: 1100;
+  box-shadow: 0 10px 28px rgba(37, 99, 235, 0.22);
 }
 .ledger-layout {
   display: grid;
@@ -786,7 +1067,7 @@ onUnmounted(() => {
   transform-origin: top left;
 }
 .grid-corner {
-  z-index: 8;
+  z-index: 20;
   width: calc(56px * var(--ledger-zoom, 1));
   height: calc(30px * var(--ledger-zoom, 1));
   background: color-mix(in srgb, var(--bg-page) 88%, var(--bg-card));
@@ -804,14 +1085,42 @@ onUnmounted(() => {
 .grid-row-header {
   z-index: 7;
 }
+.grid-col-header.frozen {
+  z-index: 18;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+.grid-row-header.frozen {
+  z-index: 19;
+  box-shadow: 2px 0 8px rgba(15, 23, 42, 0.08);
+}
 .ledger-cell {
   z-index: 1;
   color: var(--text-primary);
 }
+.ledger-cell.frozen-row {
+  z-index: 12;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+.ledger-cell.frozen-col {
+  z-index: 13;
+  box-shadow: 2px 0 8px rgba(15, 23, 42, 0.06);
+}
+.ledger-cell.frozen-corner-cell {
+  z-index: 14;
+}
 .ledger-cell.selected {
-  z-index: 3;
+  z-index: 16;
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 62%, transparent);
   background: color-mix(in srgb, var(--color-primary) 6%, var(--bg-card));
+}
+.ledger-cell.search-hit {
+  background: color-mix(in srgb, #facc15 22%, var(--bg-card));
+}
+.ledger-cell.search-active {
+  z-index: 17;
+  box-shadow:
+    inset 0 0 0 2px #f59e0b,
+    0 0 0 2px rgba(245, 158, 11, 0.18);
 }
 .ledger-cell.merged {
   background: color-mix(in srgb, var(--bg-card) 92%, #dbeafe);
@@ -826,6 +1135,14 @@ onUnmounted(() => {
   cursor: default;
   white-space: pre-wrap;
   overflow: hidden;
+}
+.ledger-cell.align-center .cell-text,
+.ledger-cell.align-center textarea {
+  text-align: center;
+}
+.ledger-cell.align-right .cell-text,
+.ledger-cell.align-right textarea {
+  text-align: right;
 }
 .ledger-cell textarea {
   width: 100%;
@@ -868,6 +1185,9 @@ onUnmounted(() => {
   }
   .ledger-layout {
     grid-template-columns: 1fr;
+  }
+  .ledger-search {
+    width: min(100%, 280px);
   }
 }
 </style>

@@ -85,7 +85,7 @@
 </template>
 
 <script setup>
-import { getAuthToken } from '../utils/authSession'
+import { getAuthToken, safeJsonParse, safeLocalStorageGet, safeLocalStorageSet } from '../utils/authSession'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Hide, Refresh, Close } from '@element-plus/icons-vue'
 
@@ -141,25 +141,23 @@ function getClampedBubbleSize(size = bubbleSize.value) {
 
 // ====== 从 localStorage 恢复 ======
 function loadState() {
-  try {
-    const pos = localStorage.getItem('ai-pet-pos')
-    if (pos) {
-      const [x, y] = pos.split(',').map(Number)
-      if (!isNaN(x) && !isNaN(y)) { charX.value = x; charY.value = y }
+  const pos = safeLocalStorageGet('ai-pet-pos', '')
+  if (pos) {
+    const [x, y] = pos.split(',').map(Number)
+    if (!isNaN(x) && !isNaN(y)) { charX.value = x; charY.value = y }
+  }
+  const ch = safeLocalStorageGet('ai-pet-char')
+  if (ch !== null) currentChar.value = parseInt(ch) || 0
+  const h = safeLocalStorageGet('ai-pet-hidden')
+  if (h === 'true') hidden.value = true
+  aiName.value = safeLocalStorageGet('ai-name', '简尚小助手') || '简尚小助手'
+  const storedSize = safeLocalStorageGet('ai-pet-size', '')
+  if (storedSize) {
+    const parsed = safeJsonParse(storedSize, null)
+    if (Number.isFinite(parsed?.width) && Number.isFinite(parsed?.height)) {
+      bubbleSize.value = getClampedBubbleSize(parsed)
     }
-    const ch = localStorage.getItem('ai-pet-char')
-    if (ch !== null) currentChar.value = parseInt(ch) || 0
-    const h = localStorage.getItem('ai-pet-hidden')
-    if (h === 'true') hidden.value = true
-    aiName.value = localStorage.getItem('ai-name') || '简尚小助手'
-    const storedSize = localStorage.getItem('ai-pet-size')
-    if (storedSize) {
-      const parsed = JSON.parse(storedSize)
-      if (Number.isFinite(parsed.width) && Number.isFinite(parsed.height)) {
-        bubbleSize.value = getClampedBubbleSize(parsed)
-      }
-    }
-  } catch {}
+  }
 }
 
 function applySettings(e) {
@@ -169,11 +167,11 @@ function applySettings(e) {
 }
 
 function savePos() {
-  localStorage.setItem('ai-pet-pos', `${charX.value},${charY.value}`)
+  safeLocalStorageSet('ai-pet-pos', `${charX.value},${charY.value}`)
 }
 
 function saveBubbleSize() {
-  localStorage.setItem('ai-pet-size', JSON.stringify(bubbleSize.value))
+  safeLocalStorageSet('ai-pet-size', JSON.stringify(bubbleSize.value))
 }
 
 // ====== 宠物定位 ======
@@ -451,18 +449,18 @@ function hidePet() {
   hidden.value = true
   chatOpen.value = false
   menuShow.value = false
-  localStorage.setItem('ai-pet-hidden', 'true')
+  safeLocalStorageSet('ai-pet-hidden', 'true')
 }
 
 function showPet() {
   hidden.value = false
   hiddenTrigger.value = false
-  localStorage.setItem('ai-pet-hidden', 'false')
+  safeLocalStorageSet('ai-pet-hidden', 'false')
 }
 
 function cycleChar() {
   currentChar.value = (currentChar.value + 1) % characters.length
-  localStorage.setItem('ai-pet-char', String(currentChar.value))
+  safeLocalStorageSet('ai-pet-char', String(currentChar.value))
   menuShow.value = false
 }
 

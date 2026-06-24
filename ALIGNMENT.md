@@ -178,6 +178,41 @@
 
 ## 对接记录
 
+### 2026-06-24 Codex：P0 白屏恢复机制与本地存储安全化
+
+- 任务：排查并修复财务账号点击日/月主题后持续白屏，刷新或重开浏览器仍无法进入系统的问题。
+- 判断：
+  - token 损坏通常会触发路由守卫清 session 并回登录页，不应表现为纯白。
+  - 更符合症状的是前端启动阶段读取浏览器本地状态时抛错，尤其 `index.html` 里 Vue 挂载前的内联主题脚本直接读 `localStorage.getItem('theme')`，会导致 Vue 根本没机会显示错误或自救。
+- 修改文件：
+  - `frontend-new/index.html`：内联主题脚本改为安全读写；支持 `?resetLocal=1` 清理主题、外观、旧 token/session、AI 桌宠状态后回登录页。
+  - `frontend-new/src/utils/browserRecovery.js`：新增白屏恢复工具，监听全局 error/unhandledrejection，显示中文恢复页和“恢复并重新登录”按钮。
+  - `frontend-new/src/main.js`：安装白屏恢复兜底；Vue 挂载失败时显示恢复页。
+  - `frontend-new/src/components/AiPetWidget.vue`、`OnboardingWizard.vue`、`views/accounts/AccountList.vue`、`components/projects/SystemSheetTable.vue`、`components/projects/SurveyReportGenerator.vue`：本地存储读写改为安全工具，避免组件级白屏。
+- 验证：
+  - `rg` 确认 `frontend-new/src` 内不再有裸 `localStorage.getItem/setItem/removeItem` 或 `sessionStorage.getItem/setItem/removeItem`。
+  - `npm --prefix frontend-new run build` 成功。
+- 注意事项：
+  - 本轮未提交、未上传服务器。
+  - 线上两个财务账号需要部署这版前端后恢复；若仍白屏，可让他们打开 `http://8.135.8.37:3000/?resetLocal=1` 强制清理本浏览器简尚本地状态。
+
+### 2026-06-24 Codex：入账登记表工具栏增强 + 主题白屏防护
+
+- 任务：按用户要求补入账登记表冻结、搜索筛选、行高列宽、居中、全屏退出按钮、日期显示格式，并修复日/月主题切换可能导致 Windows/新账号白屏的 P0 风险。
+- 修改文件：
+  - `frontend-new/src/views/finance/FinanceLedger.vue`：工具栏改为搜索 + 视图设置 + 表格工具；新增搜索定位、只看匹配行、冻结首行/首列/按选区冻结、行高/列宽滑块、左/中/右对齐；全屏模式新增固定“退出全屏”按钮；日期显示从 `1/6/25` 转为 `2025/1/6`。
+  - `frontend-new/src/utils/authSession.js`：导出安全 localStorage 读写和 JSON parse 工具。
+  - `frontend-new/src/layouts/MainLayout.vue`：主题切换、自动主题、个人外观、侧栏顺序和 AI 偏好同步改用安全存储，避免坏本地数据导致刷新后持续白屏。
+  - `frontend-new/src/views/Login.vue`：登录页主题和记住账号逻辑改用安全存储。
+  - `frontend-new/src/views/system/SystemSettings.vue`：个性化外观保存/读取/重置改用安全存储。
+- 验证：
+  - `npm --prefix frontend-new run build` 成功。
+  - `rg` 确认主题和 `personal-appearance` 相关直接 `localStorage.getItem/setItem/removeItem` 风险点已清理。
+- 注意事项：
+  - 本轮未提交、未上传服务器。
+  - 未做线上登录冒烟检查；原因是用户当前要求先完成本地代码修复，且未要求部署。
+  - 线上截图里的合并/拆开 404 不是新功能逻辑问题；本地后端已有 `/api/finance/ledger/merges`，线上若仍 404，需要同步后端代码并重启 PM2。
+
 ### 2026-06-24 Codex：入账登记表合并单元格 + 虚拟网格优化
 
 - 任务：给入账登记表补合并/拆开单元格能力，并优化全表填写模式顶部按钮压缩和表格滚动性能。

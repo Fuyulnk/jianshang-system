@@ -138,7 +138,7 @@
 </template>
 
 <script setup>
-import { getAuthToken } from '../../utils/authSession'
+import { getAuthToken, safeLocalStorageGet, safeLocalStorageSet } from '../../utils/authSession'
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -157,8 +157,8 @@ const importInput = ref(null)
 const addForm = ref({ name: '', type: 'personal', initial_balance: 0, current_balance: 0 })
 const editForm = ref({ id: null, name: '', type: 'personal', initial_balance: 0, current_balance: 0 })
 const currentMonth = getCurrentMonth()
-const summaryMode = ref(localStorage.getItem(STORAGE_MODE_KEY) || 'month')
-const selectedMonth = ref(localStorage.getItem(STORAGE_MONTH_KEY) || currentMonth)
+const summaryMode = ref(safeLocalStorageGet(STORAGE_MODE_KEY, 'month') || 'month')
+const selectedMonth = ref(safeLocalStorageGet(STORAGE_MONTH_KEY, currentMonth) || currentMonth)
 
 const displayList = computed(() => list.value.map(account => ({
   ...account,
@@ -375,8 +375,8 @@ function getCurrentMonth() {
 
 watch([summaryMode, selectedMonth], () => {
   if (!['month', 'all'].includes(summaryMode.value)) summaryMode.value = 'month'
-  localStorage.setItem(STORAGE_MODE_KEY, summaryMode.value)
-  localStorage.setItem(STORAGE_MONTH_KEY, selectedMonth.value)
+  safeLocalStorageSet(STORAGE_MODE_KEY, summaryMode.value)
+  safeLocalStorageSet(STORAGE_MONTH_KEY, selectedMonth.value)
   fetchSummary()
 }, { immediate: true })
 

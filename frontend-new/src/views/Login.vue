@@ -4,7 +4,11 @@ import {
   setAuthToken,
   rememberAuthToken,
   clearRememberedAuth,
-  clearAuthSession
+  clearAuthSession,
+  safeJsonParse,
+  safeLocalStorageGet,
+  safeLocalStorageRemove,
+  safeLocalStorageSet
 } from '../utils/authSession'
 import { toDepartmentCascaderOptions } from '../utils/orgOptions'
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -118,8 +122,8 @@ onMounted(async () => {
 })
 
 function initTheme() {
-  const modeValue = localStorage.getItem('theme-mode') || 'auto'
-  const stored = localStorage.getItem('theme')
+  const modeValue = safeLocalStorageGet('theme-mode', 'auto') === 'manual' ? 'manual' : 'auto'
+  const stored = safeLocalStorageGet('theme', '')
   if (modeValue === 'manual' && (stored === 'dark' || stored === 'light')) {
     applyTheme(stored === 'dark')
   } else {
@@ -134,12 +138,12 @@ function applyTheme(dark) {
 }
 
 function restoreLoginPreference() {
-  const savedRememberAccount = localStorage.getItem('remember-account')
+  const savedRememberAccount = safeLocalStorageGet('remember-account')
   rememberAccount.value = savedRememberAccount !== 'false'
-  rememberMe.value = localStorage.getItem('remember-login') === 'true'
+  rememberMe.value = safeLocalStorageGet('remember-login') === 'true'
   accountHistory.value = loadAccountHistory()
   if (rememberAccount.value) {
-    form.username = localStorage.getItem('saved-username') || accountHistory.value[0] || ''
+    form.username = safeLocalStorageGet('saved-username', '') || accountHistory.value[0] || ''
   }
 }
 
@@ -176,27 +180,23 @@ async function loadOrgOptions() {
 
 function saveLoginPreference(username) {
   const cleanUsername = String(username || '').trim()
-  localStorage.setItem('remember-account', rememberAccount.value ? 'true' : 'false')
-  localStorage.setItem('remember-login', rememberMe.value ? 'true' : 'false')
+  safeLocalStorageSet('remember-account', rememberAccount.value ? 'true' : 'false')
+  safeLocalStorageSet('remember-login', rememberMe.value ? 'true' : 'false')
   if (rememberAccount.value && cleanUsername) {
     const next = [cleanUsername, ...accountHistory.value.filter(item => item !== cleanUsername)].slice(0, 8)
     accountHistory.value = next
-    localStorage.setItem('saved-username', cleanUsername)
-    localStorage.setItem('saved-accounts', JSON.stringify(next))
+    safeLocalStorageSet('saved-username', cleanUsername)
+    safeLocalStorageSet('saved-accounts', JSON.stringify(next))
   } else {
-    localStorage.removeItem('saved-username')
+    safeLocalStorageRemove('saved-username')
   }
 }
 
 function loadAccountHistory() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem('saved-accounts') || '[]')
-    const legacy = localStorage.getItem('saved-username') || ''
-    return [...new Set([legacy, ...parsed].map(item => String(item || '').trim()).filter(Boolean))].slice(0, 8)
-  } catch {
-    const legacy = localStorage.getItem('saved-username') || ''
-    return legacy ? [legacy] : []
-  }
+  const parsed = safeJsonParse(safeLocalStorageGet('saved-accounts', '[]'), [])
+  const legacy = safeLocalStorageGet('saved-username', '') || ''
+  const list = Array.isArray(parsed) ? parsed : []
+  return [...new Set([legacy, ...list].map(item => String(item || '').trim()).filter(Boolean))].slice(0, 8)
 }
 
 function queryAccountHistory(query, callback) {
@@ -215,11 +215,11 @@ function selectAccount(item) {
 function removeSavedAccount(username) {
   const target = String(username || '').trim()
   accountHistory.value = accountHistory.value.filter(item => item !== target)
-  localStorage.setItem('saved-accounts', JSON.stringify(accountHistory.value))
-  if (localStorage.getItem('saved-username') === target) {
+  safeLocalStorageSet('saved-accounts', JSON.stringify(accountHistory.value))
+  if (safeLocalStorageGet('saved-username', '') === target) {
     const next = accountHistory.value[0] || ''
-    if (next) localStorage.setItem('saved-username', next)
-    else localStorage.removeItem('saved-username')
+    if (next) safeLocalStorageSet('saved-username', next)
+    else safeLocalStorageRemove('saved-username')
   }
   if (form.username === target) {
     form.username = accountHistory.value[0] || ''
