@@ -233,6 +233,21 @@ function stepFinanceLedgerTables(db) {
         updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
         UNIQUE(sheet_id, row_index, col_index)
       );
+      CREATE TABLE IF NOT EXISTS finance_ledger_merges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workbook_id INTEGER NOT NULL,
+        sheet_id INTEGER NOT NULL,
+        start_row INTEGER NOT NULL,
+        start_col INTEGER NOT NULL,
+        end_row INTEGER NOT NULL,
+        end_col INTEGER NOT NULL,
+        address TEXT DEFAULT '',
+        created_by INTEGER DEFAULT 0,
+        updated_by INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        UNIQUE(sheet_id, start_row, start_col)
+      );
       CREATE TABLE IF NOT EXISTS finance_ledger_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         workbook_id INTEGER NOT NULL,
@@ -246,6 +261,7 @@ function stepFinanceLedgerTables(db) {
       );
       CREATE INDEX IF NOT EXISTS idx_finance_ledger_cells_sheet ON finance_ledger_cells(sheet_id, row_index, col_index);
       CREATE INDEX IF NOT EXISTS idx_finance_ledger_comments_sheet ON finance_ledger_comments(sheet_id, row_index, col_index);
+      CREATE INDEX IF NOT EXISTS idx_finance_ledger_merges_sheet ON finance_ledger_merges(sheet_id, start_row, start_col);
     `)
   } catch {}
   const workbookCols = ["source_file_path TEXT DEFAULT ''"]
@@ -274,6 +290,17 @@ function stepFinanceLedgerTables(db) {
   addColumns(db, 'finance_ledger_workbooks', workbookCols)
   addColumns(db, 'finance_ledger_cells', cellCols)
   addColumns(db, 'finance_ledger_comments', commentCols)
+  addColumns(db, 'finance_ledger_merges', [
+    'workbook_id INTEGER DEFAULT 0',
+    'sheet_id INTEGER DEFAULT 0',
+    'start_row INTEGER DEFAULT 0',
+    'start_col INTEGER DEFAULT 0',
+    'end_row INTEGER DEFAULT 0',
+    'end_col INTEGER DEFAULT 0',
+    "address TEXT DEFAULT ''",
+    'created_by INTEGER DEFAULT 0',
+    'updated_by INTEGER DEFAULT 0'
+  ])
   addColumns(db, 'finance_ledger_logs', logCols)
 }
 
@@ -391,6 +418,7 @@ function assertV2SchemaShape(db) {
     material_losses: ['project_id', 'material_request_id', 'quantity'],
     finance_ledger_cells: ['address', 'value', 'raw_value', 'formula', 'number_format', 'updated_by'],
     finance_ledger_comments: ['workbook_id', 'sheet_id', 'row_index', 'col_index', 'address', 'updated_by'],
+    finance_ledger_merges: ['workbook_id', 'sheet_id', 'start_row', 'start_col', 'end_row', 'end_col', 'address', 'updated_by'],
     finance_ledger_logs: ['sheet_id', 'address', 'old_value', 'new_value'],
     ai_tool_registry: ['tool_name', 'label', 'tier', 'parameter_schema', 'enabled'],
     ai_agents: ['key', 'purpose', 'scenario_type', 'base_prompt', 'is_default'],

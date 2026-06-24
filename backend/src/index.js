@@ -290,6 +290,21 @@ try {
       updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
       UNIQUE(sheet_id, row_index, col_index)
     );
+    CREATE TABLE IF NOT EXISTS finance_ledger_merges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workbook_id INTEGER NOT NULL,
+      sheet_id INTEGER NOT NULL,
+      start_row INTEGER NOT NULL,
+      start_col INTEGER NOT NULL,
+      end_row INTEGER NOT NULL,
+      end_col INTEGER NOT NULL,
+      address TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      updated_by INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(sheet_id, start_row, start_col)
+    );
     CREATE TABLE IF NOT EXISTS finance_ledger_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       workbook_id INTEGER NOT NULL,
@@ -303,6 +318,7 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_finance_ledger_cells_sheet ON finance_ledger_cells(sheet_id, row_index, col_index);
     CREATE INDEX IF NOT EXISTS idx_finance_ledger_comments_sheet ON finance_ledger_comments(sheet_id, row_index, col_index);
+    CREATE INDEX IF NOT EXISTS idx_finance_ledger_merges_sheet ON finance_ledger_merges(sheet_id, start_row, start_col);
 
   `)
   try { db.exec("ALTER TABLE finance_ledger_workbooks ADD COLUMN source_file_path TEXT DEFAULT ''") } catch {}

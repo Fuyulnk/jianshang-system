@@ -105,6 +105,7 @@
 - `handoff/2026-06-18-database-framework-api-v1.md`：数据库框架与接口整理 V1 对接，记录数据域、迁移记录、事实服务、AI 读取口、固定模板导出和 V2 建议。
 - `handoff/2026-06-18-original-template-export-v1.md`：原表格格式导出 V1 对接，记录入账登记表、项目结算收款单按原 Excel 格式导出的实现边界。
 - `handoff/2026-06-22-warehouse-data-entry-sop-v1.md`：仓库数据录入 SOP V1，统一材料名称、规格、仓库单位、库位编码、盘点导入、出库/回库/供货单和 AI 查询口径。
+- `handoff/2026-06-24-finance-ledger-merge-virtual-grid-v1.md`：入账登记表合并/拆开单元格、虚拟网格渲染、全屏填写布局优化和原格式导出合并区域保留说明。
 - `handoff/2026-06-17-project-payment-ledger-flow-v1.md`：项目结算收款单、财务入账登记表、出库导入、复尺跳过等流程调整对接。
 - `outputs/project-library-v1/`：项目库 V1 生成物，含 `project_library_seed.csv`、`project_library_seed.json`、`project_document_inventory.json`。
 - `handoff/animation-tasks.md`：历史遗留的动画任务记录，目前不是主线，除非用户明确要求再处理。
@@ -176,6 +177,25 @@
 注意：这些改动可能是用户或其他 Agent 的已有成果。除非用户明确要求，不要清理或回滚。
 
 ## 对接记录
+
+### 2026-06-24 Codex：入账登记表合并单元格 + 虚拟网格优化
+
+- 任务：给入账登记表补合并/拆开单元格能力，并优化全表填写模式顶部按钮压缩和表格滚动性能。
+- 修改文件：
+  - `backend/src/index.js`：新增 `finance_ledger_merges` 建表。
+  - `backend/src/db/migrations/v2-schema-cleanup.js`：新增合并区域迁移和 schema 校验。
+  - `backend/src/routes/finance.js`：导入读取 Excel 合并区域；详情返回 `merges`；新增合并/拆开接口；导出写回合并区域。
+  - `backend/src/utils/xlsxTemplateExport.js`：原格式导出支持写入/清除 `<mergeCells>`。
+  - `frontend-new/src/views/finance/FinanceLedger.vue`：改为虚拟网格渲染；新增选择区域、合并/拆开按钮；优化全屏填写布局。
+  - `handoff/2026-06-24-finance-ledger-merge-virtual-grid-v1.md`：新增本轮交接文件。
+- 验证：
+  - `node --check backend/src/routes/finance.js && node --check backend/src/utils/xlsxTemplateExport.js && node --check backend/src/index.js && node --check backend/src/db/migrations/v2-schema-cleanup.js`
+  - `npm --prefix frontend-new run build`
+  - 临时 Node 脚本验证 `patchXlsxCells` 可保留和清除 xlsx 合并区域。
+- 注意事项：
+  - 本轮未提交、未上传服务器。
+  - 未做线上登录冒烟检查；原因是本轮只完成本地实现和构建验证，用户未要求立即部署。
+  - 合并区域 V1 采用点击 + Shift 点击选择；不支持拖拽框选。
 
 ### 2026-06-23 Claude：Hermes 审计修复——账户匹配阈值 + base64 大小检查
 

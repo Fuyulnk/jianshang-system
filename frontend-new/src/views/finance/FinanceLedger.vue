@@ -8,9 +8,11 @@
       </div>
       <div class="head-actions">
         <input ref="fileInput" class="hidden-input" type="file" accept=".xlsx,.xls" @change="onImportFile" />
-        <el-button :disabled="!workbook" @click="fullscreen = !fullscreen">{{ fullscreen ? '退出全屏' : '全屏填表' }}</el-button>
+        <el-button :disabled="!workbook" @click="toggleFullscreen">{{ fullscreen ? '退出全屏' : '全屏填表' }}</el-button>
         <el-button :disabled="!workbook" @click="zoomOut">缩小</el-button>
         <el-button :disabled="!workbook" @click="zoomIn">放大</el-button>
+        <el-button :disabled="!activeSheet || !canMergeSelection" @click="mergeSelectedCells">合并单元格</el-button>
+        <el-button :disabled="!activeSheet || !selectedRange" @click="unmergeSelectedCell">拆开单元格</el-button>
         <el-button :disabled="!workbook" :loading="exporting" @click="exportWorkbook">导出原格式</el-button>
         <el-button :disabled="!workbook" type="danger" plain @click="deleteWorkbook">删除</el-button>
         <el-button type="primary" :loading="importing" @click="fileInput?.click()">导入入账登记表</el-button>
@@ -41,6 +43,7 @@
             <div>
               <strong>{{ workbook?.title || '选择左侧表格' }}</strong>
               <span v-if="activeSheet">当前工作表：{{ activeSheet.name }}，右键单元格可备注</span>
+              <span v-if="selectedRange" class="selection-hint">已选：{{ selectedRangeLabel }}</span>
             </div>
             <el-tag v-if="activeSheet" type="info" size="small">显示前 {{ maxRows }} 行 / {{ maxCols }} 列</el-tag>
           </div>
@@ -51,37 +54,63 @@
             <el-tab-pane v-for="sheet in sheets" :key="sheet.id" :name="String(sheet.id)" :label="sheet.name" />
           </el-tabs>
 
-          <div class="ledger-table-wrap" :style="{ '--ledger-zoom': zoom }">
-            <table class="ledger-table">
-              <thead>
-                <tr>
-                  <th class="corner"></th>
-                  <th v-for="col in columns" :key="col">{{ colName(col) }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in rows" :key="row">
-                  <th>{{ row }}</th>
-                  <td
-                    v-for="col in columns"
-                    :key="`${row}-${col}`"
-                    :class="{ commented: Boolean(commentFor(row, col)) }"
-                    :title="commentFor(row, col) || ''"
-                    @contextmenu.prevent="editComment(row, col)"
-                  >
-                    <span v-if="editingCell !== row+'-'+col" class="cell-text" @dblclick="editCell(row, col)">{{ displayCellValue(cellFor(row, col)) }}</span>
-                    <textarea
-                      v-else
-                      :value="displayCellValue(cellFor(row, col))"
-                      @change="updateCell(row, col, $event.target.value)"
-                      @keydown.enter.exact.prevent="$event.target.blur()"
-                      @blur="editingCell = ''"
-                    />
-                    <i v-if="commentFor(row, col)" class="comment-dot"></i>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div
+            ref="gridViewport"
+            class="ledger-grid-wrap"
+            :style="{ '--ledger-zoom': zoom }"
+            @scroll="onGridScroll"
+          >
+            <div class="ledger-grid-canvas" :style="{ width: `${gridWidth}px`, height: `${gridHeight}px` }">
+              <div
+                class="grid-corner"
+                :style="{ transform: `translate(${scrollState.left}px, ${scrollState.top}px)` }"
+              ></div>
+              <div
+                v-for="col in visibleCols"
+                :key="`h-${col}`"
+                class="grid-col-header"
+                :style="{ transform: `translate(${cellLeft(col)}px, ${scrollState.top}px)`, width: `${colWidthPx}px`, height: `${headerHeightPx}px` }"
+              >
+                {{ colName(col) }}
+              </div>
+              <div
+                v-for="row in visibleRows"
+                :key="`r-${row}`"
+                class="grid-row-header"
+                :style="{ transform: `translate(${scrollState.left}px, ${cellTop(row)}px)`, width: `${rowHeaderWidthPx}px`, height: `${rowHeightPx}px` }"
+              >
+                {{ row }}
+              </div>
+              <div
+                v-for="item in visibleCellItems"
+                :key="item.key"
+                class="ledger-cell"
+                :class="{
+                  commented: Boolean(commentFor(item.row, item.col)),
+                  selected: isItemSelected(item),
+                  merged: Boolean(item.merge)
+                }"
+                :title="commentFor(item.row, item.col) || ''"
+                :style="{
+                  transform: `translate(${cellLeft(item.col)}px, ${cellTop(item.row)}px)`,
+                  width: `${item.width}px`,
+                  height: `${item.height}px`
+                }"
+                @click="selectCell(item.row, item.col, $event)"
+                @dblclick="editCell(item.row, item.col)"
+                @contextmenu.prevent="editComment(item.row, item.col)"
+              >
+                <span v-if="editingCell !== item.row+'-'+item.col" class="cell-text">{{ displayCellValue(cellFor(item.row, item.col)) }}</span>
+                <textarea
+                  v-else
+                  :value="displayCellValue(cellFor(item.row, item.col))"
+                  @change="updateCell(item.row, item.col, $event.target.value)"
+                  @keydown.enter.exact.prevent="$event.target.blur()"
+                  @blur="editingCell = ''"
+                />
+                <i v-if="commentFor(item.row, item.col)" class="comment-dot"></i>
+              </div>
+            </div>
           </div>
         </template>
         <el-empty v-else description="请选择或导入一份入账登记表" :image-size="96" />
@@ -91,7 +120,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getAuthToken } from '../../utils/authSession'
 
@@ -101,7 +130,9 @@ const sheets = ref([])
 const activeSheetId = ref(0)
 const cells = ref([])
 const comments = ref([])
+const merges = ref([])
 const fileInput = ref(null)
+const gridViewport = ref(null)
 const loadingList = ref(false)
 const loadingDetail = ref(false)
 const importing = ref(false)
@@ -112,6 +143,13 @@ const activeCacheKey = ref('')
 const detailCache = new Map()
 const maxRows = 160
 const maxCols = 26
+const baseRowHeight = 38
+const baseColWidth = 136
+const baseRowHeaderWidth = 56
+const baseHeaderHeight = 30
+const overscan = 4
+const scrollState = reactive({ top: 0, left: 0, width: 900, height: 520 })
+let scrollFrame = 0
 
 const activeSheet = computed(() => sheets.value.find(sheet => Number(sheet.id) === Number(activeSheetId.value)) || null)
 // 根据实际数据范围计算可见行列，不渲染空白格子
@@ -127,6 +165,30 @@ const rows = computed(() => Array.from({ length: dataRange.value.rows }, (_, i) 
 const columns = computed(() => Array.from({ length: dataRange.value.cols }, (_, i) => i + 1))
 const editingCell = ref('')
 function editCell(row, col) { editingCell.value = `${row}-${col}` }
+const selectedRange = ref(null)
+
+const rowHeightPx = computed(() => Math.round(baseRowHeight * zoom.value))
+const colWidthPx = computed(() => Math.round(baseColWidth * zoom.value))
+const rowHeaderWidthPx = computed(() => Math.round(baseRowHeaderWidth * zoom.value))
+const headerHeightPx = computed(() => Math.round(baseHeaderHeight * zoom.value))
+const gridWidth = computed(() => rowHeaderWidthPx.value + dataRange.value.cols * colWidthPx.value)
+const gridHeight = computed(() => headerHeightPx.value + dataRange.value.rows * rowHeightPx.value)
+
+const visibleBounds = computed(() => {
+  const rowStart = Math.max(1, Math.floor(Math.max(0, scrollState.top - headerHeightPx.value) / rowHeightPx.value) + 1 - overscan)
+  const rowEnd = Math.min(dataRange.value.rows, Math.ceil(Math.max(0, scrollState.top + scrollState.height - headerHeightPx.value) / rowHeightPx.value) + overscan)
+  const colStart = Math.max(1, Math.floor(Math.max(0, scrollState.left - rowHeaderWidthPx.value) / colWidthPx.value) + 1 - overscan)
+  const colEnd = Math.min(dataRange.value.cols, Math.ceil(Math.max(0, scrollState.left + scrollState.width - rowHeaderWidthPx.value) / colWidthPx.value) + overscan)
+  return { rowStart, rowEnd, colStart, colEnd }
+})
+const visibleRows = computed(() => {
+  const { rowStart, rowEnd } = visibleBounds.value
+  return Array.from({ length: Math.max(0, rowEnd - rowStart + 1) }, (_, i) => rowStart + i)
+})
+const visibleCols = computed(() => {
+  const { colStart, colEnd } = visibleBounds.value
+  return Array.from({ length: Math.max(0, colEnd - colStart + 1) }, (_, i) => colStart + i)
+})
 
 const cellMap = computed(() => {
   const map = new Map()
@@ -137,6 +199,53 @@ const commentMap = computed(() => {
   const map = new Map()
   for (const comment of comments.value) map.set(`${comment.row_index}:${comment.col_index}`, comment)
   return map
+})
+const mergeMasterMap = computed(() => {
+  const map = new Map()
+  for (const merge of merges.value) map.set(`${merge.start_row}:${merge.start_col}`, merge)
+  return map
+})
+const coveredCellSet = computed(() => {
+  const set = new Set()
+  for (const merge of merges.value) {
+    for (let row = Number(merge.start_row); row <= Number(merge.end_row); row++) {
+      for (let col = Number(merge.start_col); col <= Number(merge.end_col); col++) {
+        if (row === Number(merge.start_row) && col === Number(merge.start_col)) continue
+        set.add(`${row}:${col}`)
+      }
+    }
+  }
+  return set
+})
+const visibleCellItems = computed(() => {
+  const bounds = visibleBounds.value
+  const items = new Map()
+  for (let row = bounds.rowStart; row <= bounds.rowEnd; row++) {
+    for (let col = bounds.colStart; col <= bounds.colEnd; col++) {
+      if (coveredCellSet.value.has(`${row}:${col}`)) continue
+      const merge = mergeMasterMap.value.get(`${row}:${col}`)
+      items.set(`${row}:${col}`, makeCellItem(row, col, merge))
+    }
+  }
+  for (const merge of merges.value) {
+    if (!rangesOverlap(
+      Number(merge.start_row), Number(merge.end_row),
+      bounds.rowStart, bounds.rowEnd,
+      Number(merge.start_col), Number(merge.end_col),
+      bounds.colStart, bounds.colEnd
+    )) continue
+    const key = `${merge.start_row}:${merge.start_col}`
+    if (!items.has(key)) items.set(key, makeCellItem(Number(merge.start_row), Number(merge.start_col), merge))
+  }
+  return [...items.values()]
+})
+const selectedRangeLabel = computed(() => {
+  if (!selectedRange.value) return ''
+  return `${colName(selectedRange.value.startCol)}${selectedRange.value.startRow}:${colName(selectedRange.value.endCol)}${selectedRange.value.endRow}`
+})
+const canMergeSelection = computed(() => {
+  const range = selectedRange.value
+  return Boolean(range && (range.startRow !== range.endRow || range.startCol !== range.endCol))
 })
 
 function token() { return getAuthToken() }
@@ -179,7 +288,11 @@ function applyWorkbookDetail(detail, cacheKey = '') {
   activeSheetId.value = detail.active_sheet_id || sheets.value[0]?.id || 0
   cells.value = detail.cells || []
   comments.value = detail.comments || []
+  merges.value = detail.merges || []
   activeCacheKey.value = cacheKey
+  selectedRange.value = null
+  editingCell.value = ''
+  nextTick(updateGridViewport)
 }
 
 function loadSheet(name) {
@@ -239,9 +352,122 @@ async function deleteWorkbook() {
     activeSheetId.value = 0
     cells.value = []
     comments.value = []
+    merges.value = []
     await fetchWorkbooks()
   } catch (err) {
     if (err !== 'cancel') ElMessage.error(err.message || '删除失败')
+  }
+}
+
+function makeCellItem(row, col, merge = null) {
+  return {
+    key: merge ? `m-${merge.id || `${row}-${col}`}` : `${row}-${col}`,
+    row,
+    col,
+    merge,
+    width: merge ? (Number(merge.end_col) - Number(merge.start_col) + 1) * colWidthPx.value : colWidthPx.value,
+    height: merge ? (Number(merge.end_row) - Number(merge.start_row) + 1) * rowHeightPx.value : rowHeightPx.value
+  }
+}
+
+function rangesOverlap(aStartRow, aEndRow, bStartRow, bEndRow, aStartCol, aEndCol, bStartCol, bEndCol) {
+  return !(aEndRow < bStartRow || aStartRow > bEndRow || aEndCol < bStartCol || aStartCol > bEndCol)
+}
+
+function cellLeft(col) {
+  return rowHeaderWidthPx.value + (Number(col) - 1) * colWidthPx.value
+}
+
+function cellTop(row) {
+  return headerHeightPx.value + (Number(row) - 1) * rowHeightPx.value
+}
+
+function onGridScroll(event) {
+  const target = event.target
+  if (scrollFrame) cancelAnimationFrame(scrollFrame)
+  scrollFrame = requestAnimationFrame(() => {
+    scrollState.top = target.scrollTop
+    scrollState.left = target.scrollLeft
+    scrollState.width = target.clientWidth
+    scrollState.height = target.clientHeight
+    scrollFrame = 0
+  })
+}
+
+function updateGridViewport() {
+  const el = gridViewport.value
+  if (!el) return
+  scrollState.top = el.scrollTop
+  scrollState.left = el.scrollLeft
+  scrollState.width = el.clientWidth || scrollState.width
+  scrollState.height = el.clientHeight || scrollState.height
+}
+
+function selectCell(row, col, event) {
+  if (event?.shiftKey && selectedRange.value) {
+    selectedRange.value = normalizeRange(selectedRange.value.startRow, selectedRange.value.startCol, row, col)
+  } else {
+    selectedRange.value = normalizeRange(row, col, row, col)
+  }
+}
+
+function normalizeRange(startRow, startCol, endRow, endCol) {
+  return {
+    startRow: Math.min(Number(startRow), Number(endRow)),
+    startCol: Math.min(Number(startCol), Number(endCol)),
+    endRow: Math.max(Number(startRow), Number(endRow)),
+    endCol: Math.max(Number(startCol), Number(endCol))
+  }
+}
+
+function isItemSelected(item) {
+  const range = selectedRange.value
+  if (!range) return false
+  const itemEndRow = item.merge ? Number(item.merge.end_row) : item.row
+  const itemEndCol = item.merge ? Number(item.merge.end_col) : item.col
+  return rangesOverlap(item.row, itemEndRow, range.startRow, range.endRow, item.col, itemEndCol, range.startCol, range.endCol)
+}
+
+async function mergeSelectedCells() {
+  if (!activeSheet.value || !canMergeSelection.value) return
+  try {
+    const range = selectedRange.value
+    const json = await requestJson('/api/finance/ledger/merges', {
+      sheet_id: activeSheetId.value,
+      start_row: range.startRow,
+      start_col: range.startCol,
+      end_row: range.endRow,
+      end_col: range.endCol
+    }, 'PUT')
+    upsertLocal(merges.value, json.data)
+    if (activeCacheKey.value && detailCache.has(activeCacheKey.value)) {
+      const cached = detailCache.get(activeCacheKey.value)
+      if (!Array.isArray(cached.merges)) cached.merges = []
+      upsertLocal(cached.merges, json.data)
+    }
+    ElMessage.success('单元格已合并')
+  } catch (err) {
+    ElMessage.error(err.message || '合并单元格失败')
+  }
+}
+
+async function unmergeSelectedCell() {
+  if (!activeSheet.value || !selectedRange.value) return
+  try {
+    const json = await requestJson('/api/finance/ledger/merges', {
+      sheet_id: activeSheetId.value,
+      row_index: selectedRange.value.startRow,
+      col_index: selectedRange.value.startCol
+    }, 'DELETE')
+    const deletedId = Number(json.data?.id || 0)
+    merges.value = merges.value.filter(item => Number(item.id) !== deletedId)
+    if (activeCacheKey.value && detailCache.has(activeCacheKey.value)) {
+      const cached = detailCache.get(activeCacheKey.value)
+      cached.merges = (cached.merges || []).filter(item => Number(item.id) !== deletedId)
+    }
+    ElMessage.success('合并单元格已拆开')
+  } catch (err) {
+    ElMessage.error(err.message || '拆开单元格失败')
   }
 }
 
@@ -377,10 +603,17 @@ function readAsDataUrl(file) {
 
 function zoomIn() {
   zoom.value = Math.min(1.35, Math.round((zoom.value + 0.1) * 10) / 10)
+  nextTick(updateGridViewport)
 }
 
 function zoomOut() {
   zoom.value = Math.max(0.8, Math.round((zoom.value - 0.1) * 10) / 10)
+  nextTick(updateGridViewport)
+}
+
+function toggleFullscreen() {
+  fullscreen.value = !fullscreen.value
+  nextTick(updateGridViewport)
 }
 
 function colName(index) {
@@ -394,7 +627,15 @@ function colName(index) {
   return name || 'A'
 }
 
-onMounted(fetchWorkbooks)
+onMounted(() => {
+  window.addEventListener('resize', updateGridViewport)
+  fetchWorkbooks()
+  nextTick(updateGridViewport)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', updateGridViewport)
+  if (scrollFrame) cancelAnimationFrame(scrollFrame)
+})
 </script>
 
 <style scoped>
@@ -406,20 +647,34 @@ onMounted(fetchWorkbooks)
   position: fixed;
   inset: 0;
   z-index: 3000;
-  padding: 16px;
+  padding: 10px 12px;
   overflow: hidden;
   background: var(--bg-page);
 }
 .ledger-fullscreen .ledger-layout {
   grid-template-columns: 220px minmax(0, 1fr);
-  height: calc(100dvh - 116px);
+  height: calc(100dvh - 88px);
 }
 .ledger-fullscreen .sheet-card,
 .ledger-fullscreen .workbook-list {
   min-height: 0;
 }
-.ledger-fullscreen .ledger-table-wrap {
-  max-height: calc(100dvh - 236px);
+.ledger-fullscreen .ledger-grid-wrap {
+  height: calc(100dvh - 190px);
+}
+.ledger-fullscreen .ledger-head :deep(.el-card__body) {
+  align-items: flex-start;
+}
+.ledger-fullscreen .ledger-head p {
+  display: none;
+}
+.ledger-fullscreen .head-actions {
+  max-width: min(760px, 62vw);
+  max-height: 42px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+  padding-bottom: 2px;
 }
 .ledger-head {
   border: 1px solid var(--border-light);
@@ -494,76 +749,105 @@ onMounted(fetchWorkbooks)
 .sheet-head span {
   display: block;
 }
-.ledger-table-wrap {
+.selection-hint {
+  margin-top: 3px;
+  color: var(--color-primary) !important;
+  font-weight: 700;
+}
+.ledger-grid-wrap {
+  position: relative;
   overflow: auto;
-  max-height: calc(100vh - 260px);
-  max-height: calc(100dvh - 260px);
+  height: calc(100vh - 276px);
+  height: calc(100dvh - 276px);
+  min-height: 420px;
   border: 1px solid color-mix(in srgb, var(--border-light) 72%, #64748b);
   border-radius: var(--radius-sm);
   will-change: transform;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
-}
-.ledger-table {
-  border-collapse: collapse;
-  width: max-content;
-  min-width: 100%;
   background: var(--bg-card);
+  contain: strict;
+}
+.ledger-grid-canvas {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
   font-size: calc(13px * var(--ledger-zoom, 1));
 }
-.ledger-table th,
-.ledger-table td {
+.grid-corner,
+.grid-col-header,
+.grid-row-header,
+.ledger-cell {
+  position: absolute;
+  box-sizing: border-box;
   border: 1px solid color-mix(in srgb, var(--border-light) 64%, #64748b);
-  min-width: calc(118px * var(--ledger-zoom, 1));
-  height: calc(36px * var(--ledger-zoom, 1));
-  padding: 0;
-  position: relative;
+  background: var(--bg-card);
+  overflow: hidden;
+  transform-origin: top left;
 }
-.ledger-table th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
+.grid-corner {
+  z-index: 8;
+  width: calc(56px * var(--ledger-zoom, 1));
+  height: calc(30px * var(--ledger-zoom, 1));
+  background: color-mix(in srgb, var(--bg-page) 88%, var(--bg-card));
+}
+.grid-col-header,
+.grid-row-header {
+  z-index: 6;
+  display: grid;
+  place-items: center;
   background: color-mix(in srgb, var(--bg-page) 86%, var(--bg-card));
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
 }
-.ledger-table tbody th {
-  left: 0;
-  z-index: 1;
-  min-width: 54px;
+.grid-row-header {
+  z-index: 7;
 }
-.ledger-table .corner {
-  left: 0;
+.ledger-cell {
+  z-index: 1;
+  color: var(--text-primary);
+}
+.ledger-cell.selected {
   z-index: 3;
-  min-width: 54px;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 62%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--bg-card));
+}
+.ledger-cell.merged {
+  background: color-mix(in srgb, var(--bg-card) 92%, #dbeafe);
 }
 .cell-text {
-  display: block; min-height: 28px; line-height: 28px; padding: 0 4px;
-  font-size: 13px; cursor: default; white-space: nowrap; overflow: hidden;
+  display: block;
+  height: 100%;
+  min-height: 28px;
+  padding: 8px 9px;
+  font-size: 13px;
+  line-height: 1.35;
+  cursor: default;
+  white-space: pre-wrap;
+  overflow: hidden;
 }
-.ledger-table textarea {
+.ledger-cell textarea {
   width: 100%;
   height: 100%;
-  min-height: calc(36px * var(--ledger-zoom, 1));
   padding: 8px;
   border: 0;
-  resize: vertical;
+  resize: none;
   background: transparent;
   color: var(--text-primary);
   caret-color: #2563eb;
   font: inherit;
   outline: none;
 }
-.ledger-table textarea::selection {
+.ledger-cell textarea::selection {
   color: #0f172a;
   background: rgba(37, 99, 235, 0.22);
 }
-.ledger-table textarea:focus {
+.ledger-cell textarea:focus {
   background: color-mix(in srgb, var(--color-primary) 6%, var(--bg-card));
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 50%, transparent);
 }
-.ledger-table td.commented {
+.ledger-cell.commented {
   background: color-mix(in srgb, #f59e0b 8%, var(--bg-card));
 }
 .comment-dot {

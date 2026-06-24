@@ -334,6 +334,9 @@ export default function financeRoutes(server, db) {
     const comments = activeSheet
       ? db.prepare("SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, '') != '' ORDER BY row_index ASC, col_index ASC").all(activeSheet.id)
       : []
+    const merges = activeSheet
+      ? db.prepare('SELECT * FROM finance_ledger_merges WHERE sheet_id = ? ORDER BY start_row ASC, start_col ASC').all(activeSheet.id)
+      : []
     return {
       success: true,
       data: {
@@ -341,7 +344,8 @@ export default function financeRoutes(server, db) {
         sheets,
         active_sheet_id: activeSheet?.id || 0,
         cells,
-        comments
+        comments,
+        merges
       }
     }
   })
@@ -388,6 +392,11 @@ export default function financeRoutes(server, db) {
             workbook_id, sheet_id, row_index, col_index, address, comment_text, created_by, updated_by
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `)
+        const insertMerge = db.prepare(`
+          INSERT OR IGNORE INTO finance_ledger_merges (
+            workbook_id, sheet_id, start_row, start_col, end_row, end_col, address, created_by, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
 
         workbook.SheetNames.forEach((sheetName, sheetIndex) => {
           const sheet = workbook.Sheets[sheetName]
@@ -414,6 +423,15 @@ export default function financeRoutes(server, db) {
               insertComment.run(workbookId, sheetId, pos.r + 1, pos.c + 1, address, safeText(comments, 2000), request.user.userId, request.user.userId)
             }
           }
+          for (const merge of sheet?.['!merges'] || []) {
+            const startRow = Math.min(merge.s.r, merge.e.r) + 1
+            const startCol = Math.min(merge.s.c, merge.e.c) + 1
+            const endRow = Math.max(merge.s.r, merge.e.r) + 1
+            const endCol = Math.max(merge.s.c, merge.e.c) + 1
+            if (startRow === endRow && startCol === endCol) continue
+            const address = XLSX.utils.encode_range({ s: { r: startRow - 1, c: startCol - 1 }, e: { r: endRow - 1, c: endCol - 1 } })
+            insertMerge.run(workbookId, sheetId, startRow, startCol, endRow, endCol, address, request.user.userId, request.user.userId)
+          }
         })
         db.prepare(`
           INSERT INTO finance_ledger_logs (workbook_id, action, new_value, created_by)
@@ -436,6 +454,7 @@ export default function financeRoutes(server, db) {
     if (!workbook) return reply.code(404).send({ success: false, message: '入账登记表不存在' })
     const tx = db.transaction(() => {
       db.prepare('DELETE FROM finance_ledger_comments WHERE workbook_id = ?').run(workbookId)
+      db.prepare('DELETE FROM finance_ledger_merges WHERE workbook_id = ?').run(workbookId)
       db.prepare('DELETE FROM finance_ledger_cells WHERE workbook_id = ?').run(workbookId)
       db.prepare('DELETE FROM finance_ledger_sheets WHERE workbook_id = ?').run(workbookId)
       db.prepare('DELETE FROM finance_ledger_logs WHERE workbook_id = ?').run(workbookId)
@@ -471,6 +490,7 @@ export default function financeRoutes(server, db) {
       const sheets = db.prepare('SELECT * FROM finance_ledger_sheets WHERE workbook_id = ? ORDER BY sheet_index ASC').all(workbookId)
       const sheetMap = new Map(sheets.map(sheet => [sheet.id, sheet]))
       const cells = db.prepare('SELECT * FROM finance_ledger_cells WHERE workbook_id = ? ORDER BY sheet_id, row_index, col_index').all(workbookId)
+      const merges = db.prepare('SELECT * FROM finance_ledger_merges WHERE workbook_id = ? ORDER BY sheet_id, start_row, start_col').all(workbookId)
       const updates = cells.map(cell => {
         const sheet = sheetMap.get(cell.sheet_id)
         return {
@@ -480,7 +500,24 @@ export default function financeRoutes(server, db) {
           value: cell.value
         }
       })
-      const output = patchXlsxCells(readFileSync(sourcePath), updates)
+      const mergeUpdates = sheets.map(sheet => ({
+        sheetName: sheet?.name || '',
+        sheetIndex: Number(sheet?.sheet_index || 0),
+        clearOnly: true
+      }))
+      mergeUpdates.push(...merges.map(merge => {
+        const sheet = sheetMap.get(merge.sheet_id)
+        return {
+          sheetName: sheet?.name || '',
+          sheetIndex: Number(sheet?.sheet_index || 0),
+          address: merge.address,
+          start_row: merge.start_row,
+          start_col: merge.start_col,
+          end_row: merge.end_row,
+          end_col: merge.end_col
+        }
+      }))
+      const output = patchXlsxCells(readFileSync(sourcePath), updates, mergeUpdates)
       const fileName = `${fileNameWithoutExt(workbook.source_file_name || workbook.title || sourceName || '入账登记表')}-原格式导出.xlsx`
       db.prepare(`
         INSERT INTO finance_ledger_logs (workbook_id, action, new_value, created_by)
@@ -569,6 +606,68 @@ export default function financeRoutes(server, db) {
     `).run(sheet.workbook_id, sheet.id, normalizedAddress, text, request.user.userId)
     return { success: true, data: db.prepare('SELECT * FROM finance_ledger_comments WHERE id = ?').get(created.lastInsertRowid) }
   })
+
+  server.put('/api/finance/ledger/merges', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const sheetId = toInt(request.body?.sheet_id)
+    const sheet = db.prepare('SELECT * FROM finance_ledger_sheets WHERE id = ?').get(sheetId)
+    if (!sheet) return reply.code(404).send({ success: false, message: '工作表不存在' })
+    const range = normalizeMergeRange(request.body || {})
+    if (!range) return reply.code(400).send({ success: false, message: '请选择至少两个单元格再合并' })
+    const overlapping = db.prepare(`
+      SELECT *
+      FROM finance_ledger_merges
+      WHERE sheet_id = ?
+        AND NOT (end_row < ? OR start_row > ? OR end_col < ? OR start_col > ?)
+      LIMIT 1
+    `).get(sheet.id, range.startRow, range.endRow, range.startCol, range.endCol)
+    if (overlapping) return reply.code(400).send({ success: false, message: `合并区域与已有合并单元格 ${overlapping.address || ''} 重叠，请先拆开原区域` })
+    const address = XLSX.utils.encode_range({
+      s: { r: range.startRow - 1, c: range.startCol - 1 },
+      e: { r: range.endRow - 1, c: range.endCol - 1 }
+    })
+    const created = db.prepare(`
+      INSERT INTO finance_ledger_merges (
+        workbook_id, sheet_id, start_row, start_col, end_row, end_col, address, created_by, updated_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(sheet.workbook_id, sheet.id, range.startRow, range.startCol, range.endRow, range.endCol, address, request.user.userId, request.user.userId)
+    db.prepare(`
+      INSERT INTO finance_ledger_logs (workbook_id, sheet_id, address, action, new_value, created_by)
+      VALUES (?, ?, ?, 'merge_cells', ?, ?)
+    `).run(sheet.workbook_id, sheet.id, address, address, request.user.userId)
+    return { success: true, data: db.prepare('SELECT * FROM finance_ledger_merges WHERE id = ?').get(created.lastInsertRowid) }
+  })
+
+  server.delete('/api/finance/ledger/merges', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const sheetId = toInt(request.body?.sheet_id)
+    const rowIndex = toInt(request.body?.row_index)
+    const colIndex = toInt(request.body?.col_index)
+    const mergeId = toInt(request.body?.id)
+    let merge = null
+    if (mergeId) {
+      merge = db.prepare('SELECT * FROM finance_ledger_merges WHERE id = ?').get(mergeId)
+    } else if (sheetId && rowIndex && colIndex) {
+      merge = db.prepare(`
+        SELECT *
+        FROM finance_ledger_merges
+        WHERE sheet_id = ?
+          AND start_row <= ? AND end_row >= ?
+          AND start_col <= ? AND end_col >= ?
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(sheetId, rowIndex, rowIndex, colIndex, colIndex)
+    }
+    if (!merge) return reply.code(404).send({ success: false, message: '当前单元格没有可拆开的合并区域' })
+    db.prepare('DELETE FROM finance_ledger_merges WHERE id = ?').run(merge.id)
+    db.prepare(`
+      INSERT INTO finance_ledger_logs (workbook_id, sheet_id, address, action, old_value, created_by)
+      VALUES (?, ?, ?, 'unmerge_cells', ?, ?)
+    `).run(merge.workbook_id, merge.sheet_id, merge.address || '', merge.address || '', request.user.userId)
+    return { success: true, data: merge }
+  })
 }
 
 function buildLedgerWorkbookDetail(db, workbookId) {
@@ -577,12 +676,14 @@ function buildLedgerWorkbookDetail(db, workbookId) {
   const activeSheet = sheets[0]
   const cells = activeSheet ? db.prepare('SELECT * FROM finance_ledger_cells WHERE sheet_id = ? ORDER BY row_index ASC, col_index ASC').all(activeSheet.id) : []
   const comments = activeSheet ? db.prepare("SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, '') != '' ORDER BY row_index ASC, col_index ASC").all(activeSheet.id) : []
+  const merges = activeSheet ? db.prepare('SELECT * FROM finance_ledger_merges WHERE sheet_id = ? ORDER BY start_row ASC, start_col ASC').all(activeSheet.id) : []
   return {
     workbook,
     sheets,
     active_sheet_id: activeSheet?.id || 0,
     cells,
-    comments
+    comments,
+    merges
   }
 }
 
@@ -701,6 +802,22 @@ function safeDecodeRange(ref) {
   } catch {
     return { row_count: 1, col_count: 1 }
   }
+}
+
+function normalizeMergeRange(body) {
+  const startRow = toInt(body.start_row ?? body.startRow)
+  const startCol = toInt(body.start_col ?? body.startCol)
+  const endRow = toInt(body.end_row ?? body.endRow)
+  const endCol = toInt(body.end_col ?? body.endCol)
+  if (![startRow, startCol, endRow, endCol].every(Boolean)) return null
+  const normalized = {
+    startRow: Math.min(startRow, endRow),
+    startCol: Math.min(startCol, endCol),
+    endRow: Math.max(startRow, endRow),
+    endCol: Math.max(startCol, endCol)
+  }
+  if (normalized.startRow === normalized.endRow && normalized.startCol === normalized.endCol) return null
+  return normalized
 }
 
 function fileNameWithoutExt(value = '') {

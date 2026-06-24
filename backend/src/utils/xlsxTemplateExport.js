@@ -15,19 +15,21 @@ const crcTable = (() => {
   return table
 })()
 
-export function patchXlsxCells(originalBuffer, updates = []) {
+export function patchXlsxCells(originalBuffer, updates = [], merges = []) {
   const buffer = Buffer.from(originalBuffer || [])
   if (!buffer.length) throw new Error('原始 Excel 文件为空')
   const entries = readZipEntries(buffer)
   const entryMap = new Map(entries.map(entry => [entry.name, entry]))
   const sheetTargets = resolveWorksheetTargets(entryMap)
   const grouped = groupUpdatesBySheet(updates, sheetTargets)
+  const groupedMerges = groupMergesBySheet(merges, sheetTargets)
+  const sheetPaths = new Set([...grouped.keys(), ...groupedMerges.keys()])
 
-  for (const [sheetPath, sheetUpdates] of grouped.entries()) {
+  for (const sheetPath of sheetPaths) {
     const entry = entryMap.get(sheetPath)
     if (!entry) continue
     const xml = entry.data.toString('utf8')
-    entry.data = Buffer.from(patchWorksheetXml(xml, sheetUpdates), 'utf8')
+    entry.data = Buffer.from(patchWorksheetXml(xml, grouped.get(sheetPath) || [], groupedMerges.get(sheetPath)), 'utf8')
   }
 
   return writeZipEntries(entries)
@@ -106,6 +108,19 @@ function groupUpdatesBySheet(updates, sheetTargets) {
   return grouped
 }
 
+function groupMergesBySheet(merges, sheetTargets) {
+  const grouped = new Map()
+  for (const merge of merges || []) {
+    const target = findSheetTarget(sheetTargets, merge)
+    if (!target?.path) continue
+    if (!grouped.has(target.path)) grouped.set(target.path, [])
+    const ref = normalizeMergeRef(merge)
+    if (!ref) continue
+    grouped.get(target.path).push(ref)
+  }
+  return grouped
+}
+
 function findSheetTarget(sheetTargets, update) {
   if (update.sheetName) {
     const byName = sheetTargets.find(sheet => sheet.name === update.sheetName)
@@ -118,12 +133,39 @@ function findSheetTarget(sheetTargets, update) {
   return sheetTargets[0]
 }
 
-function patchWorksheetXml(xml, updates) {
+function patchWorksheetXml(xml, updates, merges) {
   let nextXml = xml
   for (const update of updates) {
     nextXml = upsertCell(nextXml, update.address, update.value)
   }
+  if (Array.isArray(merges)) nextXml = patchMergeCellsXml(nextXml, merges)
   return nextXml
+}
+
+function patchMergeCellsXml(xml, merges) {
+  const uniqueRefs = [...new Set(merges.map(ref => String(ref || '').toUpperCase()).filter(Boolean))]
+  const withoutExisting = xml.replace(/<mergeCells\b[^>]*>[\s\S]*?<\/mergeCells>/, '')
+  if (!uniqueRefs.length) return withoutExisting
+  const mergeXml = `<mergeCells count="${uniqueRefs.length}">${uniqueRefs.map(ref => `<mergeCell ref="${escapeXml(ref)}"/>`).join('')}</mergeCells>`
+  const sheetDataEnd = withoutExisting.indexOf('</sheetData>')
+  if (sheetDataEnd >= 0) {
+    const insertAt = sheetDataEnd + '</sheetData>'.length
+    return `${withoutExisting.slice(0, insertAt)}${mergeXml}${withoutExisting.slice(insertAt)}`
+  }
+  return withoutExisting.replace('</worksheet>', `${mergeXml}</worksheet>`)
+}
+
+function normalizeMergeRef(merge) {
+  if (merge.ref) return String(merge.ref).toUpperCase()
+  if (merge.address) return String(merge.address).toUpperCase()
+  const startRow = Number(merge.start_row || merge.startRow)
+  const startCol = Number(merge.start_col || merge.startCol)
+  const endRow = Number(merge.end_row || merge.endRow)
+  const endCol = Number(merge.end_col || merge.endCol)
+  if (![startRow, startCol, endRow, endCol].every(Number.isFinite)) return ''
+  const start = XLSX.utils.encode_cell({ r: Math.max(0, Math.min(startRow, endRow) - 1), c: Math.max(0, Math.min(startCol, endCol) - 1) })
+  const end = XLSX.utils.encode_cell({ r: Math.max(0, Math.max(startRow, endRow) - 1), c: Math.max(0, Math.max(startCol, endCol) - 1) })
+  return start === end ? '' : `${start}:${end}`
 }
 
 function upsertCell(xml, address, value) {
