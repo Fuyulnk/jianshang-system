@@ -798,7 +798,7 @@ const userRole = (() => {
 const userId = (() => {
   return getTokenPayload()?.userId || 0
 })()
-const canManageProject = computed(() => ['super_admin', 'admin', 'engineering'].includes(userRole))
+const canManageProject = computed(() => ['super_admin', 'admin', 'engineering', 'finance'].includes(userRole))
 const isAssignedEmployee = computed(() => {
   if (!project.value) return false
   return project.value.assignee_user_id === userId
@@ -851,7 +851,7 @@ const TASKS = {
     desc: '确认客户、电话、地址、施工空间、材料意向、注意事项和门店接单人，资料齐后安排现场勘察。',
     action: '门店交底核对完成，安排勘察',
     next: 'survey_pending',
-    roles: ['super_admin', 'admin', 'engineering'],
+    roles: ['super_admin', 'admin', 'engineering', 'finance'],
     required: ['handover', 'survey_assignee']
   },
   survey_pending: {
@@ -859,7 +859,7 @@ const TASKS = {
     desc: '上传现场图片、编辑说明并生成工勘 PPT；确认结论后系统会自动决定是否进入复尺。',
     action: '',
     next: '',
-    roles: ['super_admin', 'admin', 'engineering'],
+    roles: ['super_admin', 'admin', 'engineering', 'finance'],
     required: ['survey'],
     owner: '工程部/监理',
     nextOwner: '总监/工程部',
@@ -870,7 +870,7 @@ const TASKS = {
     desc: '需要复尺时打开二次勘察表确认；无需复尺时填写原因，直接交给财务制作项目结算收款单。',
     action: '',
     next: '',
-    roles: ['super_admin', 'admin', 'engineering'],
+    roles: ['super_admin', 'admin', 'engineering', 'finance'],
     owner: '总监/工程部',
     nextOwner: '财务',
     assignedOnly: true
@@ -898,7 +898,7 @@ const TASKS = {
     desc: '进场款已确认，安排班组长、施工负责人、施工成员和班组交底日期，完成后才能出库。',
     action: '班组交底完成，等待出库',
     next: 'briefing_done',
-    roles: ['super_admin', 'admin', 'engineering'],
+    roles: ['super_admin', 'admin', 'engineering', 'finance'],
     required: ['assignee', 'briefing_date'],
     owner: '总监/工程部',
     nextOwner: '仓管'
@@ -926,7 +926,7 @@ const TASKS = {
     desc: '确认材料到位、人员安排和实际进场时间，确认后进入施工中。',
     action: '确认进场，开始施工',
     next: 'in_progress',
-    roles: ['super_admin', 'admin', 'engineering', 'employee'],
+    roles: ['super_admin', 'admin', 'engineering', 'employee', 'finance'],
     assignedOnly: true,
     required: ['start_date', 'expected_end_date', 'onsite_team'],
     owner: '工程/监理/施工负责人',
@@ -937,7 +937,7 @@ const TASKS = {
     desc: '确认完工、验收和是否需要整改；通过后才派发给仓库处理材料回库。',
     action: '验收通过，进入材料回库',
     next: 'inspection_done',
-    roles: ['super_admin', 'admin', 'engineering', 'employee'],
+    roles: ['super_admin', 'admin', 'engineering', 'employee', 'finance'],
     assignedOnly: true,
     required: ['final_inspection_assignee', 'end_date', 'acceptance_date', 'construction_note', 'inspection_pass'],
     owner: '工程/监理/施工负责人',
@@ -1000,14 +1000,14 @@ const TASKS = {
     desc: '售后是独立事件，不影响主工程完结。',
     action: '安排维修',
     next: 'repair_assigned',
-    roles: ['super_admin', 'admin', 'engineering']
+    roles: ['super_admin', 'admin', 'engineering', 'finance']
   },
   repair_assigned: {
     title: '完成售后维修',
     desc: '记录维修处理结果并关闭售后。',
     action: '维修完成',
     next: 'repair_done',
-    roles: ['super_admin', 'admin', 'engineering']
+    roles: ['super_admin', 'admin', 'engineering', 'finance']
   },
   repair_done: {
     title: '售后已完成',
@@ -1119,7 +1119,7 @@ const canRunCurrentTask = computed(() => {
 const canSkipRecheck = computed(() => {
   if (!project.value || project.value.status !== 'survey_done') return false
   if (!['super_admin', 'admin', 'engineering', 'finance'].includes(userRole)) return false
-  if (userRole === 'super_admin' || userRole === 'admin') return true
+  if (userRole === 'super_admin' || userRole === 'admin' || userRole === 'finance') return true
   return isAssignedEmployee.value
 })
 const currentMissingFields = computed(() => missingForTask(currentTask.value.required || []))
@@ -1132,7 +1132,7 @@ const materialRequestDisabledReason = computed(() => {
   }
   return '需要先完成项目结算收款单、确认进场款和班组交底，才能发起材料出库。'
 })
-const canStartRepair = computed(() => ['super_admin', 'admin', 'engineering'].includes(userRole))
+const canStartRepair = computed(() => ['super_admin', 'admin', 'engineering', 'finance'].includes(userRole))
 const warrantyInfo = computed(() => {
   const base = project.value?.acceptance_date || project.value?.end_date || ''
   if (!base) return { expired: false, text: '质保期：未填写验收/完工日期，暂无法自动计算。' }

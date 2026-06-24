@@ -1,6 +1,8 @@
 export function parseFinanceTransactionDraft(rawText, db) {
   const text = String(rawText || '').trim()
-  const amountMatch = text.match(/(?:收入|收到|收|支付|支出|付|扣|退款|报销)?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
+  // 去掉日期格式（2026/6/22、6/22、2026-06-22），避免日期里的数字被当成金额
+  const cleanText = text.replace(/\b\d{1,4}\/\d{1,2}\/?\d{0,2}\b/g, '').replace(/\b\d{4}-\d{2}-\d{2}\b/g, '').trim()
+  const amountMatch = cleanText.match(/(?:收入|收到|收|支付|支出|付|扣|退款|报销)?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
   const amount = amountMatch ? Number(amountMatch[1]) : 0
   const type = /收入|收到|收款|进账|回款/.test(text) && !/支付|支出|付|扣/.test(text) ? 'income' : 'expense'
   const accounts = db.prepare('SELECT id, name FROM accounts ORDER BY id').all()

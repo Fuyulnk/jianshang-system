@@ -2,6 +2,7 @@ export function canAccessModule(db, user, module, permission = 'can_view') {
   if (!user) return false
   if (isPendingAssignmentUser(user)) return false
   if (['super_admin', 'admin'].includes(user.role)) return true
+  if (user.role === 'finance' && ['projects', 'chat'].includes(module)) return true
 
   const row = getModulePermission(db, user, module)
   return !!row?.[permission]

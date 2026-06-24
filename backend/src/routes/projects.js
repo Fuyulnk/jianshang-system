@@ -34,22 +34,22 @@ const LEGACY_STATUS_ALIASES = {
 }
 
 const PROJECT_TRANSITIONS = {
-  handover_received: { next: 'survey_pending', roles: ['super_admin', 'admin', 'engineering'], required: ['handover', 'survey_assignee'] },
+  handover_received: { next: 'survey_pending', roles: ['super_admin', 'admin', 'engineering', 'finance'], required: ['handover', 'survey_assignee'] },
   survey_pending: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering', 'finance'], assignedOnly: true, required: ['survey'] },
   survey_done: { next: 'pre_entry_payment_pending', roles: ['super_admin', 'admin', 'engineering', 'finance'], assignedOnly: true, required: ['recheck_assignee', 'condition_note'] },
   recheck_done: { next: 'pre_entry_payment_pending', roles: ['super_admin', 'admin', 'engineering', 'finance'], required: ['condition_note'] },
-  pre_entry_payment_pending: { next: 'payment_received', roles: ['super_admin'], emergencyOnly: true },
-  payment_received: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee', 'briefing_date'] },
-  material_out: { next: 'in_progress', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['start_date', 'expected_end_date', 'onsite_team'] },
-  in_progress: { next: 'inspection_done', roles: ['super_admin', 'admin', 'engineering', 'employee'], assignedOnly: true, required: ['final_inspection_assignee', 'end_date', 'acceptance_date', 'construction_note', 'inspection_pass'] },
-  inspection_done: { next: 'material_returned', roles: ['super_admin', 'admin', 'warehouse', 'engineering'], required: ['end_date', 'material_return'] },
-  material_returned: { next: 'labor_settled', roles: ['super_admin'], emergencyOnly: true },
-  labor_settled: { next: 'cost_checked', roles: ['super_admin'], emergencyOnly: true },
-  cost_checked: { next: 'finance_settled', roles: ['super_admin'], emergencyOnly: true },
+  pre_entry_payment_pending: { next: 'payment_received', roles: ['super_admin', 'finance'], emergencyOnly: true },
+  payment_received: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering', 'finance'], required: ['assignee', 'briefing_date'] },
+  material_out: { next: 'in_progress', roles: ['super_admin', 'admin', 'engineering', 'employee', 'finance'], assignedOnly: true, required: ['start_date', 'expected_end_date', 'onsite_team'] },
+  in_progress: { next: 'inspection_done', roles: ['super_admin', 'admin', 'engineering', 'employee', 'finance'], assignedOnly: true, required: ['final_inspection_assignee', 'end_date', 'acceptance_date', 'construction_note', 'inspection_pass'] },
+  inspection_done: { next: 'material_returned', roles: ['super_admin', 'admin', 'warehouse', 'engineering', 'finance'], required: ['end_date', 'material_return'] },
+  material_returned: { next: 'labor_settled', roles: ['super_admin', 'finance'], emergencyOnly: true },
+  labor_settled: { next: 'cost_checked', roles: ['super_admin', 'finance'], emergencyOnly: true },
+  cost_checked: { next: 'finance_settled', roles: ['super_admin', 'finance'], emergencyOnly: true },
   finance_settled: { next: 'archived', roles: ['super_admin', 'admin', 'finance'], required: ['archive_documents'] },
-  archived: { next: 'repair_requested', roles: ['super_admin', 'admin', 'engineering'] },
-  repair_requested: { next: 'repair_assigned', roles: ['super_admin', 'admin', 'engineering'] },
-  repair_assigned: { next: 'repair_done', roles: ['super_admin', 'admin', 'engineering'], required: ['construction_note'] },
+  archived: { next: 'repair_requested', roles: ['super_admin', 'admin', 'engineering', 'finance'] },
+  repair_requested: { next: 'repair_assigned', roles: ['super_admin', 'admin', 'engineering', 'finance'] },
+  repair_assigned: { next: 'repair_done', roles: ['super_admin', 'admin', 'engineering', 'finance'], required: ['construction_note'] },
 }
 
 const STATUS_HANDOFFS = {
