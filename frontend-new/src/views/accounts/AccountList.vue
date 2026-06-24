@@ -35,6 +35,14 @@
           {{ summaryMode === 'all' ? '显示全部流水累计' : `显示 ${formatMonthLabel(selectedMonth)} 的月度账户快照和流水` }}
         </span>
       </div>
+      <el-alert
+        v-if="loadError"
+        class="account-error"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="loadError"
+      />
 
       <!-- 骨架屏 -->
       <el-skeleton v-if="loading" :rows="6" animated class="table-skeleton" />
@@ -154,6 +162,7 @@ const showEdit = ref(false)
 const saving = ref(false)
 const importing = ref(false)
 const importInput = ref(null)
+const loadError = ref('')
 const addForm = ref({ name: '', type: 'personal', initial_balance: 0, current_balance: 0 })
 const editForm = ref({ id: null, name: '', type: 'personal', initial_balance: 0, current_balance: 0 })
 const currentMonth = getCurrentMonth()
@@ -175,13 +184,16 @@ function token() { return getAuthToken() }
 
 async function fetchList() {
   loading.value = true
+  loadError.value = ''
   try {
-    const res = await fetch('/api/accounts', {
-      headers: { Authorization: `Bearer ${token()}` }
-    })
-    const json = await res.json()
-    if (json.success) list.value = json.data
+    const json = await requestJson('/api/accounts', {}, '账户列表加载失败')
+    list.value = Array.isArray(json.data) ? json.data : []
     await fetchSummary()
+  } catch (error) {
+    list.value = []
+    summaryMap.value = {}
+    loadError.value = error.message || '账户列表加载失败'
+    ElMessage.error(loadError.value)
   } finally {
     loading.value = false
   }
@@ -193,13 +205,12 @@ async function fetchSummary() {
     const params = new URLSearchParams()
     params.set('mode', summaryMode.value)
     if (summaryMode.value === 'month') params.set('month', selectedMonth.value)
-    const res = await fetch(`/api/accounts/summary?${params}`, {
-      headers: { Authorization: `Bearer ${token()}` }
-    })
-    const json = await res.json()
-    if (json.success) {
-      summaryMap.value = Object.fromEntries((json.data || []).map(item => [item.account_id, item]))
-    }
+    const json = await requestJson(`/api/accounts/summary?${params}`, {}, '账户月度汇总加载失败')
+    summaryMap.value = Object.fromEntries((json.data || []).map(item => [item.account_id, item]))
+  } catch (error) {
+    summaryMap.value = {}
+    loadError.value = error.message || '账户月度汇总加载失败'
+    ElMessage.error(loadError.value)
   } finally {
     summaryLoading.value = false
   }
@@ -212,18 +223,17 @@ async function handleAdd() {
   }
   saving.value = true
   try {
-    const res = await fetch('/api/accounts', {
+    const json = await requestJson('/api/accounts', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(addForm.value)
-    })
-    const json = await res.json()
-    if (json.success) {
-      ElMessage.success('新增成功')
-      showAdd.value = false
-      addForm.value = { name: '', type: 'personal', initial_balance: 0, current_balance: 0 }
-      await fetchList()
-    }
+    }, '新增账户失败')
+    ElMessage.success(json.message || '新增成功')
+    showAdd.value = false
+    addForm.value = { name: '', type: 'personal', initial_balance: 0, current_balance: 0 }
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(error.message || '新增账户失败')
   } finally {
     saving.value = false
   }
@@ -247,19 +257,16 @@ async function handleEdit() {
   }
   saving.value = true
   try {
-    const res = await fetch(`/api/accounts/${editForm.value.id}`, {
+    const json = await requestJson(`/api/accounts/${editForm.value.id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(editForm.value)
-    })
-    const json = await res.json()
-    if (json.success) {
-      ElMessage.success('保存成功')
-      showEdit.value = false
-      await fetchList()
-    } else {
-      ElMessage.error(json.message || '保存失败')
-    }
+    }, '保存账户失败')
+    ElMessage.success(json.message || '保存成功')
+    showEdit.value = false
+    await fetchList()
+  } catch (error) {
+    ElMessage.error(error.message || '保存账户失败')
   } finally {
     saving.value = false
   }
@@ -338,18 +345,12 @@ async function parseImportResponse(res) {
 async function handleDelete(row) {
   try {
     await ElMessageBox.confirm(`确定删除「${row.name}」？`, '提示')
-    const res = await fetch(`/api/accounts/${row.id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token()}` }
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      ElMessage.error(err.message || '删除失败')
-      return
-    }
+    await requestJson(`/api/accounts/${row.id}`, { method: 'DELETE' }, '删除账户失败')
     ElMessage.success('已删除')
     await fetchList()
-  } catch {} // 取消删除
+  } catch (error) {
+    if (error !== 'cancel') ElMessage.error(error.message || '删除账户失败')
+  }
 }
 
 function backToCurrentMonth() {
@@ -373,6 +374,28 @@ function getCurrentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
+async function requestJson(url, options = {}, fallbackMessage = '请求失败') {
+  const headers = {
+    ...(options.headers || {}),
+    Authorization: `Bearer ${token()}`
+  }
+  const res = await fetch(url, { ...options, headers })
+  const text = await res.text()
+  let json = {}
+  try {
+    json = text ? JSON.parse(text) : {}
+  } catch {
+    throw new Error(`${fallbackMessage}：服务器返回格式异常`)
+  }
+  if (!res.ok || !json.success) {
+    if (res.status === 401) throw new Error(json.message || '登录已失效，请重新登录')
+    if (res.status === 403) throw new Error(json.message || '当前账号没有账户管理权限')
+    if (res.status === 404) throw new Error(json.message || '账户管理接口不存在，请同步后端并重启服务')
+    throw new Error(json.message || `${fallbackMessage}（HTTP ${res.status}）`)
+  }
+  return json
+}
+
 watch([summaryMode, selectedMonth], () => {
   if (!['month', 'all'].includes(summaryMode.value)) summaryMode.value = 'month'
   safeLocalStorageSet(STORAGE_MODE_KEY, summaryMode.value)
@@ -386,6 +409,10 @@ fetchList()
 <style scoped>
 .table-skeleton {
   padding: 16px 0;
+}
+
+.account-error {
+  margin: 0 0 14px;
 }
 
 .summary-toolbar {

@@ -568,11 +568,21 @@ export default function transactionRoutes(server, db) {
 
       let created = 0
       let skipped = 0
+      const skippedRows = []
       const warnings = [...parsed.warnings]
       const tx = db.transaction(() => {
         for (const row of parsed.rows) {
           if (isDuplicateTransaction(db, row)) {
             skipped += 1
+            skippedRows.push({
+              source_row: row.source_row,
+              account_name: row.account_name,
+              type: row.type,
+              amount: row.amount,
+              category: row.category,
+              description: row.description,
+              created_at: row.created_at
+            })
             continue
           }
           createTransaction(db, row)
@@ -587,6 +597,7 @@ export default function transactionRoutes(server, db) {
         data: {
           imported_count: created,
           skipped_count: skipped,
+          skipped_rows: skippedRows,
           warning_count: warnings.length,
           warnings: warnings.slice(0, 30)
         }

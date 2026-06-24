@@ -40,6 +40,7 @@
                 <span>列宽</span>
                 <el-slider v-model="colWidthScale" :min="0.75" :max="1.8" :step="0.05" />
               </label>
+              <small>只影响当前工作表</small>
             </div>
           </el-popover>
           <el-dropdown :disabled="!workbook" @command="handleToolbarCommand">
@@ -195,17 +196,20 @@ const loadingDetail = ref(false)
 const importing = ref(false)
 const exporting = ref(false)
 const fullscreen = ref(false)
-const zoom = ref(1)
-const searchKeyword = ref('')
-const activeSearchIndex = ref(-1)
-const filterToSearch = ref(false)
-const freezeRows = ref(0)
-const freezeCols = ref(0)
-const rowHeightScale = ref(1)
-const colWidthScale = ref(1)
-const cellAlign = ref('left')
 const activeCacheKey = ref('')
 const detailCache = new Map()
+const sheetViewSettings = reactive({})
+const sheetViewDefaults = {
+  zoom: 1,
+  searchKeyword: '',
+  activeSearchIndex: -1,
+  filterToSearch: false,
+  freezeRows: 0,
+  freezeCols: 0,
+  rowHeightScale: 1,
+  colWidthScale: 1,
+  cellAlign: 'left'
+}
 const maxRows = 160
 const maxCols = 26
 const baseRowHeight = 38
@@ -217,6 +221,20 @@ const scrollState = reactive({ top: 0, left: 0, width: 900, height: 520 })
 let scrollFrame = 0
 
 const activeSheet = computed(() => sheets.value.find(sheet => Number(sheet.id) === Number(activeSheetId.value)) || null)
+const activeSheetViewKey = computed(() => {
+  if (!workbook.value?.id || !activeSheetId.value) return ''
+  return `${workbook.value.id}:${activeSheetId.value}`
+})
+const activeSheetView = computed(() => getSheetView(activeSheetViewKey.value))
+const zoom = sheetViewModel('zoom')
+const searchKeyword = sheetViewModel('searchKeyword')
+const activeSearchIndex = sheetViewModel('activeSearchIndex')
+const filterToSearch = sheetViewModel('filterToSearch')
+const freezeRows = sheetViewModel('freezeRows')
+const freezeCols = sheetViewModel('freezeCols')
+const rowHeightScale = sheetViewModel('rowHeightScale')
+const colWidthScale = sheetViewModel('colWidthScale')
+const cellAlign = sheetViewModel('cellAlign')
 // 根据实际数据范围计算可见行列，不渲染空白格子
 const dataRange = computed(() => {
   let maxR = 0, maxC = 0
@@ -365,6 +383,22 @@ const canMergeSelection = computed(() => {
 })
 
 function token() { return getAuthToken() }
+
+function getSheetView(key) {
+  if (!key) return { ...sheetViewDefaults }
+  if (!sheetViewSettings[key]) sheetViewSettings[key] = { ...sheetViewDefaults }
+  return sheetViewSettings[key]
+}
+
+function sheetViewModel(field) {
+  return computed({
+    get: () => activeSheetView.value[field],
+    set: value => {
+      if (!activeSheetViewKey.value) return
+      getSheetView(activeSheetViewKey.value)[field] = value
+    }
+  })
+}
 
 async function fetchWorkbooks() {
   loadingList.value = true
