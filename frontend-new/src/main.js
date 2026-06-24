@@ -5,7 +5,7 @@ import 'element-plus/dist/index.css'
 import App from './App.vue'
 import router from './router'
 import { purgeLegacySharedAuth } from './utils/authSession'
-import { installWhiteScreenRecovery, resetBrowserState, showRecoveryScreen } from './utils/browserRecovery'
+import { handleStartupError, installWhiteScreenRecovery, markAppMounted, resetBrowserState, showRecoveryScreen } from './utils/browserRecovery'
 
 installWhiteScreenRecovery()
 
@@ -20,13 +20,14 @@ try {
   const app = createApp(App)
 
   app.config.errorHandler = err => {
-    showRecoveryScreen(err?.message || '页面渲染异常')
+    handleStartupError(err?.message || '页面渲染异常', err)
   }
 
   app.use(ElementPlus, { locale: zhCn })
   app.use(router)
 
   app.mount('#app')
+  markAppMounted()
 } catch (err) {
   showRecoveryScreen(err?.message || '页面启动异常')
 }

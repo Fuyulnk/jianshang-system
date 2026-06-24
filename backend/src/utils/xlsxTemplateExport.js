@@ -102,7 +102,10 @@ function groupUpdatesBySheet(updates, sheetTargets) {
     if (!grouped.has(target.path)) grouped.set(target.path, [])
     grouped.get(target.path).push({
       address: String(update.address).toUpperCase(),
-      value: update.value
+      value: update.value,
+      rawValue: update.rawValue ?? update.raw_value,
+      formula: update.formula || '',
+      numberFormat: update.numberFormat || update.number_format || ''
     })
   }
   return grouped
@@ -136,7 +139,7 @@ function findSheetTarget(sheetTargets, update) {
 function patchWorksheetXml(xml, updates, merges) {
   let nextXml = xml
   for (const update of updates) {
-    nextXml = upsertCell(nextXml, update.address, update.value)
+    nextXml = upsertCell(nextXml, update.address, update)
   }
   if (Array.isArray(merges)) nextXml = patchMergeCellsXml(nextXml, merges)
   return nextXml
@@ -168,48 +171,61 @@ function normalizeMergeRef(merge) {
   return start === end ? '' : `${start}:${end}`
 }
 
-function upsertCell(xml, address, value) {
+function upsertCell(xml, address, update) {
   const rowIndex = Number(address.match(/\d+/)?.[0] || 0)
   if (!rowIndex) return xml
   const cellRegex = new RegExp(`<c\\b([^>]*\\br="${escapeRegex(address)}"[^>]*)>[\\s\\S]*?<\\/c>`)
   const matched = xml.match(cellRegex)
   if (matched) {
     const attrs = parseXmlAttrs(matched[1])
-    return xml.replace(cellRegex, buildCellXml(address, value, attrs.s))
+    return xml.replace(cellRegex, buildCellXml(address, update, attrs.s))
   }
 
   const rowRegex = new RegExp(`<row\\b([^>]*\\br="${rowIndex}"[^>]*)>([\\s\\S]*?)<\\/row>`)
   const rowMatch = xml.match(rowRegex)
   if (rowMatch) {
-    const rowInner = insertCellIntoRow(rowMatch[2], address, value)
+    const rowInner = insertCellIntoRow(rowMatch[2], address, update)
     return xml.replace(rowRegex, `<row${rowMatch[1]}>${rowInner}</row>`)
   }
 
   const sheetDataEnd = xml.indexOf('</sheetData>')
   if (sheetDataEnd < 0) return xml
-  const rowXml = `<row r="${rowIndex}">${buildCellXml(address, value)}</row>`
+  const rowXml = `<row r="${rowIndex}">${buildCellXml(address, update)}</row>`
   return `${xml.slice(0, sheetDataEnd)}${rowXml}${xml.slice(sheetDataEnd)}`
 }
 
-function insertCellIntoRow(rowInner, address, value) {
+function insertCellIntoRow(rowInner, address, update) {
   const targetCol = XLSX.utils.decode_cell(address).c
   const cellMatches = [...rowInner.matchAll(/<c\b([^>]*\br="([A-Z]+)\d+"[^>]*)>[\s\S]*?<\/c>/g)]
   for (const match of cellMatches) {
     const col = XLSX.utils.decode_col(match[2])
     if (col > targetCol) {
       const offset = match.index || 0
-      return `${rowInner.slice(0, offset)}${buildCellXml(address, value)}${rowInner.slice(offset)}`
+      return `${rowInner.slice(0, offset)}${buildCellXml(address, update)}${rowInner.slice(offset)}`
     }
   }
-  return `${rowInner}${buildCellXml(address, value)}`
+  return `${rowInner}${buildCellXml(address, update)}`
 }
 
-function buildCellXml(address, value, styleId = '') {
+function buildCellXml(address, update, styleId = '') {
   const style = styleId !== undefined && styleId !== null && styleId !== '' ? ` s="${escapeXml(styleId)}"` : ''
+  const value = update && typeof update === 'object' && !Array.isArray(update) ? update.value : update
+  const rawValue = update && typeof update === 'object' && !Array.isArray(update) ? update.rawValue : undefined
+  const formula = normalizeFormula(update && typeof update === 'object' && !Array.isArray(update) ? update.formula : '')
+  if (formula) {
+    const cached = rawValue !== undefined && rawValue !== null && String(rawValue) !== '' ? rawValue : value
+    const cachedXml = cached !== undefined && cached !== null && String(cached) !== '' ? `<v>${escapeXml(String(cached))}</v>` : ''
+    return `<c r="${address}"${style}><f>${escapeXml(formula)}</f>${cachedXml}</c>`
+  }
   if (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '' && isFinite(Number(value)))) {
     return `<c r="${address}"${style}><v>${escapeXml(String(value))}</v></c>`
   }
   return `<c r="${address}" t="inlineStr"${style}><is><t>${escapeXml(String(value ?? ''))}</t></is></c>`
+}
+
+function normalizeFormula(formula) {
+  const text = String(formula || '').trim()
+  return text.startsWith('=') ? text.slice(1) : text
 }
 
 function readZipEntries(buffer) {

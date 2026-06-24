@@ -120,18 +120,32 @@
                 :key="`h-${col}`"
                 class="grid-col-header"
                 :class="{ frozen: isFrozenCol(col) }"
-                :style="{ transform: `translate(${positionedLeft(col)}px, ${scrollState.top}px)`, width: `${colWidthPx}px`, height: `${headerHeightPx}px` }"
+                :style="{ transform: `translate(${positionedLeft(col)}px, ${scrollState.top}px)`, width: `${colWidth(col)}px`, height: `${headerHeightPx}px` }"
               >
-                {{ colName(col) }}
+                <span>{{ colName(col) }}</span>
+                <button
+                  type="button"
+                  class="col-resize-handle"
+                  title="拖动调整这一列宽度，双击恢复"
+                  @mousedown.stop.prevent="startColResize(col, $event)"
+                  @dblclick.stop.prevent="resetColWidth(col)"
+                ></button>
               </div>
               <div
                 v-for="row in visibleRows"
                 :key="`r-${row}`"
                 class="grid-row-header"
                 :class="{ frozen: isFrozenRow(row) }"
-                :style="{ transform: `translate(${scrollState.left}px, ${positionedTop(row)}px)`, width: `${rowHeaderWidthPx}px`, height: `${rowHeightPx}px` }"
+                :style="{ transform: `translate(${scrollState.left}px, ${positionedTop(row)}px)`, width: `${rowHeaderWidthPx}px`, height: `${rowHeight(row)}px` }"
               >
-                {{ row }}
+                <span>{{ row }}</span>
+                <button
+                  type="button"
+                  class="row-resize-handle"
+                  title="拖动调整这一行高度，双击恢复"
+                  @mousedown.stop.prevent="startRowResize(row, $event)"
+                  @dblclick.stop.prevent="resetRowHeight(row)"
+                ></button>
               </div>
               <div
                 v-for="item in visibleCellItems"
@@ -208,7 +222,9 @@ const sheetViewDefaults = {
   freezeCols: 0,
   rowHeightScale: 1,
   colWidthScale: 1,
-  cellAlign: 'left'
+  cellAlign: 'left',
+  rowHeights: {},
+  colWidths: {}
 }
 const maxRows = 160
 const maxCols = 26
@@ -216,8 +232,13 @@ const baseRowHeight = 38
 const baseColWidth = 136
 const baseRowHeaderWidth = 56
 const baseHeaderHeight = 30
+const minRowHeightUnit = 24
+const maxRowHeightUnit = 220
+const minColWidthUnit = 56
+const maxColWidthUnit = 420
 const overscan = 4
 const scrollState = reactive({ top: 0, left: 0, width: 900, height: 520 })
+const resizingGrid = ref(null)
 let scrollFrame = 0
 
 const activeSheet = computed(() => sheets.value.find(sheet => Number(sheet.id) === Number(activeSheetId.value)) || null)
@@ -235,6 +256,8 @@ const freezeCols = sheetViewModel('freezeCols')
 const rowHeightScale = sheetViewModel('rowHeightScale')
 const colWidthScale = sheetViewModel('colWidthScale')
 const cellAlign = sheetViewModel('cellAlign')
+const rowHeights = sheetViewModel('rowHeights')
+const colWidths = sheetViewModel('colWidths')
 // 根据实际数据范围计算可见行列，不渲染空白格子
 const dataRange = computed(() => {
   let maxR = 0, maxC = 0
@@ -250,12 +273,14 @@ const editingCell = ref('')
 function editCell(row, col) { editingCell.value = `${row}-${col}` }
 const selectedRange = ref(null)
 
-const rowHeightPx = computed(() => Math.round(baseRowHeight * zoom.value * rowHeightScale.value))
-const colWidthPx = computed(() => Math.round(baseColWidth * zoom.value * colWidthScale.value))
+const defaultRowHeightUnit = computed(() => Math.round(baseRowHeight * rowHeightScale.value))
+const defaultColWidthUnit = computed(() => Math.round(baseColWidth * colWidthScale.value))
+const rowHeightPx = computed(() => Math.round(defaultRowHeightUnit.value * zoom.value))
+const colWidthPx = computed(() => Math.round(defaultColWidthUnit.value * zoom.value))
 const rowHeaderWidthPx = computed(() => Math.round(baseRowHeaderWidth * zoom.value))
 const headerHeightPx = computed(() => Math.round(baseHeaderHeight * zoom.value))
-const gridWidth = computed(() => rowHeaderWidthPx.value + dataRange.value.cols * colWidthPx.value)
-const gridHeight = computed(() => headerHeightPx.value + tableRows.value.length * rowHeightPx.value)
+const gridWidth = computed(() => colOffsetState.value.total)
+const gridHeight = computed(() => rowOffsetState.value.total)
 
 const normalizedSearchKeyword = computed(() => searchKeyword.value.trim().toLowerCase())
 const searchMatches = computed(() => {
@@ -301,6 +326,24 @@ const rowPositionMap = computed(() => {
   tableRows.value.forEach((row, index) => map.set(row, index + 1))
   return map
 })
+const rowOffsetState = computed(() => {
+  const map = new Map()
+  let top = headerHeightPx.value
+  for (const row of tableRows.value) {
+    map.set(Number(row), top)
+    top += rowHeight(row)
+  }
+  return { map, total: top }
+})
+const colOffsetState = computed(() => {
+  const map = new Map()
+  let left = rowHeaderWidthPx.value
+  for (const col of columns.value) {
+    map.set(Number(col), left)
+    left += colWidth(col)
+  }
+  return { map, total: left }
+})
 const frozenRows = computed(() => tableRows.value.slice(0, Math.min(freezeRows.value, tableRows.value.length)))
 const frozenCols = computed(() => columns.value.slice(0, Math.min(freezeCols.value, columns.value.length)))
 const freezeLabel = computed(() => {
@@ -312,10 +355,12 @@ const freezeLabel = computed(() => {
 })
 
 const visibleBounds = computed(() => {
-  const rowStart = Math.max(1, Math.floor(Math.max(0, scrollState.top - headerHeightPx.value) / rowHeightPx.value) + 1 - overscan)
-  const rowEnd = Math.min(tableRows.value.length, Math.ceil(Math.max(0, scrollState.top + scrollState.height - headerHeightPx.value) / rowHeightPx.value) + overscan)
-  const colStart = Math.max(1, Math.floor(Math.max(0, scrollState.left - rowHeaderWidthPx.value) / colWidthPx.value) + 1 - overscan)
-  const colEnd = Math.min(dataRange.value.cols, Math.ceil(Math.max(0, scrollState.left + scrollState.width - rowHeaderWidthPx.value) / colWidthPx.value) + overscan)
+  const rowRange = visibleIndexRange(tableRows.value, rowOffsetState.value.map, rowHeight, scrollState.top, scrollState.top + scrollState.height)
+  const colRange = visibleIndexRange(columns.value, colOffsetState.value.map, colWidth, scrollState.left, scrollState.left + scrollState.width)
+  const rowStart = Math.max(1, rowRange.start - overscan)
+  const rowEnd = Math.min(tableRows.value.length, rowRange.end + overscan)
+  const colStart = Math.max(1, colRange.start - overscan)
+  const colEnd = Math.min(dataRange.value.cols, colRange.end + overscan)
   return { rowStart, rowEnd, colStart, colEnd }
 })
 const visibleRows = computed(() => {
@@ -384,9 +429,17 @@ const canMergeSelection = computed(() => {
 
 function token() { return getAuthToken() }
 
+function createSheetView() {
+  return {
+    ...sheetViewDefaults,
+    rowHeights: {},
+    colWidths: {}
+  }
+}
+
 function getSheetView(key) {
-  if (!key) return { ...sheetViewDefaults }
-  if (!sheetViewSettings[key]) sheetViewSettings[key] = { ...sheetViewDefaults }
+  if (!key) return createSheetView()
+  if (!sheetViewSettings[key]) sheetViewSettings[key] = createSheetView()
   return sheetViewSettings[key]
 }
 
@@ -516,8 +569,8 @@ function makeCellItem(row, col, merge = null) {
     row,
     col,
     merge,
-    width: merge ? (Number(merge.end_col) - Number(merge.start_col) + 1) * colWidthPx.value : colWidthPx.value,
-    height: merge ? mergeHeight(merge) : rowHeightPx.value
+    width: merge ? mergeWidth(merge) : colWidth(col),
+    height: merge ? mergeHeight(merge) : rowHeight(row)
   }
 }
 
@@ -541,20 +594,64 @@ function isMergeVisible(merge, bounds) {
   return rangesOverlap(startRow, endRow, bounds.rowStart, bounds.rowEnd, startCol, endCol, bounds.colStart, bounds.colEnd)
 }
 
+function rowHeight(row) {
+  const custom = Number(rowHeights.value?.[Number(row)])
+  const unit = Number.isFinite(custom) && custom > 0 ? custom : defaultRowHeightUnit.value
+  return Math.round(unit * zoom.value)
+}
+
+function colWidth(col) {
+  const custom = Number(colWidths.value?.[Number(col)])
+  const unit = Number.isFinite(custom) && custom > 0 ? custom : defaultColWidthUnit.value
+  return Math.round(unit * zoom.value)
+}
+
+function visibleIndexRange(items, offsetMap, sizeGetter, startPx, endPx) {
+  let start = 1
+  let end = Math.max(1, items.length)
+  let hasStart = false
+  let hasVisible = false
+  for (let index = 0; index < items.length; index++) {
+    const item = Number(items[index])
+    const offset = offsetMap.get(item) ?? 0
+    const size = sizeGetter(item)
+    if (offset + size >= startPx && offset <= endPx) {
+      if (!hasStart) {
+        start = index + 1
+        hasStart = true
+      }
+      end = index + 1
+      hasVisible = true
+    } else if (hasVisible && offset > endPx) {
+      break
+    }
+  }
+  return { start, end }
+}
+
+function mergeWidth(merge) {
+  let width = 0
+  for (let col = Number(merge.start_col); col <= Number(merge.end_col); col++) {
+    width += colWidth(col)
+  }
+  return width || colWidth(Number(merge.start_col))
+}
+
 function mergeHeight(merge) {
-  const start = rowPositionMap.value.get(Number(merge.start_row))
-  const end = rowPositionMap.value.get(Number(merge.end_row))
-  if (!start || !end) return rowHeightPx.value
-  return Math.max(1, end - start + 1) * rowHeightPx.value
+  let height = 0
+  for (let row = Number(merge.start_row); row <= Number(merge.end_row); row++) {
+    if (!rowPositionMap.value.has(row)) continue
+    height += rowHeight(row)
+  }
+  return height || rowHeight(Number(merge.start_row))
 }
 
 function cellLeft(col) {
-  return rowHeaderWidthPx.value + (Number(col) - 1) * colWidthPx.value
+  return colOffsetState.value.map.get(Number(col)) ?? rowHeaderWidthPx.value
 }
 
 function cellTop(row) {
-  const position = rowPositionMap.value.get(Number(row)) || Number(row)
-  return headerHeightPx.value + (position - 1) * rowHeightPx.value
+  return rowOffsetState.value.map.get(Number(row)) ?? headerHeightPx.value
 }
 
 function isFrozenRow(row) {
@@ -572,6 +669,76 @@ function positionedLeft(col) {
 
 function positionedTop(row) {
   return cellTop(row) + (isFrozenRow(row) ? scrollState.top : 0)
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function setRowHeight(row, nextPixelHeight) {
+  const nextUnit = clampNumber(Math.round(nextPixelHeight / zoom.value), minRowHeightUnit, maxRowHeightUnit)
+  rowHeights.value = { ...(rowHeights.value || {}), [Number(row)]: nextUnit }
+  nextTick(updateGridViewport)
+}
+
+function setColWidth(col, nextPixelWidth) {
+  const nextUnit = clampNumber(Math.round(nextPixelWidth / zoom.value), minColWidthUnit, maxColWidthUnit)
+  colWidths.value = { ...(colWidths.value || {}), [Number(col)]: nextUnit }
+  nextTick(updateGridViewport)
+}
+
+function resetRowHeight(row) {
+  const next = { ...(rowHeights.value || {}) }
+  delete next[Number(row)]
+  rowHeights.value = next
+  nextTick(updateGridViewport)
+}
+
+function resetColWidth(col) {
+  const next = { ...(colWidths.value || {}) }
+  delete next[Number(col)]
+  colWidths.value = next
+  nextTick(updateGridViewport)
+}
+
+function startColResize(col, event) {
+  resizingGrid.value = {
+    type: 'col',
+    index: Number(col),
+    startClient: event.clientX,
+    startSize: colWidth(col)
+  }
+  document.body.classList.add('ledger-resizing-col')
+  window.addEventListener('mousemove', onGridResizeMove)
+  window.addEventListener('mouseup', stopGridResize)
+}
+
+function startRowResize(row, event) {
+  resizingGrid.value = {
+    type: 'row',
+    index: Number(row),
+    startClient: event.clientY,
+    startSize: rowHeight(row)
+  }
+  document.body.classList.add('ledger-resizing-row')
+  window.addEventListener('mousemove', onGridResizeMove)
+  window.addEventListener('mouseup', stopGridResize)
+}
+
+function onGridResizeMove(event) {
+  const state = resizingGrid.value
+  if (!state) return
+  const currentClient = state.type === 'col' ? event.clientX : event.clientY
+  const nextSize = state.startSize + currentClient - state.startClient
+  if (state.type === 'col') setColWidth(state.index, nextSize)
+  else setRowHeight(state.index, nextSize)
+}
+
+function stopGridResize() {
+  resizingGrid.value = null
+  document.body.classList.remove('ledger-resizing-col', 'ledger-resizing-row')
+  window.removeEventListener('mousemove', onGridResizeMove)
+  window.removeEventListener('mouseup', stopGridResize)
 }
 
 function onGridScroll(event) {
@@ -835,8 +1002,8 @@ function focusSearchMatch(step = 1) {
 function scrollToCell(row, col) {
   const el = gridViewport.value
   if (!el) return
-  const top = Math.max(0, cellTop(row) - headerHeightPx.value - rowHeightPx.value)
-  const left = Math.max(0, cellLeft(col) - rowHeaderWidthPx.value - colWidthPx.value)
+  const top = Math.max(0, cellTop(row) - headerHeightPx.value - rowHeight(row))
+  const left = Math.max(0, cellLeft(col) - rowHeaderWidthPx.value - colWidth(col))
   el.scrollTo({ top, left, behavior: 'smooth' })
 }
 
@@ -915,6 +1082,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('resize', updateGridViewport)
+  stopGridResize()
   if (scrollFrame) cancelAnimationFrame(scrollFrame)
 })
 </script>
@@ -1111,13 +1279,61 @@ onUnmounted(() => {
   z-index: 6;
   display: grid;
   place-items: center;
+  user-select: none;
   background: color-mix(in srgb, var(--bg-page) 86%, var(--bg-card));
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
 }
+.grid-col-header span,
+.grid-row-header span {
+  pointer-events: none;
+}
 .grid-row-header {
   z-index: 7;
+}
+.col-resize-handle,
+.row-resize-handle {
+  position: absolute;
+  z-index: 3;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+}
+.col-resize-handle {
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+}
+.row-resize-handle {
+  right: 0;
+  bottom: -4px;
+  left: 0;
+  height: 8px;
+  cursor: row-resize;
+}
+.grid-col-header:hover .col-resize-handle,
+.grid-row-header:hover .row-resize-handle {
+  opacity: 1;
+}
+.grid-col-header:hover .col-resize-handle {
+  background: linear-gradient(90deg, transparent 3px, var(--color-primary) 3px, var(--color-primary) 5px, transparent 5px);
+}
+.grid-row-header:hover .row-resize-handle {
+  background: linear-gradient(180deg, transparent 3px, var(--color-primary) 3px, var(--color-primary) 5px, transparent 5px);
+}
+:global(body.ledger-resizing-col),
+:global(body.ledger-resizing-col *) {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+:global(body.ledger-resizing-row),
+:global(body.ledger-resizing-row *) {
+  cursor: row-resize !important;
+  user-select: none !important;
 }
 .grid-col-header.frozen {
   z-index: 18;

@@ -14,6 +14,12 @@ const RECOVERY_KEYS = [
   'jianshang-session'
 ]
 
+let appMounted = false
+
+export function markAppMounted() {
+  appMounted = true
+}
+
 export function resetBrowserState() {
   for (const key of RECOVERY_KEYS) {
     safeRemove(localStorage, key)
@@ -24,12 +30,20 @@ export function resetBrowserState() {
 export function installWhiteScreenRecovery() {
   if (typeof window === 'undefined') return
   window.addEventListener('error', event => {
-    showRecoveryScreen(event?.error?.message || event?.message || '页面脚本异常')
+    handleStartupError(event?.error?.message || event?.message || '页面脚本异常', event?.error)
   })
   window.addEventListener('unhandledrejection', event => {
     const reason = event?.reason
-    showRecoveryScreen(reason?.message || String(reason || '页面请求异常'))
+    handleStartupError(reason?.message || String(reason || '页面请求异常'), reason)
   })
+}
+
+export function handleStartupError(message = '页面启动失败', error = null) {
+  if (appMounted) {
+    console.error('[JianShang] 页面运行时异常', error || message)
+    return
+  }
+  showRecoveryScreen(message)
 }
 
 export function showRecoveryScreen(message = '页面启动失败') {

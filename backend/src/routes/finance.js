@@ -497,7 +497,10 @@ export default function financeRoutes(server, db) {
           sheetName: sheet?.name || '',
           sheetIndex: Number(sheet?.sheet_index || 0),
           address: cell.address,
-          value: cell.value
+          value: cell.value,
+          rawValue: cell.raw_value,
+          formula: cell.formula,
+          numberFormat: cell.number_format
         }
       })
       const mergeUpdates = sheets.map(sheet => ({
