@@ -1118,7 +1118,7 @@ const canRunCurrentTask = computed(() => {
 })
 const canSkipRecheck = computed(() => {
   if (!project.value || project.value.status !== 'survey_done') return false
-  if (!['super_admin', 'admin', 'engineering'].includes(userRole)) return false
+  if (!['super_admin', 'admin', 'engineering', 'finance'].includes(userRole)) return false
   if (userRole === 'super_admin' || userRole === 'admin') return true
   return isAssignedEmployee.value
 })

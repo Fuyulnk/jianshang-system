@@ -478,7 +478,7 @@ export default function projectImportRoutes(server, db) {
       reply.code(404).send({ success: false, message: '项目不存在或无权限跳过复尺' })
       return
     }
-    if (!['super_admin', 'admin', 'engineering'].includes(request.user.role)) {
+    if (!['super_admin', 'admin', 'engineering', 'finance'].includes(request.user.role)) {
       reply.code(403).send({ success: false, message: '当前角色不能跳过复尺' })
       return
     }
@@ -885,12 +885,12 @@ function canApplyProjectDocumentImport(user) {
 }
 
 const DELIVERY_DOCUMENT_WRITE_ROLES = {
-  survey_initial: ['engineering'],
-  survey_recheck: ['engineering'],
+  survey_initial: ['engineering', 'finance'],
+  survey_recheck: ['engineering', 'finance'],
   project_payment_request: ['finance'],
-  briefing: ['engineering'],
-  material_io: ['warehouse'],
-  completion_inspection: ['engineering', 'employee'],
+  briefing: ['engineering', 'finance'],
+  material_io: ['warehouse', 'finance'],
+  completion_inspection: ['engineering', 'employee', 'finance'],
   labor_settlement: ['finance', 'engineering'],
   cost_check: ['finance'],
   finance_settlement: ['finance']

@@ -16,12 +16,12 @@ const DELIVERY_CONFIRM_RULES = {
   survey_initial: {
     from: ['handover_received', 'survey_pending'],
     targetStatus: 'survey_done',
-    roles: ['super_admin', 'admin', 'engineering']
+    roles: ['super_admin', 'admin', 'engineering', 'finance']
   },
   survey_recheck: {
     from: ['survey_done'],
     targetStatus: 'pre_entry_payment_pending',
-    roles: ['super_admin', 'admin', 'engineering']
+    roles: ['super_admin', 'admin', 'engineering', 'finance']
   },
   project_payment_request: {
     from: ['recheck_done', 'pre_entry_payment_pending'],
@@ -31,17 +31,17 @@ const DELIVERY_CONFIRM_RULES = {
   briefing: {
     from: ['payment_received'],
     targetStatus: 'briefing_done',
-    roles: ['super_admin', 'admin', 'engineering']
+    roles: ['super_admin', 'admin', 'engineering', 'finance']
   },
   material_io: {
     from: ['inspection_done'],
     targetStatus: 'material_returned',
-    roles: ['super_admin', 'admin', 'warehouse', 'engineering']
+    roles: ['super_admin', 'admin', 'warehouse', 'engineering', 'finance']
   },
   completion_inspection: {
     from: ['in_progress', 'material_out'],
     targetStatus: 'inspection_done',
-    roles: ['super_admin', 'admin', 'engineering', 'employee']
+    roles: ['super_admin', 'admin', 'engineering', 'employee', 'finance']
   },
   labor_settlement: {
     from: ['material_returned'],

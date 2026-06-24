@@ -35,8 +35,8 @@ const LEGACY_STATUS_ALIASES = {
 
 const PROJECT_TRANSITIONS = {
   handover_received: { next: 'survey_pending', roles: ['super_admin', 'admin', 'engineering'], required: ['handover', 'survey_assignee'] },
-  survey_pending: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering'], assignedOnly: true, required: ['survey'] },
-  survey_done: { next: 'pre_entry_payment_pending', roles: ['super_admin', 'admin', 'engineering'], assignedOnly: true, required: ['recheck_assignee', 'condition_note'] },
+  survey_pending: { next: 'survey_done', roles: ['super_admin', 'admin', 'engineering', 'finance'], assignedOnly: true, required: ['survey'] },
+  survey_done: { next: 'pre_entry_payment_pending', roles: ['super_admin', 'admin', 'engineering', 'finance'], assignedOnly: true, required: ['recheck_assignee', 'condition_note'] },
   recheck_done: { next: 'pre_entry_payment_pending', roles: ['super_admin', 'admin', 'engineering', 'finance'], required: ['condition_note'] },
   pre_entry_payment_pending: { next: 'payment_received', roles: ['super_admin'], emergencyOnly: true },
   payment_received: { next: 'briefing_done', roles: ['super_admin', 'admin', 'engineering'], required: ['assignee', 'briefing_date'] },
