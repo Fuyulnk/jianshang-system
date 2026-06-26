@@ -36,6 +36,40 @@ export const AI_TOOL_REGISTRY = [
     schema: { type: 'object', properties: {}, required: [] }
   },
   {
+    name: 'get_finance_arap',
+    label: '查看应收应付',
+    desc: '查询财务应收应付台账，返回待收、待付、逾期、项目和剩余金额',
+    tier: 'L1',
+    risk_level: 'medium',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['receivable', 'payable'], description: '应收或应付' },
+        status: { type: 'string', enum: ['pending', 'partial', 'done'], description: '处理状态' },
+        query: { type: 'string', description: '按事项、对方、项目、分类或备注搜索' },
+        limit: { type: 'number', description: '返回数量，默认50，最多200' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'get_finance_ledger',
+    label: '查看入账登记表',
+    desc: '查询已导入的入账登记表，或按关键词搜索单元格、公式和备注',
+    tier: 'L1',
+    risk_level: 'medium',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '搜索客户、金额、公式、备注；留空返回工作簿列表' },
+        limit: { type: 'number', description: '返回数量，默认50，最多200' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'get_products',
     label: '查看库存产品',
     desc: '查询库存产品，返回名称、规格、分类、仓库单位、当前库存、低库存线、仓库编码/库位、别名和低库存状态',
@@ -105,6 +139,58 @@ export const AI_TOOL_REGISTRY = [
         project_id: { type: 'number', description: '项目 ID' }
       },
       required: ['project_id']
+    }
+  },
+  {
+    name: 'search_files',
+    label: '搜索文件中心',
+    desc: '按文件名、项目、流水备注、上传人、对方或经手人搜索可见文件和流水凭证',
+    tier: 'L1',
+    risk_level: 'medium',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', enum: ['project', 'transaction', 'product'], description: '文件归属类型' },
+        query: { type: 'string', description: '文件名、项目名、流水备注等关键词' },
+        person: { type: 'string', description: '上传人、交易对方或经手人关键词' },
+        limit: { type: 'number', description: '返回数量，默认50，最多200' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'get_project_file_folders',
+    label: '查看项目文件夹',
+    desc: '查询当前用户可见的项目文件夹和附件数量',
+    tier: 'L1',
+    risk_level: 'medium',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '项目名或客户关键词' },
+        limit: { type: 'number', description: '返回数量，默认50，最多200' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'get_supply_orders',
+    label: '查看供货单',
+    desc: '查询项目供货单，区分自有库存供货和总部直发',
+    tier: 'L1',
+    risk_level: 'medium',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '供货单号、客户、电话、来源或地址关键词' },
+        status: { type: 'string', description: '供货单状态，如 ordered、payment_confirmed、stock_out、shipped、completed' },
+        fulfillment_type: { type: 'string', enum: ['warehouse', 'purchase'], description: '自有库存供货或总部直发' },
+        limit: { type: 'number', description: '返回数量，默认50，最多200' }
+      },
+      required: []
     }
   },
   {
@@ -241,7 +327,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance', 'warehouse', 'engineering', 'employee'],
-    tools: ['get_projects', 'get_project_documents', 'get_products', 'get_system_stats', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
+    tools: ['get_projects', 'get_project_documents', 'get_project_file_folders', 'search_files', 'get_products', 'get_supply_orders', 'get_system_stats', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
     base_prompt: '你是简尚总助手。优先查询系统事实，再用简洁中文解释流程和下一步。写入动作必须先让用户确认。'
   },
   {
@@ -252,7 +338,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance'],
-    tools: ['get_accounts', 'get_transactions', 'get_today_summary', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction'],
+    tools: ['get_accounts', 'get_transactions', 'get_today_summary', 'get_finance_arap', 'get_finance_ledger', 'search_files', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction'],
     base_prompt: '你是简尚财务助手。财务消息先解析成草稿，用户明确确认后才能写入流水。不要猜账户余额和金额，必须查系统数据。'
   },
   {
@@ -263,7 +349,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'warehouse', 'engineering'],
-    tools: ['get_products', 'get_projects', 'get_project_documents', 'get_system_stats'],
+    tools: ['get_products', 'get_supply_orders', 'get_projects', 'get_project_documents', 'get_project_file_folders', 'search_files', 'get_system_stats'],
     base_prompt: '你是简尚仓库助手。回答产品、分类、规格、仓库单位、库存和库位时必须以系统查询结果为准。同名材料要按规格分开说，例如霞光沙1升、霞光沙5升、霞光沙14升不能混成一个产品。'
   },
   {
@@ -274,7 +360,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance', 'warehouse', 'engineering', 'employee'],
-    tools: ['get_projects', 'get_project_documents', 'get_products', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
+    tools: ['get_projects', 'get_project_documents', 'get_project_file_folders', 'search_files', 'get_products', 'get_supply_orders', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
     base_prompt: '你是简尚项目助手。重点回答项目在哪一步、缺什么、下一步谁处理。AI 只能检查和生成草稿，不能绕过人工确认。'
   }
 ]

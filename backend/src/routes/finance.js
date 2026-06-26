@@ -33,6 +33,8 @@ function percentChange(current, previous) {
 }
 
 export default function financeRoutes(server, db) {
+  ensureFinanceReceivablePayableTables(db)
+
   // 财务总览：每个账户的收入/支出汇总 + 余额
   server.get('/api/finance/overview', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
@@ -85,6 +87,142 @@ export default function financeRoutes(server, db) {
     }
 
     return { success: true, data: { accounts: accountData, totals } }
+  })
+
+  // 应收应付台账：财务用于跟踪跨月待收、待付、已完成事项。
+  server.get('/api/finance/receivables-payables', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+
+    const { type = '', status = '', month = '', q = '' } = request.query || {}
+    const params = []
+    const where = ['1 = 1']
+    if (['receivable', 'payable'].includes(type)) {
+      where.push('f.type = ?')
+      params.push(type)
+    }
+    if (['pending', 'partial', 'done'].includes(status)) {
+      where.push('f.status = ?')
+      params.push(status)
+    }
+    if (/^\d{4}-\d{2}$/.test(String(month))) {
+      where.push("date(f.due_date) >= date(?) AND date(f.due_date) < date(?, '+1 month')")
+      params.push(`${month}-01`, `${month}-01`)
+    }
+    const keyword = safeText(q, 80)
+    if (keyword) {
+      where.push('(f.title LIKE ? OR f.counterparty LIKE ? OR f.category LIKE ? OR f.note LIKE ? OR p.name LIKE ?)')
+      const like = `%${keyword}%`
+      params.push(like, like, like, like, like)
+    }
+
+    where.push("COALESCE(f.is_deleted, 0) = 0")
+    const rows = db.prepare(`
+      SELECT f.*, p.name as project_name, u.username as created_by_name
+      FROM finance_arap_items f
+      LEFT JOIN projects p ON f.project_id = p.id
+      LEFT JOIN users u ON f.created_by = u.id
+      WHERE ${where.join(' AND ')}
+      ORDER BY
+        CASE f.status WHEN 'pending' THEN 0 WHEN 'partial' THEN 1 ELSE 2 END,
+        CASE WHEN COALESCE(f.due_date, '') = '' THEN 1 ELSE 0 END,
+        date(f.due_date) ASC,
+        f.id DESC
+    `).all(...params).map(normalizeArapRow)
+
+    const totals = {
+      receivable_pending: roundMoney(rows.filter(row => row.type === 'receivable' && row.status !== 'done').reduce((sum, row) => sum + row.remaining_amount, 0)),
+      payable_pending: roundMoney(rows.filter(row => row.type === 'payable' && row.status !== 'done').reduce((sum, row) => sum + row.remaining_amount, 0)),
+      overdue_count: rows.filter(row => row.is_overdue).length,
+      total_count: rows.length
+    }
+
+    return { success: true, data: { rows, totals } }
+  })
+
+  server.post('/api/finance/receivables-payables', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+
+    const item = normalizeArapInput(request.body || {})
+    if (!item.title) return reply.code(400).send({ success: false, message: '事项名称不能为空' })
+    if (!item.amount || item.amount <= 0) return reply.code(400).send({ success: false, message: '金额必须大于 0' })
+
+    const result = db.prepare(`
+      INSERT INTO finance_arap_items (
+        type, title, counterparty, amount, settled_amount, due_date, status,
+        category, project_id, source_type, source_id, owner_user_id, note, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      item.type,
+      item.title,
+      item.counterparty,
+      item.amount,
+      item.settled_amount,
+      item.due_date,
+      item.status,
+      item.category,
+      item.project_id,
+      item.source_type,
+      item.source_id,
+      item.owner_user_id,
+      item.note,
+      request.user.userId
+    )
+
+    return { success: true, id: result.lastInsertRowid, message: '已新增应收应付事项' }
+  })
+
+  server.put('/api/finance/receivables-payables/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+
+    const id = Number(request.params.id)
+    const existing = db.prepare('SELECT * FROM finance_arap_items WHERE id = ?').get(id)
+    if (!existing) return reply.code(404).send({ success: false, message: '事项不存在' })
+
+    const item = normalizeArapInput({ ...existing, ...(request.body || {}) })
+    if (!item.title) return reply.code(400).send({ success: false, message: '事项名称不能为空' })
+    if (!item.amount || item.amount <= 0) return reply.code(400).send({ success: false, message: '金额必须大于 0' })
+    const completedAt = item.status === 'done'
+      ? (existing.completed_at || new Date().toISOString().slice(0, 19).replace('T', ' '))
+      : ''
+
+    db.prepare(`
+      UPDATE finance_arap_items
+      SET type = ?, title = ?, counterparty = ?, amount = ?, settled_amount = ?,
+        due_date = ?, status = ?, category = ?, project_id = ?, source_type = ?,
+        source_id = ?, owner_user_id = ?, note = ?, completed_at = ?,
+        updated_at = datetime('now', 'localtime')
+      WHERE id = ?
+    `).run(
+      item.type,
+      item.title,
+      item.counterparty,
+      item.amount,
+      item.settled_amount,
+      item.due_date,
+      item.status,
+      item.category,
+      item.project_id,
+      item.source_type,
+      item.source_id,
+      item.owner_user_id,
+      item.note,
+      completedAt,
+      id
+    )
+
+    return { success: true, message: '应收应付事项已更新' }
+  })
+
+  server.delete('/api/finance/receivables-payables/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+
+    const result = db.prepare("UPDATE finance_arap_items SET is_deleted = 1, updated_at = datetime('now', 'localtime') WHERE id = ? AND COALESCE(is_deleted, 0) = 0").run(Number(request.params.id))
+    if (!result.changes) return reply.code(404).send({ success: false, message: '事项不存在' })
+    return { success: true, message: '已删除应收应付事项' }
   })
 
   // 收支分类统计（按分类汇总，用于图表）
@@ -384,8 +522,8 @@ export default function financeRoutes(server, db) {
         `)
         const insertCell = db.prepare(`
           INSERT INTO finance_ledger_cells (
-            workbook_id, sheet_id, row_index, col_index, address, value, raw_value, formula, number_format, updated_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            workbook_id, sheet_id, row_index, col_index, address, value, raw_value, formula, number_format, style_json, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         const insertComment = db.prepare(`
           INSERT INTO finance_ledger_comments (
@@ -416,8 +554,9 @@ export default function financeRoutes(server, db) {
             const value = cell.w !== undefined ? String(cell.w) : cell.v !== undefined ? String(cell.v) : ''
             const rawValue = cell.v === undefined ? '' : String(cell.v)
             const comments = Array.isArray(cell.c) ? cell.c.map(item => fixMojibakeText(item.t || '')).filter(Boolean).join('\n') : ''
-            if (value !== '' || rawValue !== '' || cell.f || comments) {
-              insertCell.run(workbookId, sheetId, pos.r + 1, pos.c + 1, address, value, rawValue, cell.f || '', cell.z || '', request.user.userId)
+            const styleJson = JSON.stringify(extractLedgerCellStyle(cell.s))
+            if (value !== '' || rawValue !== '' || cell.f || comments || styleJson !== '{}') {
+              insertCell.run(workbookId, sheetId, pos.r + 1, pos.c + 1, address, value, rawValue, cell.f || '', cell.z || '', styleJson, request.user.userId)
             }
             if (comments) {
               insertComment.run(workbookId, sheetId, pos.r + 1, pos.c + 1, address, safeText(comments, 2000), request.user.userId, request.user.userId)
@@ -500,7 +639,8 @@ export default function financeRoutes(server, db) {
           value: cell.value,
           rawValue: cell.raw_value,
           formula: cell.formula,
-          numberFormat: cell.number_format
+          numberFormat: cell.number_format,
+          styleJson: cell.style_json
         }
       })
       const mergeUpdates = sheets.map(sheet => ({
@@ -557,15 +697,52 @@ export default function financeRoutes(server, db) {
       cell = db.prepare('SELECT * FROM finance_ledger_cells WHERE id = ?').get(created.lastInsertRowid)
     }
     const nextValue = safeText(request.body?.value ?? '', 5000)
+    const nextFormula = nextValue.trim().startsWith('=')
+      ? safeText(nextValue.trim().replace(/^=+/, ''), 5000)
+      : ''
+    const storedValue = nextFormula ? '' : nextValue
     db.prepare(`
       UPDATE finance_ledger_cells
-      SET value = ?, raw_value = ?, formula = '', updated_by = ?, updated_at = datetime('now', 'localtime')
+      SET value = ?, raw_value = ?, formula = ?, updated_by = ?, updated_at = datetime('now', 'localtime')
       WHERE id = ?
-    `).run(nextValue, nextValue, request.user.userId, cell.id)
+    `).run(storedValue, nextFormula ? nextValue : nextValue, nextFormula, request.user.userId, cell.id)
     db.prepare(`
       INSERT INTO finance_ledger_logs (workbook_id, sheet_id, address, action, old_value, new_value, created_by)
       VALUES (?, ?, ?, 'update_cell', ?, ?, ?)
     `).run(cell.workbook_id, cell.sheet_id, cell.address, cell.value || '', nextValue, request.user.userId)
+    return { success: true, data: db.prepare('SELECT * FROM finance_ledger_cells WHERE id = ?').get(cell.id) }
+  })
+
+  server.put('/api/finance/ledger/cells/:id/style', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const cellId = toInt(request.params.id)
+    let cell = cellId ? db.prepare('SELECT * FROM finance_ledger_cells WHERE id = ?').get(cellId) : null
+    if (!cell && cellId) return reply.code(404).send({ success: false, message: '单元格不存在' })
+    if (!cell) {
+      const sheetId = toInt(request.body?.sheet_id)
+      const sheet = db.prepare('SELECT * FROM finance_ledger_sheets WHERE id = ?').get(sheetId)
+      if (!sheet) return reply.code(404).send({ success: false, message: '工作表不存在' })
+      const rowIndex = Math.max(1, toInt(request.body?.row_index))
+      const colIndex = Math.max(1, toInt(request.body?.col_index))
+      const address = XLSX.utils.encode_cell({ r: rowIndex - 1, c: colIndex - 1 })
+      const created = db.prepare(`
+        INSERT INTO finance_ledger_cells (
+          workbook_id, sheet_id, row_index, col_index, address, value, raw_value, formula, number_format, style_json, updated_by
+        ) VALUES (?, ?, ?, ?, ?, '', '', '', '', '{}', ?)
+      `).run(sheet.workbook_id, sheet.id, rowIndex, colIndex, address, request.user.userId)
+      cell = db.prepare('SELECT * FROM finance_ledger_cells WHERE id = ?').get(created.lastInsertRowid)
+    }
+    const nextStyle = sanitizeLedgerCellStyle(request.body?.style || {})
+    db.prepare(`
+      UPDATE finance_ledger_cells
+      SET style_json = ?, updated_by = ?, updated_at = datetime('now', 'localtime')
+      WHERE id = ?
+    `).run(JSON.stringify(nextStyle), request.user.userId, cell.id)
+    db.prepare(`
+      INSERT INTO finance_ledger_logs (workbook_id, sheet_id, address, action, old_value, new_value, created_by)
+      VALUES (?, ?, ?, 'update_cell_style', ?, ?, ?)
+    `).run(cell.workbook_id, cell.sheet_id, cell.address, cell.style_json || '{}', JSON.stringify(nextStyle), request.user.userId)
     return { success: true, data: db.prepare('SELECT * FROM finance_ledger_cells WHERE id = ?').get(cell.id) }
   })
 
@@ -688,6 +865,98 @@ function buildLedgerWorkbookDetail(db, workbookId) {
     comments,
     merges
   }
+}
+
+function ensureFinanceReceivablePayableTables(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS finance_arap_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL DEFAULT 'receivable',
+      title TEXT NOT NULL,
+      counterparty TEXT DEFAULT '',
+      amount REAL DEFAULT 0,
+      settled_amount REAL DEFAULT 0,
+      due_date TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending',
+      category TEXT DEFAULT '',
+      project_id INTEGER DEFAULT 0,
+      source_type TEXT DEFAULT '',
+      source_id INTEGER DEFAULT 0,
+      owner_user_id INTEGER DEFAULT 0,
+      note TEXT DEFAULT '',
+      created_by INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+      completed_at TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_finance_arap_type_status ON finance_arap_items(type, status);
+    CREATE INDEX IF NOT EXISTS idx_finance_arap_due_date ON finance_arap_items(due_date);
+    CREATE INDEX IF NOT EXISTS idx_finance_arap_project ON finance_arap_items(project_id);
+  `)
+  addArapColumn(db, "settled_amount REAL DEFAULT 0")
+  addArapColumn(db, "source_type TEXT DEFAULT ''")
+  addArapColumn(db, 'source_id INTEGER DEFAULT 0')
+  addArapColumn(db, "is_deleted INTEGER DEFAULT 0")
+  addArapColumn(db, 'owner_user_id INTEGER DEFAULT 0')
+  addArapColumn(db, "completed_at TEXT DEFAULT ''")
+}
+
+function addArapColumn(db, column) {
+  try { db.exec(`ALTER TABLE finance_arap_items ADD COLUMN ${column}`) } catch {}
+}
+
+function normalizeArapInput(input = {}) {
+  const amount = roundMoney(input.amount)
+  const settledAmount = Math.min(roundMoney(input.settled_amount ?? input.settledAmount), Math.max(amount, 0))
+  const status = ['pending', 'partial', 'done'].includes(input.status)
+    ? input.status
+    : settledAmount >= amount && amount > 0
+      ? 'done'
+      : settledAmount > 0
+        ? 'partial'
+        : 'pending'
+  return {
+    type: input.type === 'payable' ? 'payable' : 'receivable',
+    title: safeText(input.title, 120),
+    counterparty: safeText(input.counterparty, 120),
+    amount,
+    settled_amount: settledAmount,
+    due_date: normalizeDateText(input.due_date ?? input.dueDate),
+    status,
+    category: safeText(input.category, 80),
+    project_id: toInt(input.project_id ?? input.projectId),
+    source_type: safeText(input.source_type ?? input.sourceType, 60),
+    source_id: toInt(input.source_id ?? input.sourceId),
+    owner_user_id: toInt(input.owner_user_id ?? input.ownerUserId),
+    note: safeText(input.note, 500)
+  }
+}
+
+function normalizeArapRow(row) {
+  const amount = roundMoney(row.amount)
+  const settledAmount = roundMoney(row.settled_amount)
+  const remainingAmount = roundMoney(Math.max(amount - settledAmount, 0))
+  const dueDate = String(row.due_date || '')
+  const today = new Date().toISOString().slice(0, 10)
+  return {
+    ...row,
+    amount,
+    settled_amount: settledAmount,
+    remaining_amount: remainingAmount,
+    status: row.status || (remainingAmount <= 0 ? 'done' : 'pending'),
+    is_overdue: !!(dueDate && dueDate < today && row.status !== 'done')
+  }
+}
+
+function normalizeDateText(value) {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
+  if (!match) return ''
+  const year = match[1]
+  const month = match[2].padStart(2, '0')
+  const day = match[3].padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function saveLedgerSourceWorkbook(workbookId, fileName, buffer) {
@@ -843,6 +1112,38 @@ function safeFileName(name = '') {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 180) || 'file'
+}
+
+function sanitizeLedgerCellStyle(style = {}) {
+  const horizontal = ['left', 'center', 'right'].includes(style.horizontal) ? style.horizontal : ''
+  const vertical = ['top', 'middle', 'bottom'].includes(style.vertical) ? style.vertical : ''
+  const backgroundColor = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(style.backgroundColor || ''))
+    ? String(style.backgroundColor)
+    : ''
+  return { horizontal, vertical, backgroundColor }
+}
+
+function extractLedgerCellStyle(style = {}) {
+  const alignment = style?.alignment || {}
+  const verticalMap = { center: 'middle', top: 'top', bottom: 'bottom' }
+  const horizontal = ['left', 'center', 'right'].includes(alignment.horizontal) ? alignment.horizontal : ''
+  const vertical = verticalMap[alignment.vertical] || ''
+  const fillRgb = style?.patternType && style.patternType !== 'none'
+    ? normalizeStyleColor(style?.fgColor?.rgb || style?.bgColor?.rgb || '')
+    : ''
+  const next = {}
+  if (horizontal) next.horizontal = horizontal
+  if (vertical) next.vertical = vertical
+  if (fillRgb) next.backgroundColor = fillRgb
+  return next
+}
+
+function normalizeStyleColor(value = '') {
+  const text = String(value || '').replace(/^#/, '').trim()
+  if (/^[0-9a-fA-F]{8}$/.test(text)) return `#${text.slice(2)}`
+  if (/^[0-9a-fA-F]{6}$/.test(text)) return `#${text}`
+  if (/^[0-9a-fA-F]{3}$/.test(text)) return `#${text}`
+  return ''
 }
 
 function fixMojibakeText(value) {

@@ -8,7 +8,8 @@ import { getAuthToken } from '../../utils/authSession'
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   conversationId: { type: [Number, String], default: null },
-  conversationName: { type: String, default: '' }
+  conversationName: { type: String, default: '' },
+  conversation: { type: Object, default: () => ({}) }
 })
 
 const emit = defineEmits(['update:modelValue', 'changed', 'cleared'])
@@ -25,6 +26,17 @@ const members = ref([])
 const users = ref([])
 const selectedUserIds = ref([])
 const canManage = ref(false)
+const savingGroup = ref(false)
+const savingPrefs = ref(false)
+const groupForm = ref({
+  name: '',
+  avatar_url: ''
+})
+const preferences = ref({
+  is_pinned: false,
+  muted: false,
+  group_nickname: ''
+})
 
 const memberIdSet = computed(() => new Set(members.value.map(member => Number(member.id))))
 const inviteOptions = computed(() => users.value.filter(user => !memberIdSet.value.has(Number(user.id))))
@@ -57,14 +69,77 @@ async function loadSettings() {
     const userJson = await userRes.json()
     if (!memberJson.success) throw new Error(memberJson.message || '群成员加载失败')
     members.value = memberJson.data?.members || []
-    canManage.value = !!memberJson.data?.conversation?.can_manage
+    const conversation = memberJson.data?.conversation || {}
+    canManage.value = !!conversation.can_manage
+    groupForm.value = {
+      name: conversation.name || props.conversationName || '',
+      avatar_url: conversation.avatar_url || ''
+    }
+    const currentPreferences = memberJson.data?.current_preferences || {}
+    preferences.value = {
+      is_pinned: !!currentPreferences.is_pinned,
+      muted: !!currentPreferences.muted,
+      group_nickname: currentPreferences.group_nickname || ''
+    }
     if (userJson.success) users.value = userJson.data || []
     selectedUserIds.value = selectedUserIds.value.filter(id => !memberIdSet.value.has(Number(id)))
-    emit('changed', { member_count: members.value.length })
+    emit('changed', { member_count: members.value.length, conversation, preferences: preferences.value })
   } catch (error) {
     ElMessage.error(error.message || '群设置加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function saveGroupProfile() {
+  if (!canManage.value) return
+  if (!groupForm.value.name?.trim()) {
+    ElMessage.warning('群聊名称不能为空')
+    return
+  }
+  savingGroup.value = true
+  try {
+    const res = await fetch(`/api/conversations/${props.conversationId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify(groupForm.value)
+    })
+    const json = await res.json()
+    if (!json.success) throw new Error(json.message || '保存群资料失败')
+    ElMessage.success(json.message || '群资料已保存')
+    groupForm.value = {
+      name: json.data?.name || groupForm.value.name,
+      avatar_url: json.data?.avatar_url || ''
+    }
+    emit('changed', { conversation: json.data, member_count: members.value.length })
+  } catch (error) {
+    ElMessage.error(error.message || '保存群资料失败')
+  } finally {
+    savingGroup.value = false
+  }
+}
+
+async function savePreferences() {
+  savingPrefs.value = true
+  try {
+    const res = await fetch(`/api/conversations/${props.conversationId}/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify(preferences.value)
+    })
+    const json = await res.json()
+    if (!json.success) throw new Error(json.message || '保存群设置失败')
+    ElMessage.success(json.message || '群设置已保存')
+    preferences.value = {
+      is_pinned: !!json.data?.is_pinned,
+      muted: !!json.data?.muted,
+      group_nickname: json.data?.group_nickname || ''
+    }
+    emit('changed', { preferences: preferences.value, member_count: members.value.length })
+  } catch (error) {
+    ElMessage.error(error.message || '保存群设置失败')
+  } finally {
+    savingPrefs.value = false
   }
 }
 
@@ -138,7 +213,7 @@ async function clearMessages() {
 }
 
 function memberDisplayName(member) {
-  return member.real_name || member.username || '未命名成员'
+  return member.display_name || member.real_name || member.username || '未命名成员'
 }
 
 function memberMeta(member) {
@@ -164,6 +239,37 @@ function memberMeta(member) {
         :closable="false"
         show-icon
       />
+
+      <section class="settings-section profile-section">
+        <div class="section-title">群资料</div>
+        <el-form label-width="64px" class="compact-form">
+          <el-form-item label="群名称">
+            <el-input v-model="groupForm.name" :disabled="!canManage || loading" maxlength="40" placeholder="群聊名称" />
+          </el-form-item>
+          <el-form-item label="头像链接">
+            <el-input v-model="groupForm.avatar_url" :disabled="!canManage || loading" maxlength="500" placeholder="可选，粘贴图片链接" />
+          </el-form-item>
+        </el-form>
+        <div class="section-actions">
+          <el-button size="small" type="primary" :disabled="!canManage" :loading="savingGroup" @click="saveGroupProfile">保存群资料</el-button>
+        </div>
+      </section>
+
+      <section class="settings-section profile-section">
+        <div class="section-title">我的群设置</div>
+        <el-input v-model="preferences.group_nickname" maxlength="30" placeholder="我在本群的昵称，可留空" />
+        <div class="preference-row">
+          <span>置顶这个群</span>
+          <el-switch v-model="preferences.is_pinned" />
+        </div>
+        <div class="preference-row">
+          <span>消息免打扰</span>
+          <el-switch v-model="preferences.muted" />
+        </div>
+        <div class="section-actions">
+          <el-button size="small" type="primary" plain :loading="savingPrefs" @click="savePreferences">保存我的设置</el-button>
+        </div>
+      </section>
 
       <section class="settings-section">
         <div class="section-title">邀请成员</div>
@@ -194,7 +300,10 @@ function memberMeta(member) {
           <div v-for="member in members" :key="member.id" class="member-item">
             <UserAvatar :username="memberDisplayName(member)" :avatar-url="member.avatar_url || ''" :size="34" />
             <div class="member-info">
-              <div class="member-name">{{ memberDisplayName(member) }}</div>
+              <div class="member-name">
+                {{ memberDisplayName(member) }}
+                <span v-if="member.group_nickname" class="nickname-tag">群昵称</span>
+              </div>
               <div class="member-meta">{{ memberMeta(member) }}</div>
             </div>
             <el-button
@@ -257,10 +366,42 @@ function memberMeta(member) {
   gap: 10px;
 }
 
+.profile-section {
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-page) 55%, var(--bg-card));
+}
+
 .section-title {
   font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.compact-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compact-form :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.section-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.preference-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .invite-row {
@@ -296,9 +437,21 @@ function memberMeta(member) {
 }
 
 .member-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.nickname-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .member-meta {

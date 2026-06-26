@@ -21,6 +21,7 @@ export function runV2Cleanup(db) {
   stepChatFields(db)
   stepInventoryTables(db)
   stepFinanceLedgerTables(db)
+  stepFinanceReceivablePayableTables(db)
   stepAiTables(db)
   stepIndexes(db)
   stepDataFixes(db)
@@ -140,6 +141,15 @@ function stepProductFields(db) {
 // ── 聊天表补字段 ──
 function stepChatFields(db) {
   try { db.exec('ALTER TABLE chat_history ADD COLUMN user_id INTEGER DEFAULT 0') } catch {}
+  addColumns(db, 'conversations', [
+    "avatar_url TEXT DEFAULT ''",
+    "updated_at TEXT DEFAULT ''",
+  ])
+  addColumns(db, 'conversation_participants', [
+    'is_pinned INTEGER DEFAULT 0',
+    'muted INTEGER DEFAULT 0',
+    "group_nickname TEXT DEFAULT ''",
+  ])
 }
 
 // ── 库存流水 / 损耗表 ──
@@ -215,6 +225,7 @@ function stepFinanceLedgerTables(db) {
         raw_value TEXT DEFAULT '',
         formula TEXT DEFAULT '',
         number_format TEXT DEFAULT '',
+        style_json TEXT DEFAULT '{}',
         updated_by INTEGER DEFAULT 0,
         updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
         UNIQUE(sheet_id, row_index, col_index)
@@ -271,6 +282,7 @@ function stepFinanceLedgerTables(db) {
     "raw_value TEXT DEFAULT ''",
     "formula TEXT DEFAULT ''",
     "number_format TEXT DEFAULT ''",
+    "style_json TEXT DEFAULT '{}'",
     'updated_by INTEGER DEFAULT 0'
   ]
   const commentCols = [
@@ -302,6 +314,44 @@ function stepFinanceLedgerTables(db) {
     'updated_by INTEGER DEFAULT 0'
   ])
   addColumns(db, 'finance_ledger_logs', logCols)
+}
+
+// ── 财务应收应付台账 ──
+function stepFinanceReceivablePayableTables(db) {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS finance_arap_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL DEFAULT 'receivable',
+        title TEXT NOT NULL,
+        counterparty TEXT DEFAULT '',
+        amount REAL DEFAULT 0,
+        settled_amount REAL DEFAULT 0,
+        due_date TEXT DEFAULT '',
+        status TEXT DEFAULT 'pending',
+        category TEXT DEFAULT '',
+        project_id INTEGER DEFAULT 0,
+        source_type TEXT DEFAULT '',
+        source_id INTEGER DEFAULT 0,
+        owner_user_id INTEGER DEFAULT 0,
+        note TEXT DEFAULT '',
+        created_by INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now', 'localtime')),
+        updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+        completed_at TEXT DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_finance_arap_type_status ON finance_arap_items(type, status);
+      CREATE INDEX IF NOT EXISTS idx_finance_arap_due_date ON finance_arap_items(due_date);
+      CREATE INDEX IF NOT EXISTS idx_finance_arap_project ON finance_arap_items(project_id);
+    `)
+  } catch {}
+  addColumns(db, 'finance_arap_items', [
+    "settled_amount REAL DEFAULT 0",
+    "source_type TEXT DEFAULT ''",
+    'source_id INTEGER DEFAULT 0',
+    'owner_user_id INTEGER DEFAULT 0',
+    "completed_at TEXT DEFAULT ''",
+  ])
 }
 
 // ── AI 相关表 ──
@@ -416,10 +466,13 @@ function assertV2SchemaShape(db) {
     schema_versions: ['version'],
     inventory_movements: ['product_id', 'movement_type', 'quantity_before', 'quantity_after'],
     material_losses: ['project_id', 'material_request_id', 'quantity'],
-    finance_ledger_cells: ['address', 'value', 'raw_value', 'formula', 'number_format', 'updated_by'],
+    finance_ledger_cells: ['address', 'value', 'raw_value', 'formula', 'number_format', 'style_json', 'updated_by'],
     finance_ledger_comments: ['workbook_id', 'sheet_id', 'row_index', 'col_index', 'address', 'updated_by'],
     finance_ledger_merges: ['workbook_id', 'sheet_id', 'start_row', 'start_col', 'end_row', 'end_col', 'address', 'updated_by'],
     finance_ledger_logs: ['sheet_id', 'address', 'old_value', 'new_value'],
+    finance_arap_items: ['type', 'title', 'amount', 'settled_amount', 'due_date', 'status', 'project_id'],
+    conversations: ['avatar_url', 'updated_at'],
+    conversation_participants: ['is_pinned', 'muted', 'group_nickname'],
     ai_tool_registry: ['tool_name', 'label', 'tier', 'parameter_schema', 'enabled'],
     ai_agents: ['key', 'purpose', 'scenario_type', 'base_prompt', 'is_default'],
     ai_agent_tools: ['allowed'],

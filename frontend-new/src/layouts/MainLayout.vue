@@ -136,7 +136,8 @@ const sessionExpiredPrompting = ref(false)
 const draggingMenu = ref({ id: '', group: '' })
 const sidebarOrderVersion = ref(0)
 const isPendingAssignment = computed(() => userInfo.value.assignment_status === 'pending')
-const hasFinanceAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || userInfo.value.role === 'finance' || allowedModules.value.includes('finance')))
+const safeAllowedModules = computed(() => Array.isArray(allowedModules.value) ? allowedModules.value : [])
+const hasFinanceAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || userInfo.value.role === 'finance' || safeAllowedModules.value.includes('finance')))
 const hasFileCenterAccess = computed(() => !isPendingAssignment.value && (isAdmin.value || ['finance', 'warehouse', 'engineering'].includes(userInfo.value.role) || ['projects', 'transactions', 'products'].some(hasPerm)))
 const themeTitle = computed(() => {
   const mode = getThemeMode()
@@ -152,6 +153,7 @@ const menuIcons = {
   accounts: markRaw(Wallet),
   transactions: markRaw(List),
   financeOverview: markRaw(TrendCharts),
+  financeArap: markRaw(Wallet),
   financeLedger: markRaw(Document),
   products: markRaw(Goods),
   employees: markRaw(User),
@@ -171,6 +173,7 @@ const businessMenuItems = computed(() => [
   hasPerm('accounts') && { id: 'accounts', index: '/main/accounts', label: '账户管理', icon: menuIcons.accounts },
   hasPerm('transactions') && { id: 'transactions', index: '/main/transactions', label: '交易流水', icon: menuIcons.transactions },
   hasFinanceAccess.value && { id: 'finance-overview', index: '/main/finance/overview', label: '财务总览', icon: menuIcons.financeOverview },
+  hasFinanceAccess.value && { id: 'finance-arap', index: '/main/finance/arap', label: '应收应付', icon: menuIcons.financeArap },
   hasFinanceAccess.value && { id: 'finance-ledger', index: '/main/finance/ledger', label: '入账登记表', icon: menuIcons.financeLedger },
   hasPerm('products') && { id: 'products', index: '/main/products', label: '产品库存', icon: menuIcons.products },
   hasPerm('employees') && { id: 'employees', index: '/main/employees', label: '员工管理', icon: menuIcons.employees }
@@ -183,12 +186,19 @@ const orderedBusinessMenuItems = computed(() => applyMenuOrder(businessMenuItems
 const orderedSystemMenuItems = computed(() => applyMenuOrder(systemMenuItems.value, 'system'))
 
 function initTheme() {
-  const mode = getThemeMode()
-  const stored = getThemeValue()
-  if (mode === 'manual' && (stored === 'dark' || stored === 'light')) {
-    applyTheme(stored === 'dark')
-  } else {
-    applyTheme(isNightTime())
+  try {
+    const mode = getThemeMode()
+    const stored = getThemeValue()
+    if (mode === 'manual' && (stored === 'dark' || stored === 'light')) {
+      applyTheme(stored === 'dark')
+    } else {
+      applyTheme(isNightTime())
+    }
+  } catch (err) {
+    console.error('[JianShang] 主题初始化失败，已恢复自动主题', err)
+    safeLocalStorageRemove('theme')
+    safeLocalStorageRemove('theme-mode')
+    applyTheme(false)
   }
   themeTimer.value = window.setInterval(() => {
     if (getThemeMode() === 'auto') {
@@ -212,33 +222,82 @@ function isNightTime() {
 }
 
 function applyTheme(dark) {
-  isDark.value = dark
-  document.documentElement.classList.toggle('dark', dark)
+  const setTheme = value => {
+    isDark.value = value
+    document.documentElement.classList.toggle('dark', value)
+    document.documentElement.style.clipPath = ''
+  }
+  const btn = document.querySelector('.header-btn')
+  const rect = btn?.getBoundingClientRect() || { left: window.innerWidth / 2, top: 20 }
+  const x = rect.left + (rect.width || 0) / 2
+  const y = rect.top + (rect.height || 0) / 2
+  const r = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y))
+  const canAnimate = typeof document.documentElement.animate === 'function'
+    && window.matchMedia?.('(prefers-reduced-motion: no-preference)')?.matches !== false
+
+  if (!canAnimate) {
+    setTheme(dark)
+    return
+  }
+
+  if (dark && !isDark.value) {
+    // 变暗：从按钮向外圆周扩散
+    setTheme(true)
+    const animation = document.documentElement.animate([
+      { clipPath: `circle(0% at ${x}px ${y}px)` },
+      { clipPath: `circle(${r}px at ${x}px ${y}px)` }
+    ], { duration: 600, easing: 'ease-in-out' })
+    animation.oncancel = () => { document.documentElement.style.clipPath = '' }
+    setTimeout(() => { document.documentElement.style.clipPath = '' }, 650)
+  } else if (!dark && isDark.value) {
+    // 变亮：从外向内收缩到按钮
+    const animation = document.documentElement.animate([
+      { clipPath: `circle(${r}px at ${x}px ${y}px)` },
+      { clipPath: `circle(0% at ${x}px ${y}px)` }
+    ], { duration: 600, easing: 'ease-in-out' })
+    animation.onfinish = () => setTheme(false)
+    animation.oncancel = () => setTheme(false)
+  } else {
+    setTheme(dark)
+  }
 }
 
 function toggleTheme() {
-  applyTheme(!isDark.value)
-  safeLocalStorageSet('theme-mode', 'manual')
-  safeLocalStorageSet('theme', isDark.value ? 'dark' : 'light')
+  try {
+    const nextDark = !isDark.value
+    applyTheme(nextDark)
+    safeLocalStorageSet('theme-mode', 'manual')
+    safeLocalStorageSet('theme', nextDark ? 'dark' : 'light')
+  } catch (err) {
+    console.error('[JianShang] 主题切换失败，已清理主题缓存', err)
+    safeLocalStorageRemove('theme')
+    safeLocalStorageRemove('theme-mode')
+    applyTheme(false)
+  }
 }
 
 function applyPersonalAppearance() {
-  const raw = safeLocalStorageGet('personal-appearance', '')
-  const root = document.documentElement
-  if (!raw) return
-  const value = safeJsonParse(raw, null)
-  if (!value || typeof value !== 'object') {
+  try {
+    const raw = safeLocalStorageGet('personal-appearance', '')
+    const root = document.documentElement
+    if (!raw) return
+    const value = safeJsonParse(raw, null)
+    if (!value || typeof value !== 'object') {
+      safeLocalStorageRemove('personal-appearance')
+      return
+    }
+    value.primaryColor ? root.style.setProperty('--color-primary', value.primaryColor) : root.style.removeProperty('--color-primary')
+    value.textColor ? root.style.setProperty('--text-primary', value.textColor) : root.style.removeProperty('--text-primary')
+    value.bgColor ? root.style.setProperty('--bg-page', value.bgColor) : root.style.removeProperty('--bg-page')
+  } catch (err) {
+    console.error('[JianShang] 外观配置异常，已清理本地外观缓存', err)
     safeLocalStorageRemove('personal-appearance')
-    return
   }
-  value.primaryColor ? root.style.setProperty('--color-primary', value.primaryColor) : root.style.removeProperty('--color-primary')
-  value.textColor ? root.style.setProperty('--text-primary', value.textColor) : root.style.removeProperty('--text-primary')
-  value.bgColor ? root.style.setProperty('--bg-page', value.bgColor) : root.style.removeProperty('--bg-page')
 }
 
 function hasPerm(module) {
   if (isPendingAssignment.value) return false
-  return isAdmin.value || allowedModules.value.includes(module)
+  return isAdmin.value || safeAllowedModules.value.includes(module)
 }
 
 function getMenuOrderKey(group) {
@@ -366,7 +425,7 @@ async function fetchMenu() {
       await handleSessionExpired(json.message || '用户权限已变更，请重新登录')
       return
     }
-    if (json.success) allowedModules.value = json.data
+    if (json.success) allowedModules.value = Array.isArray(json.data) ? json.data : []
   } catch {
     allowedModules.value = []
   }

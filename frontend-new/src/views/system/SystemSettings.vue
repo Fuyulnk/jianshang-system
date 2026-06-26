@@ -22,7 +22,7 @@
         <div v-show="activeTab === 'profile'" class="settings-section">
           <div class="section-header">
             <h3>个人资料</h3>
-            <p class="section-desc">修改头像和登录密码</p>
+            <p class="section-desc">修改头像、手机号和登录密码</p>
           </div>
 
           <!-- 头像 -->
@@ -50,6 +50,16 @@
                   </div>
                 </div>
               </div>
+            </el-form-item>
+            <el-divider />
+            <el-form-item label="登录账号">
+              <el-input :model-value="userName" disabled style="width: 300px" />
+            </el-form-item>
+            <el-form-item label="手机号">
+              <el-input v-model="userPhone" placeholder="可用于手机号登录和后续通知" clearable style="width: 300px" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingProfile" @click="saveProfile">保存手机号</el-button>
             </el-form-item>
             <el-divider />
             <el-form-item label="旧密码">
@@ -158,10 +168,18 @@
         <!-- 知识库 -->
         <div v-show="activeTab === 'kb'" class="settings-section">
           <div class="section-header">
-            <h3>知识库</h3>
-            <p class="section-desc">知识库运行状态和维护操作</p>
+            <h3>知识库状态</h3>
+            <p class="section-desc">这里暂时只检查本机知识库搜索服务是否可用，正式文档库后续单独建设</p>
           </div>
           <el-card shadow="never" class="settings-card">
+            <el-alert
+              class="kb-alert"
+              :type="kbStatus.running ? 'success' : 'warning'"
+              :closable="false"
+              show-icon
+              :title="kbStatus.running ? '知识库搜索服务已连接' : '当前还没有启用可用的知识库服务'"
+              :description="kbStatus.running ? 'AI 可在允许范围内检索已索引内容。' : '这不是员工文档库页面，只是运维检查入口；服务未启动时重新索引不会生效。'"
+            />
             <el-descriptions :column="1" border size="small">
               <el-descriptions-item label="运行状态">
                 <el-tag :type="kbStatus.running ? 'success' : 'danger'" size="small">
@@ -174,9 +192,9 @@
             </el-descriptions>
             <div class="kb-actions">
               <el-button @click="refreshKB" :loading="kbLoading">刷新状态</el-button>
-              <el-button type="warning" @click="reindexKB" :loading="reindexing">重新索引</el-button>
+              <el-button type="warning" @click="reindexKB" :loading="reindexing" :disabled="!kbStatus.running">重新索引</el-button>
             </div>
-            <p class="kb-note">现在这个入口只适合做“知识库是否能用”的运维检查。后续更合理的是把公司制度、工单样板、材料说明做成可见的文档库，并显示索引时间和失败原因。</p>
+            <p class="kb-note">后续真正要做的是“公司制度、工单样板、材料说明”的可见文档库；当前入口只保留给管理员排查 AI 检索服务。</p>
           </el-card>
         </div>
 
@@ -1023,12 +1041,14 @@ async function deleteUser(row) {
 // 个人资料
 const fileInput = ref(null)
 const uploading = ref(false)
+const savingProfile = ref(false)
 const savingPwd = ref(false)
 const previewUrl = ref('')
 const fileData = ref(null)
 const fileName = ref('')
 const userName = ref('用户')
 const userAvatar = ref('')
+const userPhone = ref('')
 const pwdForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 const avatarCrop = reactive({ scale: 1, x: 0, y: 0 })
 const appearance = reactive({
@@ -1184,8 +1204,31 @@ async function fetchUserInfo() {
     if (json.success) {
       userName.value = json.user.username || '用户'
       userAvatar.value = json.user.avatar_url || ''
+      userPhone.value = json.user.phone || ''
     }
   } catch {}
+}
+
+async function saveProfile() {
+  savingProfile.value = true
+  try {
+    const res = await fetch('/api/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ phone: userPhone.value })
+    })
+    const json = await res.json().catch(() => ({}))
+    if (json.success) {
+      ElMessage.success('手机号已保存')
+      await fetchUserInfo()
+    } else {
+      ElMessage.error(json.message || '手机号保存失败')
+    }
+  } catch {
+    ElMessage.error('网络错误')
+  } finally {
+    savingProfile.value = false
+  }
 }
 
 function onFileSelect(e) {

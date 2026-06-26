@@ -28,12 +28,17 @@ export default function chatRoutes(server, db, realtime = {}) {
     ensureDefaultGroups(db)
     const list = db.prepare(`
       SELECT c.*,
+        cp.is_pinned,
+        cp.muted,
+        cp.group_nickname,
         (SELECT CASE WHEN message_type = 'file' THEN '[文件] ' || content ELSE content END FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_message,
-        (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_time,
+        COALESCE((SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1), NULLIF(c.updated_at, ''), c.created_at) as last_time,
         (SELECT COUNT(DISTINCT user_id) FROM conversation_participants WHERE conversation_id = c.id) as member_count
       FROM conversations c
-      WHERE c.id IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ?)
-      ORDER BY last_time DESC
+      JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = ?
+      ORDER BY COALESCE(cp.is_pinned, 0) DESC,
+        datetime(COALESCE((SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1), NULLIF(c.updated_at, ''), c.created_at)) DESC,
+        c.id DESC
     `).all(userId)
 
     // 补充私聊的对方信息
@@ -79,6 +84,63 @@ export default function chatRoutes(server, db, realtime = {}) {
     }
   })
 
+  // 更新群资料：群名和头像只允许管理员或群创建人修改。
+  server.put('/api/conversations/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能修改群资料')) return
+
+    const convId = Number(request.params.id)
+    const conv = getConversationForMember(db, convId, request.user.userId)
+    if (!conv) return reply.code(404).send({ success: false, message: '群聊不存在或无权限' })
+    if (conv.type !== 'group') return reply.code(400).send({ success: false, message: '当前只支持修改群聊资料' })
+    if (!canManageConversation(conv, request.user)) return reply.code(403).send({ success: false, message: '只有管理员或群创建人可以修改群资料' })
+
+    const name = String(request.body?.name ?? conv.name ?? '').trim().slice(0, 40)
+    const avatarUrl = String(request.body?.avatar_url ?? conv.avatar_url ?? '').trim().slice(0, 500)
+    if (!name) return reply.code(400).send({ success: false, message: '群聊名称不能为空' })
+
+    db.prepare(`
+      UPDATE conversations
+      SET name = ?, avatar_url = ?, updated_at = datetime('now', 'localtime')
+      WHERE id = ?
+    `).run(name, avatarUrl, convId)
+
+    const updated = db.prepare('SELECT * FROM conversations WHERE id = ?').get(convId)
+    realtime.io?.to(`conv:${convId}`).emit('conversation:updated', {
+      conversation_id: convId,
+      name: updated.name,
+      avatar_url: updated.avatar_url || ''
+    })
+    return { success: true, data: updated, message: '群资料已更新' }
+  })
+
+  // 当前用户在本群的个人设置：群昵称、置顶、免打扰。
+  server.put('/api/conversations/:id/preferences', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能修改群设置')) return
+
+    const convId = Number(request.params.id)
+    const userId = Number(request.user.userId)
+    const conv = getConversationForMember(db, convId, userId)
+    if (!conv) return reply.code(404).send({ success: false, message: '群聊不存在或无权限' })
+    if (conv.type !== 'group') return reply.code(400).send({ success: false, message: '当前只支持群聊设置' })
+
+    const isPinned = request.body?.is_pinned ? 1 : 0
+    const muted = request.body?.muted ? 1 : 0
+    const groupNickname = String(request.body?.group_nickname ?? '').trim().slice(0, 30)
+    db.prepare(`
+      UPDATE conversation_participants
+      SET is_pinned = ?, muted = ?, group_nickname = ?
+      WHERE conversation_id = ? AND user_id = ?
+    `).run(isPinned, muted, groupNickname, convId, userId)
+
+    return {
+      success: true,
+      data: { is_pinned: isPinned, muted, group_nickname: groupNickname },
+      message: '群设置已保存'
+    }
+  })
+
   // 获取群成员
   server.get('/api/conversations/:id/members', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
@@ -91,13 +153,19 @@ export default function chatRoutes(server, db, realtime = {}) {
 
     const members = db.prepare(`
       SELECT u.id, u.username, u.real_name, u.department, u.position, u.avatar_url,
-        r.label as role_label, cp.joined_at
+        r.label as role_label, cp.joined_at, cp.group_nickname,
+        COALESCE(NULLIF(cp.group_nickname, ''), NULLIF(u.real_name, ''), u.username) as display_name
       FROM conversation_participants cp
       JOIN users u ON cp.user_id = u.id
       LEFT JOIN roles r ON u.role = r.name
       WHERE cp.conversation_id = ?
       ORDER BY cp.id ASC
     `).all(convId)
+    const preferences = db.prepare(`
+      SELECT is_pinned, muted, group_nickname
+      FROM conversation_participants
+      WHERE conversation_id = ? AND user_id = ?
+    `).get(convId, request.user.userId) || {}
 
     return {
       success: true,
@@ -105,9 +173,15 @@ export default function chatRoutes(server, db, realtime = {}) {
         conversation: {
           id: conv.id,
           name: conv.name,
+          avatar_url: conv.avatar_url || '',
           type: conv.type,
           created_by: conv.created_by,
           can_manage: canManageConversation(conv, request.user)
+        },
+        current_preferences: {
+          is_pinned: preferences.is_pinned ? 1 : 0,
+          muted: preferences.muted ? 1 : 0,
+          group_nickname: preferences.group_nickname || ''
         },
         members
       }
@@ -146,6 +220,7 @@ export default function chatRoutes(server, db, realtime = {}) {
       return added
     })
     const added = tx(users)
+    if (added) db.prepare("UPDATE conversations SET updated_at = datetime('now', 'localtime') WHERE id = ?").run(convId)
     const memberCount = countConversationMembers(db, convId)
     realtime.io?.to(`conv:${convId}`).emit('conversation:members_changed', { conversation_id: convId, member_count: memberCount })
     return { success: true, data: { added, member_count: memberCount }, message: added ? `已邀请 ${added} 人` : '所选成员已在群里' }
@@ -167,6 +242,7 @@ export default function chatRoutes(server, db, realtime = {}) {
     const result = db.prepare('DELETE FROM conversation_participants WHERE conversation_id = ? AND user_id = ?').run(convId, targetUserId)
     if (!result.changes) return reply.code(404).send({ success: false, message: '该成员不在群里' })
 
+    db.prepare("UPDATE conversations SET updated_at = datetime('now', 'localtime') WHERE id = ?").run(convId)
     const memberCount = countConversationMembers(db, convId)
     realtime.io?.to(`conv:${convId}`).emit('conversation:member_removed', { conversation_id: convId, user_id: targetUserId, member_count: memberCount })
     realtime.io?.to(`conv:${convId}`).emit('conversation:members_changed', { conversation_id: convId, member_count: memberCount })
@@ -217,11 +293,13 @@ export default function chatRoutes(server, db, realtime = {}) {
 
     const messages = db.prepare(`
       SELECT m.*, u.username, u.avatar_url,
+        COALESCE(NULLIF(cp.group_nickname, ''), NULLIF(u.real_name, ''), u.username) as display_name,
         f.original_name as file_name,
         f.mime_type as file_mime_type,
         f.size as file_size
       FROM messages m
       JOIN users u ON m.user_id = u.id
+      LEFT JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = m.user_id
       LEFT JOIN chat_files f ON m.file_id = f.id
       WHERE m.conversation_id = ?
       ORDER BY m.id ASC
@@ -274,16 +352,19 @@ export default function chatRoutes(server, db, realtime = {}) {
       INSERT INTO messages (conversation_id, user_id, content, message_type, file_id)
       VALUES (?, ?, ?, 'file', ?)
     `).run(convId, userId, originalName, fileResult.lastInsertRowid)
+    db.prepare("UPDATE conversations SET updated_at = datetime('now', 'localtime') WHERE id = ?").run(convId)
 
     db.prepare('UPDATE chat_files SET message_id = ? WHERE id = ?').run(messageResult.lastInsertRowid, fileResult.lastInsertRowid)
 
     const msg = db.prepare(`
       SELECT m.*, u.username, u.avatar_url,
+        COALESCE(NULLIF(cp.group_nickname, ''), NULLIF(u.real_name, ''), u.username) as display_name,
         f.original_name as file_name,
         f.mime_type as file_mime_type,
         f.size as file_size
       FROM messages m
       JOIN users u ON m.user_id = u.id
+      LEFT JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = m.user_id
       LEFT JOIN chat_files f ON m.file_id = f.id
       WHERE m.id = ?
     `).get(messageResult.lastInsertRowid)

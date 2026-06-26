@@ -34,6 +34,7 @@ const routes = [
       { path: 'projects/supply', name: 'ProjectSupplyList', component: () => import("../views/projects/ProjectSupplyList.vue"), meta: { title: '项目供货单' } },
       { path: 'projects/:id', name: 'ProjectDetail', component: () => import("../views/projects/ProjectDetail.vue"), meta: { title: '工单详情' } },
       { path: 'finance/overview', name: 'FinanceOverview', component: () => import("../views/finance/FinanceOverview.vue"), meta: { title: '财务总览' } },
+      { path: 'finance/arap', name: 'FinanceReceivablePayable', component: () => import("../views/finance/FinanceReceivablePayable.vue"), meta: { title: '应收应付' } },
       { path: 'finance/ledger', name: 'FinanceLedger', component: () => import("../views/finance/FinanceLedger.vue"), meta: { title: '入账登记表' } }
     ]
   },
@@ -46,6 +47,13 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+// 路由懒加载失败时自动刷新重试（防止网络波动白屏）
+router.onError((error) => {
+  if (error?.message?.includes('Loading chunk') || error?.message?.includes('dynami')) {
+    window.location.reload()
+  }
 })
 
 // 路由守卫：未登录跳转登录页，过期 token 自动清理

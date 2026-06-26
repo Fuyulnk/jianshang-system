@@ -25,10 +25,15 @@
         :class="['conv-item', { active: currentConvId === conv.id }]"
         @click="selectConversation(conv)">
         <UserAvatar v-if="conv.type !== 'group'" :username="conv.other_user?.username || '?'" :avatar-url="conv.other_user?.avatar_url || ''" :size="40" />
+        <UserAvatar v-else-if="conv.avatar_url" :username="conv.name || '群聊'" :avatar-url="conv.avatar_url" :size="40" />
         <div v-else class="conv-avatar">群</div>
         <div class="conv-info">
           <div class="conv-top">
-            <span class="conv-name">{{ conv.type === 'group' ? conv.name : (conv.other_user?.username || '未知') }}</span>
+            <span class="conv-name">
+              <span v-if="conv.is_pinned" class="conv-badge">置顶</span>
+              <span class="conv-title">{{ conv.type === 'group' ? conv.name : (conv.other_user?.username || '未知') }}</span>
+              <span v-if="conv.muted" class="conv-muted">免打扰</span>
+            </span>
             <span class="conv-time">{{ formatTime(conv.last_time) }}</span>
           </div>
           <div class="conv-last">{{ conv.last_message || '暂无消息' }}</div>
@@ -55,12 +60,22 @@
               <div v-if="showRecent" class="recent-panel" @mouseleave="showRecent = false">
                 <div v-if="recentLoading" class="recent-loading">加载中...</div>
                 <div v-else-if="!recentEntries.length" class="recent-empty">暂无录入</div>
-                <a v-for="item in recentEntries" :key="item.id" class="recent-item" :href="`/main/transactions`" @click.prevent="goToFinance">
+                <div v-for="item in recentEntries" :key="item.id" class="recent-item" @click="goToFinance">
                   <span :class="['recent-type', item.type]">{{ item.type === 'income' ? '收入' : '支出' }}</span>
                   <span class="recent-amount">{{ formatMoney(item.amount) }}</span>
                   <span class="recent-desc">{{ item.description || item.party || '-' }}</span>
+                  <span v-if="item.status === 'pending'" class="recent-status">待确认</span>
+                  <button
+                    v-if="item.status === 'pending'"
+                    class="recent-confirm"
+                    type="button"
+                    :disabled="confirmingEntryId === item.id"
+                    @click.stop="confirmRecentEntry(item)"
+                  >
+                    确认
+                  </button>
                   <span class="recent-time">{{ formatShortTime(item.created_at) }}</span>
-                </a>
+                </div>
               </div>
             </div>
           </div>
@@ -90,10 +105,12 @@
           <div v-for="msg in messages" :key="msg.id"
             :class="['msg-item', msg.user_id === userId ? 'mine' : '']">
             <div v-if="msg.user_id !== userId && currentConvType === 'group'" class="msg-avatar-wrapper">
-              <UserAvatar :username="msg.username || '?'" :avatar-url="msg.avatar_url || ''" :size="32" />
+              <UserAvatar :username="msg.display_name || msg.username || '?'" :avatar-url="msg.avatar_url || ''" :size="32" />
             </div>
             <div class="msg-body">
-              <div class="msg-name" v-if="msg.user_id !== userId && currentConvType === 'group'">{{ msg.username === 'ai' ? 'AI 小助手' : msg.username }}</div>
+              <div class="msg-name" v-if="msg.user_id !== userId && currentConvType === 'group'">
+                {{ msg.username === 'ai' ? 'AI 小助手' : (msg.display_name || msg.username) }}
+              </div>
               <div :class="['msg-bubble', msg.username === 'ai' ? 'ai-group-bubble' : '', msg.message_type === 'file' ? 'file-bubble' : '']">
                 <template v-if="msg.message_type === 'file'">
                   <div v-if="isImageMessage(msg)" class="image-message">
@@ -206,6 +223,7 @@
       v-model="showGroupSettings"
       :conversation-id="currentConvId"
       :conversation-name="currentConvName"
+      :conversation="currentConv || {}"
       @changed="handleGroupSettingsChanged"
       @cleared="handleGroupMessagesCleared"
     />
@@ -215,7 +233,7 @@
 <script setup>
 import { getAuthToken } from '../../utils/authSession'
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotSquare, Cpu, Document, Download, Paperclip, Promotion, Setting, UploadFilled } from '@element-plus/icons-vue'
 import { io } from 'socket.io-client'
 import UserAvatar from '../../components/UserAvatar.vue'
@@ -224,6 +242,7 @@ import GroupSettingsDrawer from '../../components/chat/GroupSettingsDrawer.vue'
 const conversations = ref([])
 const messages = ref([])
 const currentConvId = ref(null)
+const currentConv = ref(null)
 const currentConvType = ref('')
 const currentConvName = ref('')
 const currentConvMeta = ref('')
@@ -240,6 +259,7 @@ const messageImageUrls = ref({})
 const showRecent = ref(false)
 const recentEntries = ref([])
 const recentLoading = ref(false)
+const confirmingEntryId = ref(0)
 
 const showNewConv = ref(false)
 const newConvName = ref('')
@@ -264,7 +284,7 @@ function token() { return getAuthToken() }
 
 // Socket.io
 function connectSocket() {
-  socket.value = io({ auth: { token: token() } })
+  socket.value = io({ auth: { token: token() }, reconnectionAttempts: Infinity })
   socket.value.on('connect', () => {
     // 断线重连后自动 rejoin 当前会话
     if (currentConvId.value) {
@@ -302,6 +322,17 @@ function connectSocket() {
     if (event?.conversation_id === currentConvId.value) handleGroupMessagesCleared()
     refreshConversations()
   })
+  socket.value.on('conversation:updated', (event) => {
+    if (event?.conversation_id === currentConvId.value && currentConv.value) {
+      currentConv.value = {
+        ...currentConv.value,
+        name: event.name || currentConv.value.name,
+        avatar_url: event.avatar_url || ''
+      }
+      currentConvName.value = currentConv.value.name || currentConvName.value
+    }
+    refreshConversations()
+  })
 }
 
 // 获取会话列表
@@ -311,7 +342,16 @@ async function refreshConversations() {
       headers: { Authorization: `Bearer ${token()}` }
     })
     const json = await res.json()
-    if (json.success) conversations.value = json.data
+    if (json.success) {
+      conversations.value = json.data || []
+      if (currentConvId.value) {
+        const latest = conversations.value.find(item => Number(item.id) === Number(currentConvId.value))
+        if (latest) {
+          currentConv.value = latest
+          currentConvName.value = latest.type === 'group' ? latest.name : (latest.other_user?.username || '私聊')
+        }
+      }
+    }
   } finally { loading.value = false }
 }
 
@@ -319,6 +359,7 @@ async function refreshConversations() {
 function selectAi() {
   isAiMode.value = true
   currentConvId.value = null
+  currentConv.value = null
   clearPendingFiles()
   aiMessages.value = []
   aiSessionId.value = null
@@ -409,6 +450,7 @@ async function sendAiMessage() {
 async function selectConversation(conv) {
   isAiMode.value = false
   currentConvId.value = conv.id
+  currentConv.value = conv
   inputPlaceholder.value = conv.type === 'group' ? '输入消息，@AI 可召唤小助手' : '输入消息...'
   currentConvType.value = conv.type
   currentConvName.value = conv.type === 'group' ? conv.name : (conv.other_user?.username || '私聊')
@@ -431,6 +473,7 @@ async function selectConversation(conv) {
 
 function resetCurrentConversation() {
   currentConvId.value = null
+  currentConv.value = null
   currentConvType.value = ''
   currentConvName.value = ''
   currentConvMeta.value = ''
@@ -444,6 +487,21 @@ function resetCurrentConversation() {
 function handleGroupSettingsChanged(event) {
   if (event?.member_count && currentConvType.value === 'group') {
     currentConvMeta.value = `${event.member_count} 人`
+  }
+  if (event?.conversation && currentConv.value) {
+    currentConv.value = {
+      ...currentConv.value,
+      ...event.conversation
+    }
+    currentConvName.value = currentConv.value.name || currentConvName.value
+  }
+  if (event?.preferences && currentConv.value) {
+    currentConv.value = {
+      ...currentConv.value,
+      is_pinned: event.preferences.is_pinned ? 1 : 0,
+      muted: event.preferences.muted ? 1 : 0,
+      group_nickname: event.preferences.group_nickname || ''
+    }
   }
   refreshConversations()
 }
@@ -462,6 +520,9 @@ async function sendMessage() {
   if (text) {
     socket.value?.emit('message:send', { conversation_id: currentConvId.value, content: text })
     inputText.value = ''
+    if (currentConvName.value === '财务群') {
+      window.setTimeout(fetchRecentEntries, 900)
+    }
   }
   if (files.length) {
     await uploadFiles(files)
@@ -675,7 +736,8 @@ function scrollBottomAi() {
 
 function formatTime(t) {
   if (!t) return ''
-  const d = new Date(t)
+  const d = parseDateTime(t)
+  if (!d) return ''
   const now = new Date()
   if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
@@ -683,8 +745,21 @@ function formatTime(t) {
 
 function formatShortTime(t) {
   if (!t) return ''
-  const d = new Date(t)
+  const d = parseDateTime(t)
+  if (!d) return ''
+  const raw = String(t || '')
+  if (/\s00:00(?::00)?$/.test(raw) || /T00:00(?::00)?/.test(raw)) {
+    return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+  }
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+function parseDateTime(value) {
+  const text = String(value || '').trim()
+  if (!text) return null
+  const normalized = text.includes('T') ? text : text.replace(/-/g, '/')
+  const parsed = new Date(normalized)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
 function formatMoney(v) {
@@ -702,6 +777,25 @@ async function fetchRecentEntries() {
     const json = await res.json()
     if (json.success) recentEntries.value = json.data
   } catch {} finally { recentLoading.value = false }
+}
+
+async function confirmRecentEntry(item) {
+  try {
+    await ElMessageBox.confirm('确认后这条流水会生效，并更新账户余额。', '确认流水')
+    confirmingEntryId.value = item.id
+    const res = await fetch(`/api/transactions/${item.id}/confirm`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    const json = await res.json()
+    if (!json.success) throw new Error(json.message || '确认失败')
+    ElMessage.success(json.message || '流水已确认')
+    await fetchRecentEntries()
+  } catch (error) {
+    if (!['cancel', 'close'].includes(error)) ElMessage.error(error.message || '确认失败')
+  } finally {
+    confirmingEntryId.value = 0
+  }
 }
 
 function goToFinance() {
@@ -803,8 +897,39 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 .conv-info { flex: 1; min-width: 0; }
-.conv-top { display: flex; justify-content: space-between; align-items: center; }
-.conv-name { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+.conv-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.conv-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.conv-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conv-badge,
+.conv-muted {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 600;
+}
+.conv-badge {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+.conv-muted {
+  background: rgba(148, 163, 184, 0.14);
+  color: #64748b;
+}
 .conv-time { font-size: 11px; color: var(--text-tertiary); }
 .conv-last { font-size: 13px; color: var(--text-tertiary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .msg-area {
@@ -857,6 +982,33 @@ onUnmounted(() => {
 .recent-amount { font-size: 13px; font-weight: 600; color: var(--text-primary); flex-shrink: 0; }
 .recent-desc { font-size: 12px; color: var(--text-tertiary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .recent-time { font-size: 11px; color: var(--text-placeholder); flex-shrink: 0; }
+.recent-status {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 700;
+}
+.recent-confirm {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.recent-confirm:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.dark .recent-status {
+  background: rgba(245, 158, 11, 0.24);
+  color: #fcd34d;
+}
 .msg-list { flex: 1; overflow-y: auto; padding: 20px; background: var(--bg-page); position: relative; }
 .msg-list.drag-over {
   outline: 2px dashed var(--color-primary);

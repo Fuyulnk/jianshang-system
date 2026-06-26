@@ -24,6 +24,11 @@ export default function fileRoutes(server, db) {
 
     const entityType = normalizeEntityType(request.query.entity_type)
     const keyword = cleanText(request.query.keyword)
+    const startDate = normalizeDate(request.query.start_date)
+    const endDate = normalizeDate(request.query.end_date)
+    const amountMin = toOptionalNumber(request.query.amount_min)
+    const amountMax = toOptionalNumber(request.query.amount_max)
+    const person = cleanText(request.query.person)
     const limit = Math.min(Math.max(parseInt(request.query.limit || '100'), 20), 300)
     const conditions = ["COALESCE(a.deleted_at, '') = ''"]
     const params = []
@@ -37,13 +42,34 @@ export default function fileRoutes(server, db) {
       const like = `%${keyword}%`
       params.push(like, like, like, like, like, like)
     }
+    if (startDate) {
+      conditions.push("date(COALESCE(t.created_at, a.created_at)) >= date(?)")
+      params.push(startDate)
+    }
+    if (endDate) {
+      conditions.push("date(COALESCE(t.created_at, a.created_at)) <= date(?)")
+      params.push(endDate)
+    }
+    if (amountMin !== null) {
+      conditions.push("a.entity_type = 'transaction' AND t.amount >= ?")
+      params.push(amountMin)
+    }
+    if (amountMax !== null) {
+      conditions.push("a.entity_type = 'transaction' AND t.amount <= ?")
+      params.push(amountMax)
+    }
+    if (person) {
+      conditions.push('(u.username LIKE ? OR u.real_name LIKE ? OR t.party LIKE ? OR t.proxy LIKE ?)')
+      const like = `%${person}%`
+      params.push(like, like, like, like)
+    }
 
     const rows = db.prepare(`
       SELECT a.id, a.entity_type, a.entity_id, a.original_name, a.mime_type, a.size,
              a.uploaded_by, a.created_at, u.username as uploader_name, u.real_name as uploader_real_name,
              p.name as project_name, p.customer as project_customer,
              t.description as transaction_description, t.party as transaction_party,
-             t.amount as transaction_amount, t.type as transaction_type,
+             t.amount as transaction_amount, t.type as transaction_type, t.created_at as transaction_date, t.proxy as transaction_proxy,
              w.name as workspace_name, w.workspace_type as workspace_type
       FROM attachments a
       LEFT JOIN users u ON a.uploaded_by = u.id
@@ -66,6 +92,110 @@ export default function fileRoutes(server, db) {
       deduped.push(file)
     }
     return { success: true, data: deduped }
+  })
+
+  server.get('/api/files/project-folders', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+
+    const keyword = cleanText(request.query.keyword)
+    const limit = Math.min(Math.max(parseInt(request.query.limit || '80'), 20), 200)
+    const rows = db.prepare(`
+      SELECT p.id, p.name, p.customer, p.status, p.address,
+        COUNT(a.id) as file_count,
+        COALESCE(SUM(a.size), 0) as total_size,
+        MAX(a.created_at) as latest_file_at
+      FROM projects p
+      LEFT JOIN attachments a ON a.entity_type = 'project'
+        AND a.entity_id = p.id
+        AND COALESCE(a.deleted_at, '') = ''
+      WHERE (? = '' OR p.name LIKE ? OR p.customer LIKE ? OR p.address LIKE ?)
+      GROUP BY p.id
+      HAVING file_count > 0
+      ORDER BY datetime(COALESCE(latest_file_at, p.created_at)) DESC, p.id DESC
+      LIMIT ?
+    `).all(keyword, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, limit)
+
+    const visible = rows
+      .filter(row => canAccessProjectEntity(db, request.user, row.id))
+      .map(row => ({
+        ...row,
+        file_count: Number(row.file_count || 0),
+        total_size: Number(row.total_size || 0)
+      }))
+    return { success: true, data: visible }
+  })
+
+  server.get('/api/files/receipt-folders', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!canAccessModule(db, request.user, 'transactions', 'can_view')) {
+      reply.code(403).send({ success: false, message: '无权限查看流水凭证' })
+      return
+    }
+
+    const keyword = cleanText(request.query.keyword)
+    const startDate = normalizeDate(request.query.start_date)
+    const endDate = normalizeDate(request.query.end_date)
+    const amountMin = toOptionalNumber(request.query.amount_min)
+    const amountMax = toOptionalNumber(request.query.amount_max)
+    const person = cleanText(request.query.person)
+    const limit = Math.min(Math.max(parseInt(request.query.limit || '80'), 20), 200)
+    const conditions = ["COALESCE(a.deleted_at, '') = ''", "a.entity_type = 'transaction'"]
+    const params = []
+
+    if (keyword) {
+      conditions.push('(a.original_name LIKE ? OR t.description LIKE ? OR t.party LIKE ? OR t.category LIKE ? OR ac.name LIKE ?)')
+      const like = `%${keyword}%`
+      params.push(like, like, like, like, like)
+    }
+    if (startDate) {
+      conditions.push('date(t.created_at) >= date(?)')
+      params.push(startDate)
+    }
+    if (endDate) {
+      conditions.push('date(t.created_at) <= date(?)')
+      params.push(endDate)
+    }
+    if (amountMin !== null) {
+      conditions.push('t.amount >= ?')
+      params.push(amountMin)
+    }
+    if (amountMax !== null) {
+      conditions.push('t.amount <= ?')
+      params.push(amountMax)
+    }
+    if (person) {
+      conditions.push('(u.username LIKE ? OR u.real_name LIKE ? OR t.party LIKE ? OR t.proxy LIKE ?)')
+      const like = `%${person}%`
+      params.push(like, like, like, like)
+    }
+
+    const rows = db.prepare(`
+      SELECT t.id, t.type, t.amount, t.category, t.description, t.party, t.proxy, t.created_at,
+        ac.name as account_name,
+        COUNT(a.id) as file_count,
+        COALESCE(SUM(a.size), 0) as total_size,
+        MAX(a.created_at) as latest_file_at,
+        u.username as uploader_name,
+        u.real_name as uploader_real_name
+      FROM transactions t
+      JOIN attachments a ON a.entity_type = 'transaction' AND a.entity_id = t.id
+      LEFT JOIN accounts ac ON t.account_id = ac.id
+      LEFT JOIN users u ON a.uploaded_by = u.id
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY t.id
+      HAVING file_count > 0
+      ORDER BY datetime(COALESCE(latest_file_at, t.created_at)) DESC, t.id DESC
+      LIMIT ?
+    `).all(...params, limit)
+
+    const visible = rows
+      .filter(row => canAccessEntity(db, request.user, 'transaction', row.id, 'can_view'))
+      .map(row => ({
+        ...row,
+        file_count: Number(row.file_count || 0),
+        total_size: Number(row.total_size || 0)
+      }))
+    return { success: true, data: visible }
   })
 
   server.get('/api/files', async (request, reply) => {
@@ -231,8 +361,19 @@ function toInt(value) {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0
 }
 
+function toOptionalNumber(value) {
+  if (value === undefined || value === null || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 function cleanText(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeDate(value) {
+  const text = cleanText(value)
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : ''
 }
 
 function canAccessEntity(db, user, entityType, entityId, permission) {

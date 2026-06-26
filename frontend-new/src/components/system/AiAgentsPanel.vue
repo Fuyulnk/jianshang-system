@@ -308,6 +308,8 @@ onMounted(fetchData)
   border-radius: var(--radius-md);
   padding: 12px;
   align-self: start;
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-page));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 .agent-list-head,
 .editor-head,
@@ -323,11 +325,12 @@ onMounted(fetchData)
   margin-top: 8px;
   padding: 10px;
   text-align: left;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--border-light) 72%, transparent);
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: var(--bg-card);
   color: var(--text-primary);
   cursor: pointer;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
 }
 .agent-item span,
 .agent-item small {
@@ -338,11 +341,17 @@ onMounted(fetchData)
   color: var(--text-tertiary);
 }
 .agent-item.active {
-  border-color: var(--color-primary);
-  background: color-mix(in srgb, var(--color-primary) 8%, var(--bg-page));
+  border-color: color-mix(in srgb, var(--color-primary) 66%, var(--border-light));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 12%, var(--bg-card)), var(--bg-card));
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--color-primary) 14%, transparent);
 }
 .agent-editor {
   min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.05);
 }
 .editor-head {
   margin-bottom: 16px;
@@ -361,6 +370,10 @@ onMounted(fetchData)
 }
 .tool-section {
   margin-top: 18px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-page) 62%, var(--bg-card));
 }
 .tool-group {
   margin-top: 12px;
@@ -383,6 +396,8 @@ onMounted(fetchData)
   padding: 12px;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
 }
 .tool-info {
   min-width: 0;

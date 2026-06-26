@@ -39,7 +39,9 @@ export function installWhiteScreenRecovery() {
 }
 
 export function handleStartupError(message = '页面启动失败', error = null) {
-  if (appMounted) {
+  const app = document.getElementById('app')
+  const hasRenderedContent = Boolean(app?.children?.length && app.textContent?.trim())
+  if (appMounted || hasRenderedContent) {
     console.error('[JianShang] 页面运行时异常', error || message)
     return
   }

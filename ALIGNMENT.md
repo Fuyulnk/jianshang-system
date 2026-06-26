@@ -178,6 +178,12 @@
 
 ## 对接记录
 
+### 2026-06-26 Claude：数据库迁移补漏 — 群聊功能新增字段
+
+- 背景：Codex 新增群聊置顶/免打扰/群昵称功能，`chat.js` 引用了 `conversation_participants.is_pinned`、`muted`、`group_nickname` 和 `conversations.updated_at`、`avatar_url` 等字段，但数据库迁移未同步，导致群聊列表接口报错返回空。
+- 修复：线上库手动 ALTER TABLE 添加 5 个字段；`index.js` 迁移块补 `try { ALTER TABLE ADD COLUMN } catch {}`
+- 验证：群聊恢复正常显示，`/api/conversations` 返回正常
+
 ### 2026-06-24 Codex：P0 白屏恢复机制与本地存储安全化
 
 - 任务：排查并修复财务账号点击日/月主题后持续白屏，刷新或重开浏览器仍无法进入系统的问题。

@@ -21,6 +21,7 @@ export function patchXlsxCells(originalBuffer, updates = [], merges = []) {
   const entries = readZipEntries(buffer)
   const entryMap = new Map(entries.map(entry => [entry.name, entry]))
   const sheetTargets = resolveWorksheetTargets(entryMap)
+  const styleContext = createStylePatchContext(entryMap)
   const grouped = groupUpdatesBySheet(updates, sheetTargets)
   const groupedMerges = groupMergesBySheet(merges, sheetTargets)
   const sheetPaths = new Set([...grouped.keys(), ...groupedMerges.keys()])
@@ -29,7 +30,10 @@ export function patchXlsxCells(originalBuffer, updates = [], merges = []) {
     const entry = entryMap.get(sheetPath)
     if (!entry) continue
     const xml = entry.data.toString('utf8')
-    entry.data = Buffer.from(patchWorksheetXml(xml, grouped.get(sheetPath) || [], groupedMerges.get(sheetPath)), 'utf8')
+    entry.data = Buffer.from(patchWorksheetXml(xml, grouped.get(sheetPath) || [], groupedMerges.get(sheetPath), styleContext), 'utf8')
+  }
+  if (styleContext?.changed && styleContext.entry) {
+    styleContext.entry.data = Buffer.from(buildStylesXml(styleContext), 'utf8')
   }
 
   return writeZipEntries(entries)
@@ -105,7 +109,8 @@ function groupUpdatesBySheet(updates, sheetTargets) {
       value: update.value,
       rawValue: update.rawValue ?? update.raw_value,
       formula: update.formula || '',
-      numberFormat: update.numberFormat || update.number_format || ''
+      numberFormat: update.numberFormat || update.number_format || '',
+      cellStyle: normalizeCellStyle(update.cellStyle || update.style || update.styleJson || update.style_json)
     })
   }
   return grouped
@@ -136,10 +141,10 @@ function findSheetTarget(sheetTargets, update) {
   return sheetTargets[0]
 }
 
-function patchWorksheetXml(xml, updates, merges) {
+function patchWorksheetXml(xml, updates, merges, styleContext = null) {
   let nextXml = xml
   for (const update of updates) {
-    nextXml = upsertCell(nextXml, update.address, update)
+    nextXml = upsertCell(nextXml, update.address, update, styleContext)
   }
   if (Array.isArray(merges)) nextXml = patchMergeCellsXml(nextXml, merges)
   return nextXml
@@ -171,40 +176,40 @@ function normalizeMergeRef(merge) {
   return start === end ? '' : `${start}:${end}`
 }
 
-function upsertCell(xml, address, update) {
+function upsertCell(xml, address, update, styleContext = null) {
   const rowIndex = Number(address.match(/\d+/)?.[0] || 0)
   if (!rowIndex) return xml
   const cellRegex = new RegExp(`<c\\b([^>]*\\br="${escapeRegex(address)}"[^>]*)>[\\s\\S]*?<\\/c>`)
   const matched = xml.match(cellRegex)
   if (matched) {
     const attrs = parseXmlAttrs(matched[1])
-    return xml.replace(cellRegex, buildCellXml(address, update, attrs.s))
+    return xml.replace(cellRegex, buildCellXml(address, update, resolvePatchedStyleId(styleContext, attrs.s, update.cellStyle)))
   }
 
   const rowRegex = new RegExp(`<row\\b([^>]*\\br="${rowIndex}"[^>]*)>([\\s\\S]*?)<\\/row>`)
   const rowMatch = xml.match(rowRegex)
   if (rowMatch) {
-    const rowInner = insertCellIntoRow(rowMatch[2], address, update)
+    const rowInner = insertCellIntoRow(rowMatch[2], address, update, styleContext)
     return xml.replace(rowRegex, `<row${rowMatch[1]}>${rowInner}</row>`)
   }
 
   const sheetDataEnd = xml.indexOf('</sheetData>')
   if (sheetDataEnd < 0) return xml
-  const rowXml = `<row r="${rowIndex}">${buildCellXml(address, update)}</row>`
+  const rowXml = `<row r="${rowIndex}">${buildCellXml(address, update, resolvePatchedStyleId(styleContext, '', update.cellStyle))}</row>`
   return `${xml.slice(0, sheetDataEnd)}${rowXml}${xml.slice(sheetDataEnd)}`
 }
 
-function insertCellIntoRow(rowInner, address, update) {
+function insertCellIntoRow(rowInner, address, update, styleContext = null) {
   const targetCol = XLSX.utils.decode_cell(address).c
   const cellMatches = [...rowInner.matchAll(/<c\b([^>]*\br="([A-Z]+)\d+"[^>]*)>[\s\S]*?<\/c>/g)]
   for (const match of cellMatches) {
     const col = XLSX.utils.decode_col(match[2])
     if (col > targetCol) {
       const offset = match.index || 0
-      return `${rowInner.slice(0, offset)}${buildCellXml(address, update)}${rowInner.slice(offset)}`
+      return `${rowInner.slice(0, offset)}${buildCellXml(address, update, resolvePatchedStyleId(styleContext, '', update.cellStyle))}${rowInner.slice(offset)}`
     }
   }
-  return `${rowInner}${buildCellXml(address, update)}`
+  return `${rowInner}${buildCellXml(address, update, resolvePatchedStyleId(styleContext, '', update.cellStyle))}`
 }
 
 function buildCellXml(address, update, styleId = '') {
@@ -226,6 +231,151 @@ function buildCellXml(address, update, styleId = '') {
 function normalizeFormula(formula) {
   const text = String(formula || '').trim()
   return text.startsWith('=') ? text.slice(1) : text
+}
+
+function normalizeCellStyle(value) {
+  let style = value || {}
+  if (typeof style === 'string') {
+    try {
+      style = style ? JSON.parse(style) : {}
+    } catch {
+      style = {}
+    }
+  }
+  const horizontal = ['left', 'center', 'right'].includes(style.horizontal) ? style.horizontal : ''
+  const vertical = ['top', 'middle', 'bottom'].includes(style.vertical) ? style.vertical : ''
+  const backgroundColor = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(style.backgroundColor || ''))
+    ? normalizeHexColor(style.backgroundColor)
+    : ''
+  return horizontal || vertical || backgroundColor ? { horizontal, vertical, backgroundColor } : null
+}
+
+function createStylePatchContext(entryMap) {
+  const entry = entryMap.get('xl/styles.xml')
+  if (!entry?.data) return null
+  const xml = entry.data.toString('utf8')
+  const fillsMatch = xml.match(/<fills\b([^>]*)>([\s\S]*?)<\/fills>/)
+  const cellXfsMatch = xml.match(/<cellXfs\b([^>]*)>([\s\S]*?)<\/cellXfs>/)
+  if (!fillsMatch || !cellXfsMatch) return null
+  const fills = [...cellXfsSafeMatchAll(fillsMatch[2], /<fill\b[\s\S]*?<\/fill>/g)].map(match => match[0])
+  const xfs = parseCellXfs(cellXfsMatch[2])
+  return {
+    entry,
+    xml,
+    fillsAttrs: fillsMatch[1] || '',
+    cellXfsAttrs: cellXfsMatch[1] || '',
+    fills,
+    xfs,
+    fillByColor: new Map(),
+    styleByKey: new Map(),
+    changed: false
+  }
+}
+
+function cellXfsSafeMatchAll(text, regex) {
+  return String(text || '').matchAll(regex)
+}
+
+function parseCellXfs(xml) {
+  const xfs = []
+  for (const match of xml.matchAll(/<xf\b([^>]*)(?:\/>|>([\s\S]*?)<\/xf>)/g)) {
+    const attrs = parseXmlAttrs(match[1] || '')
+    const alignmentMatch = String(match[2] || '').match(/<alignment\b([^>]*?)\/?>/)
+    const alignment = alignmentMatch ? parseXmlAttrs(alignmentMatch[1] || '') : {}
+    xfs.push(normalizeXf({ attrs, alignment }))
+  }
+  return xfs.length ? xfs : [normalizeXf()]
+}
+
+function normalizeXf(xf = {}) {
+  const attrs = { ...(xf.attrs || {}) }
+  attrs.numFmtId = attrs.numFmtId || '0'
+  attrs.fontId = attrs.fontId || '0'
+  attrs.fillId = attrs.fillId || '0'
+  attrs.borderId = attrs.borderId || '0'
+  attrs.xfId = attrs.xfId || '0'
+  return {
+    attrs,
+    alignment: { ...(xf.alignment || {}) }
+  }
+}
+
+function resolvePatchedStyleId(styleContext, baseStyleId, cellStyle) {
+  if (!styleContext || !cellStyle) return baseStyleId
+  const baseIndex = Number.isFinite(Number(baseStyleId)) ? Number(baseStyleId) : 0
+  const base = styleContext.xfs[baseIndex] || styleContext.xfs[0]
+  const attrs = { ...(base.attrs || {}) }
+  const alignment = { ...(base.alignment || {}) }
+  if (cellStyle.backgroundColor) {
+    attrs.fillId = String(ensureFill(styleContext, cellStyle.backgroundColor))
+    attrs.applyFill = '1'
+  }
+  if (cellStyle.horizontal) alignment.horizontal = cellStyle.horizontal
+  if (cellStyle.vertical) alignment.vertical = cellStyle.vertical === 'middle' ? 'center' : cellStyle.vertical
+  if (Object.keys(alignment).length) attrs.applyAlignment = '1'
+  const styleKey = JSON.stringify({ attrs: sortObject(attrs), alignment: sortObject(alignment) })
+  if (styleContext.styleByKey.has(styleKey)) return styleContext.styleByKey.get(styleKey)
+  const styleId = styleContext.xfs.length
+  styleContext.xfs.push(normalizeXf({ attrs, alignment }))
+  styleContext.styleByKey.set(styleKey, String(styleId))
+  styleContext.changed = true
+  return String(styleId)
+}
+
+function ensureFill(styleContext, color) {
+  const rgb = `FF${normalizeHexColor(color).slice(1).toUpperCase()}`
+  if (styleContext.fillByColor.has(rgb)) return styleContext.fillByColor.get(rgb)
+  const fillId = styleContext.fills.length
+  styleContext.fills.push(`<fill><patternFill patternType="solid"><fgColor rgb="${rgb}"/><bgColor indexed="64"/></patternFill></fill>`)
+  styleContext.fillByColor.set(rgb, String(fillId))
+  styleContext.changed = true
+  return String(fillId)
+}
+
+function buildStylesXml(styleContext) {
+  const fillsXml = `<fills${stripCountAttr(styleContext.fillsAttrs)} count="${styleContext.fills.length}">${styleContext.fills.join('')}</fills>`
+  const xfsXml = `<cellXfs${stripCountAttr(styleContext.cellXfsAttrs)} count="${styleContext.xfs.length}">${styleContext.xfs.map(buildXfXml).join('')}</cellXfs>`
+  return styleContext.xml
+    .replace(/<fills\b[^>]*>[\s\S]*?<\/fills>/, fillsXml)
+    .replace(/<cellXfs\b[^>]*>[\s\S]*?<\/cellXfs>/, xfsXml)
+}
+
+function buildXfXml(xf) {
+  const attrs = { ...(xf.attrs || {}) }
+  const alignment = { ...(xf.alignment || {}) }
+  if (Object.keys(alignment).length) {
+    attrs.applyAlignment = attrs.applyAlignment || '1'
+    return `<xf ${attrsToXml(attrs)}><alignment ${attrsToXml(alignment)}/></xf>`
+  }
+  return `<xf ${attrsToXml(attrs)}/>`
+}
+
+function stripCountAttr(attrs = '') {
+  const rest = String(attrs || '').replace(/\s+count="[^"]*"/, '').trim()
+  return rest ? ` ${rest}` : ''
+}
+
+function normalizeHexColor(value) {
+  const text = String(value || '').trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(text)) return text
+  if (/^#[0-9a-fA-F]{3}$/.test(text)) {
+    return `#${text.slice(1).split('').map(char => char + char).join('')}`
+  }
+  return ''
+}
+
+function attrsToXml(attrs = {}) {
+  return Object.entries(attrs)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${key}="${escapeXml(value)}"`)
+    .join(' ')
+}
+
+function sortObject(obj = {}) {
+  return Object.keys(obj).sort().reduce((acc, key) => {
+    acc[key] = obj[key]
+    return acc
+  }, {})
 }
 
 function readZipEntries(buffer) {

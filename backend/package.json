@@ -7,6 +7,9 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
+    "db:check": "node scripts/db-maintenance-check.mjs",
+    "db:checkpoint": "node scripts/db-maintenance-check.mjs --checkpoint",
+    "db:vacuum": "node scripts/db-maintenance-check.mjs --checkpoint --vacuum",
     "seed:safe-ai": "node scripts/seed-safe-ai-test-db.mjs",
     "smoke:rbac": "node scripts/rbac-smoke.mjs",
     "smoke:ai-mock": "node scripts/ai-mock-smoke.mjs",

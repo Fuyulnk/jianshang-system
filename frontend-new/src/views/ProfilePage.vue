@@ -5,7 +5,7 @@
         <div class="card-header">
           <div>
             <h2>个人设置</h2>
-            <p class="card-desc">管理你的头像和密码</p>
+            <p class="card-desc">管理你的头像、手机号和密码</p>
           </div>
         </div>
       </template>
@@ -23,6 +23,24 @@
             <div class="hint">支持 PNG、JPG、WebP，建议 200×200 以上</div>
           </div>
         </div>
+      </div>
+
+      <el-divider />
+
+      <!-- 手机号 -->
+      <div class="section">
+        <div class="section-title">手机号</div>
+        <el-form label-width="90px" class="profile-form">
+          <el-form-item label="登录账号">
+            <el-input :model-value="user.username" disabled />
+          </el-form-item>
+          <el-form-item label="手机号">
+            <el-input v-model="profileForm.phone" placeholder="用于账号识别和后续通知" clearable />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="savingProfile" @click="saveProfile">保存手机号</el-button>
+          </el-form-item>
+        </el-form>
       </div>
 
       <el-divider />
@@ -59,11 +77,13 @@ import UserAvatar from '../components/UserAvatar.vue'
 const router = useRouter()
 const user = ref({ username: '', avatar_url: '' })
 const uploading = ref(false)
+const savingProfile = ref(false)
 const savingPwd = ref(false)
 const fileInput = ref(null)
 const fileName = ref('')
 const previewUrl = ref('')
 const fileData = ref(null)
+const profileForm = ref({ phone: '' })
 const pwdForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 
 function token() { return getAuthToken() }
@@ -81,6 +101,7 @@ async function fetchUser() {
     const json = await res.json()
     if (json.success) {
       user.value = json.user
+      profileForm.value.phone = json.user.phone || ''
     }
   } catch {
     router.push('/')
@@ -123,6 +144,28 @@ async function uploadAvatar() {
     ElMessage.error('网络错误')
   }
   uploading.value = false
+}
+
+async function saveProfile() {
+  savingProfile.value = true
+  try {
+    const res = await fetch('/api/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ phone: profileForm.value.phone }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (json.success) {
+      user.value.phone = profileForm.value.phone
+      ElMessage.success('手机号已保存')
+    } else {
+      ElMessage.error(json.message || '手机号保存失败')
+    }
+  } catch {
+    ElMessage.error('网络错误')
+  } finally {
+    savingProfile.value = false
+  }
 }
 
 async function changePassword() {

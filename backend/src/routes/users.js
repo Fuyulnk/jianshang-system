@@ -227,8 +227,34 @@ export default function userRoutes(server, db) {
   // 更新个人信息
   server.put('/api/profile', async (request, reply) => {
     if (authMiddleware(request, reply) === false) return
-    const { avatar_url } = request.body
-    db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(avatar_url || '', request.user.userId)
+    const body = request.body || {}
+    const clauses = []
+    const params = []
+
+    if (Object.prototype.hasOwnProperty.call(body, 'avatar_url')) {
+      clauses.push('avatar_url = ?')
+      params.push(String(body.avatar_url || '').trim())
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'phone')) {
+      const phone = String(body.phone || '').trim().slice(0, 30)
+      if (phone) {
+        const duplicate = db.prepare(`
+          SELECT id FROM users
+          WHERE id != ? AND COALESCE(phone, '') = ?
+          LIMIT 1
+        `).get(request.user.userId, phone)
+        if (duplicate) {
+          reply.code(409).send({ success: false, message: '这个手机号已经绑定了其他账号' })
+          return
+        }
+      }
+      clauses.push('phone = ?')
+      params.push(phone)
+    }
+
+    if (!clauses.length) return { success: true }
+    params.push(request.user.userId)
+    db.prepare(`UPDATE users SET ${clauses.join(', ')} WHERE id = ?`).run(...params)
     return { success: true }
   })
 

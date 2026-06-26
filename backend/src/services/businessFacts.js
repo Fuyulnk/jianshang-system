@@ -306,6 +306,186 @@ export function todayFinanceSummaryFacts(db, user) {
   return ok(data, { domain: 'finance' })
 }
 
+export function financeArapFacts(db, user, filters = {}) {
+  if (!canAccessModule(db, user, 'finance', 'can_view')) {
+    return denied('没有查看应收应付的权限')
+  }
+  const type = clean(filters.type)
+  const status = clean(filters.status)
+  const query = clean(filters.query)
+  const limit = clampLimit(filters.limit, 50, 200)
+  const params = []
+  const where = ['1=1']
+  if (['receivable', 'payable'].includes(type)) {
+    where.push('f.type = ?')
+    params.push(type)
+  }
+  if (['pending', 'partial', 'done'].includes(status)) {
+    where.push('f.status = ?')
+    params.push(status)
+  }
+  if (query) {
+    where.push('(f.title LIKE ? OR f.counterparty LIKE ? OR f.category LIKE ? OR f.note LIKE ? OR p.name LIKE ?)')
+    const like = `%${query}%`
+    params.push(like, like, like, like, like)
+  }
+  params.push(limit)
+  const data = db.prepare(`
+    SELECT f.id, f.type, f.title, f.counterparty, f.amount, f.settled_amount,
+      MAX(f.amount - COALESCE(f.settled_amount, 0), 0) as remaining_amount,
+      f.due_date, f.status, f.category, f.project_id, f.note, p.name as project_name
+    FROM finance_arap_items f
+    LEFT JOIN projects p ON f.project_id = p.id
+    WHERE ${where.join(' AND ')}
+    ORDER BY
+      CASE f.status WHEN 'pending' THEN 0 WHEN 'partial' THEN 1 ELSE 2 END,
+      date(f.due_date) ASC,
+      f.id DESC
+    LIMIT ?
+  `).all(...params)
+  return ok(data, { domain: 'finance_arap', count: data.length, type, status, query })
+}
+
+export function financeLedgerFacts(db, user, filters = {}) {
+  if (!canAccessModule(db, user, 'finance', 'can_view')) {
+    return denied('没有查看入账登记表的权限')
+  }
+  const query = clean(filters.query)
+  const limit = clampLimit(filters.limit, 50, 200)
+  if (!query) {
+    const data = db.prepare(`
+      SELECT w.id, w.title, w.source_file_name, COUNT(s.id) as sheet_count, w.created_at, w.updated_at
+      FROM finance_ledger_workbooks w
+      LEFT JOIN finance_ledger_sheets s ON s.workbook_id = w.id
+      WHERE COALESCE(w.status, 'active') = 'active'
+      GROUP BY w.id
+      ORDER BY w.id DESC
+      LIMIT ?
+    `).all(limit)
+    return ok(data, { domain: 'finance_ledger', count: data.length, mode: 'workbooks' })
+  }
+  const like = `%${query}%`
+  const data = db.prepare(`
+    SELECT c.workbook_id, c.sheet_id, w.title, s.name as sheet_name,
+      c.address, c.value, c.raw_value, c.formula, cm.comment_text
+    FROM finance_ledger_cells c
+    JOIN finance_ledger_workbooks w ON w.id = c.workbook_id
+    JOIN finance_ledger_sheets s ON s.id = c.sheet_id
+    LEFT JOIN finance_ledger_comments cm ON cm.sheet_id = c.sheet_id AND cm.row_index = c.row_index AND cm.col_index = c.col_index
+    WHERE COALESCE(w.status, 'active') = 'active'
+      AND (c.value LIKE ? OR c.raw_value LIKE ? OR c.formula LIKE ? OR cm.comment_text LIKE ?)
+    ORDER BY c.workbook_id DESC, c.sheet_id ASC, c.row_index ASC, c.col_index ASC
+    LIMIT ?
+  `).all(like, like, like, like, limit)
+  return ok(data, { domain: 'finance_ledger', count: data.length, mode: 'cell_search', query })
+}
+
+export function fileFacts(db, user, filters = {}) {
+  const entityType = clean(filters.entity_type)
+  const query = clean(filters.query)
+  const person = clean(filters.person)
+  const limit = clampLimit(filters.limit, 50, 200)
+  const params = []
+  const where = ["COALESCE(a.deleted_at, '') = ''"]
+  if (['project', 'transaction', 'product'].includes(entityType)) {
+    where.push('a.entity_type = ?')
+    params.push(entityType)
+  }
+  if (query) {
+    where.push('(a.original_name LIKE ? OR p.name LIKE ? OR p.customer LIKE ? OR t.description LIKE ? OR t.party LIKE ?)')
+    const like = `%${query}%`
+    params.push(like, like, like, like, like)
+  }
+  if (person) {
+    where.push('(u.username LIKE ? OR u.real_name LIKE ? OR t.party LIKE ? OR t.proxy LIKE ?)')
+    const like = `%${person}%`
+    params.push(like, like, like, like)
+  }
+  params.push(limit)
+  const rows = db.prepare(`
+    SELECT a.id, a.entity_type, a.entity_id, a.original_name, a.mime_type, a.size, a.created_at,
+      u.username as uploader_name, u.real_name as uploader_real_name,
+      p.name as project_name, p.customer as project_customer,
+      t.amount as transaction_amount, t.type as transaction_type, t.description as transaction_description, t.party as transaction_party
+    FROM attachments a
+    LEFT JOIN users u ON a.uploaded_by = u.id
+    LEFT JOIN projects p ON a.entity_type = 'project' AND a.entity_id = p.id
+    LEFT JOIN transactions t ON a.entity_type = 'transaction' AND a.entity_id = t.id
+    WHERE ${where.join(' AND ')}
+    ORDER BY a.id DESC
+    LIMIT ?
+  `).all(...params)
+  const data = rows.filter(row => canAccessFileFact(db, user, row))
+  return ok(data, { domain: 'files', count: data.length, entity_type: entityType, query, person })
+}
+
+export function projectFileFolderFacts(db, user, filters = {}) {
+  if (!canAccessModule(db, user, 'projects', 'can_view')) {
+    return denied('没有查看项目文件夹的权限')
+  }
+  const query = clean(filters.query)
+  const limit = clampLimit(filters.limit, 50, 200)
+  const like = `%${query}%`
+  const rows = db.prepare(`
+    SELECT p.id, p.name, p.customer, p.status,
+      p.manager_user_id, p.assignee_user_id, p.survey_user_id, p.recheck_user_id,
+      p.final_inspection_user_id, p.crew_member_user_ids, p.created_by,
+      p.created_at, p.updated_at,
+      COUNT(a.id) as file_count,
+      COALESCE(SUM(a.size), 0) as total_size,
+      MAX(a.created_at) as latest_file_at
+    FROM projects p
+    LEFT JOIN attachments a ON a.entity_type = 'project' AND a.entity_id = p.id AND COALESCE(a.deleted_at, '') = ''
+    WHERE (? = '' OR p.name LIKE ? OR p.customer LIKE ?)
+    GROUP BY p.id
+    HAVING file_count > 0
+    ORDER BY datetime(COALESCE(latest_file_at, p.created_at)) DESC
+    LIMIT ?
+  `).all(query, like, like, limit)
+  const data = rows.filter(row => canAccessProjectRecord(db, user, row))
+  return ok(data, { domain: 'project_files', count: data.length, query })
+}
+
+export function supplyOrderFacts(db, user, filters = {}) {
+  if (!canAccessModule(db, user, 'projects', 'can_view')) {
+    return denied('没有查看供货单的权限')
+  }
+  const query = clean(filters.query)
+  const status = clean(filters.status)
+  const fulfillmentType = clean(filters.fulfillment_type)
+  const limit = clampLimit(filters.limit, 50, 200)
+  const params = []
+  const where = ['1=1']
+  if (status) {
+    where.push('s.status = ?')
+    params.push(status)
+  }
+  if (['warehouse', 'purchase'].includes(fulfillmentType)) {
+    where.push('s.fulfillment_type = ?')
+    params.push(fulfillmentType)
+  }
+  if (query) {
+    where.push('(s.order_no LIKE ? OR s.customer LIKE ? OR s.phone LIKE ? OR s.source LIKE ? OR s.address LIKE ?)')
+    const like = `%${query}%`
+    params.push(like, like, like, like, like)
+  }
+  params.push(limit)
+  const rows = db.prepare(`
+    SELECT s.*, p.name as project_name
+    FROM supply_orders s
+    LEFT JOIN projects p ON s.project_id = p.id
+    WHERE ${where.join(' AND ')}
+    ORDER BY s.id DESC
+    LIMIT ?
+  `).all(...params)
+  const data = rows.filter(row => {
+    if (!row.project_id) return ['super_admin', 'admin', 'finance', 'warehouse'].includes(user?.role)
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(row.project_id)
+    return !project || canAccessProjectRecord(db, user, project)
+  })
+  return ok(data, { domain: 'supply_orders', count: data.length, query, status, fulfillment_type: fulfillmentType })
+}
+
 function productFact(product) {
   const displayName = productDisplayName(product)
   const unit = clean(product.unit)
@@ -459,6 +639,16 @@ function countRows(db, table) {
 
 function denied(message) {
   return { success: false, message, data: [], meta: { count: 0 } }
+}
+
+function canAccessFileFact(db, user, row) {
+  if (row.entity_type === 'project') {
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(row.entity_id)
+    return !!project && canAccessProjectRecord(db, user, project)
+  }
+  if (row.entity_type === 'transaction') return canAccessModule(db, user, 'transactions', 'can_view')
+  if (row.entity_type === 'product') return canAccessModule(db, user, 'products', 'can_view')
+  return false
 }
 
 function ok(data, meta = {}) {

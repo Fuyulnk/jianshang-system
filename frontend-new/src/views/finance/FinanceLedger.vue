@@ -54,14 +54,53 @@
                 <el-dropdown-item command="freeze-both">冻结首行首列</el-dropdown-item>
                 <el-dropdown-item command="freeze-selection" :disabled="!selectedRange">按选区冻结</el-dropdown-item>
                 <el-dropdown-item command="freeze-clear">取消冻结</el-dropdown-item>
-                <el-dropdown-item divided command="align-left">左对齐</el-dropdown-item>
-                <el-dropdown-item command="align-center">居中</el-dropdown-item>
-                <el-dropdown-item command="align-right">右对齐</el-dropdown-item>
                 <el-dropdown-item divided command="export">导出原格式</el-dropdown-item>
                 <el-dropdown-item command="delete">删除当前表</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <el-popover placement="bottom-end" trigger="click" width="320" :disabled="!activeSheet">
+            <template #reference>
+              <el-button :disabled="!activeSheet">单元格样式</el-button>
+            </template>
+            <div class="cell-style-panel">
+              <div class="style-panel-head">
+                <strong>{{ selectedSingleCellLabel || '先点击一个单元格' }}</strong>
+                <span>样式只作用于当前单元格</span>
+              </div>
+              <div class="style-group">
+                <span>水平</span>
+                <div class="style-button-row">
+                  <button type="button" :class="{ active: activeCellStyle.horizontal === 'left' }" @click="applySelectedCellStyle({ horizontal: 'left' })">左</button>
+                  <button type="button" :class="{ active: activeCellStyle.horizontal === 'center' }" @click="applySelectedCellStyle({ horizontal: 'center' })">中</button>
+                  <button type="button" :class="{ active: activeCellStyle.horizontal === 'right' }" @click="applySelectedCellStyle({ horizontal: 'right' })">右</button>
+                </div>
+              </div>
+              <div class="style-group">
+                <span>垂直</span>
+                <div class="style-button-row">
+                  <button type="button" :class="{ active: activeCellStyle.vertical === 'top' }" @click="applySelectedCellStyle({ vertical: 'top' })">上</button>
+                  <button type="button" :class="{ active: activeCellStyle.vertical === 'middle' }" @click="applySelectedCellStyle({ vertical: 'middle' })">中</button>
+                  <button type="button" :class="{ active: activeCellStyle.vertical === 'bottom' }" @click="applySelectedCellStyle({ vertical: 'bottom' })">下</button>
+                </div>
+              </div>
+              <div class="style-group">
+                <span>底色</span>
+                <div class="fill-swatch-row">
+                  <button
+                    v-for="color in fillColors"
+                    :key="color"
+                    type="button"
+                    class="fill-swatch"
+                    :class="{ active: activeCellStyle.backgroundColor === color }"
+                    :style="{ backgroundColor: color }"
+                    @click="applySelectedCellStyle({ backgroundColor: color })"
+                  ></button>
+                  <button type="button" class="fill-clear" @click="applySelectedCellStyle({ backgroundColor: '' })">清除</button>
+                </div>
+              </div>
+            </div>
+          </el-popover>
           <el-button type="primary" :loading="importing" @click="fileInput?.click()">导入入账登记表</el-button>
         </div>
       </div>
@@ -160,22 +199,26 @@
                   'frozen-row': isFrozenRow(item.row),
                   'frozen-col': isFrozenCol(item.col),
                   'frozen-corner-cell': isFrozenRow(item.row) && isFrozenCol(item.col),
-                  [`align-${cellAlign}`]: true
+                  [`align-${cellStyleFor(item.row, item.col).horizontal}`]: true,
+                  [`valign-${cellStyleFor(item.row, item.col).vertical}`]: true
                 }"
                 :title="commentFor(item.row, item.col) || ''"
                 :style="{
                   transform: `translate(${positionedLeft(item.col)}px, ${positionedTop(item.row)}px)`,
                   width: `${item.width}px`,
-                  height: `${item.height}px`
+                  height: `${item.height}px`,
+                  '--cell-fill': cellStyleFor(item.row, item.col).backgroundColor || 'var(--bg-card)'
                 }"
                 @click="selectCell(item.row, item.col, $event)"
                 @dblclick="editCell(item.row, item.col)"
                 @contextmenu.prevent="editComment(item.row, item.col)"
               >
-                <span v-if="editingCell !== item.row+'-'+item.col" class="cell-text">{{ displayCellValue(cellFor(item.row, item.col)) }}</span>
+                <span v-if="editingCell !== item.row+'-'+item.col" class="cell-text">
+                  <span class="cell-content">{{ displayCellValue(cellFor(item.row, item.col)) }}</span>
+                </span>
                 <textarea
                   v-else
-                  :value="displayCellValue(cellFor(item.row, item.col))"
+                  :value="editableCellValue(cellFor(item.row, item.col))"
                   @change="updateCell(item.row, item.col, $event.target.value)"
                   @keydown.enter.exact.prevent="$event.target.blur()"
                   @blur="editingCell = ''"
@@ -222,7 +265,6 @@ const sheetViewDefaults = {
   freezeCols: 0,
   rowHeightScale: 1,
   colWidthScale: 1,
-  cellAlign: 'left',
   rowHeights: {},
   colWidths: {}
 }
@@ -237,6 +279,8 @@ const maxRowHeightUnit = 220
 const minColWidthUnit = 56
 const maxColWidthUnit = 420
 const overscan = 4
+const defaultCellStyle = Object.freeze({ horizontal: 'left', vertical: 'top', backgroundColor: '' })
+const fillColors = ['#fef3c7', '#dbeafe', '#dcfce7', '#fee2e2', '#ede9fe', '#fce7f3', '#e0f2fe', '#f8fafc']
 const scrollState = reactive({ top: 0, left: 0, width: 900, height: 520 })
 const resizingGrid = ref(null)
 let scrollFrame = 0
@@ -255,7 +299,6 @@ const freezeRows = sheetViewModel('freezeRows')
 const freezeCols = sheetViewModel('freezeCols')
 const rowHeightScale = sheetViewModel('rowHeightScale')
 const colWidthScale = sheetViewModel('colWidthScale')
-const cellAlign = sheetViewModel('cellAlign')
 const rowHeights = sheetViewModel('rowHeights')
 const colWidths = sheetViewModel('colWidths')
 // 根据实际数据范围计算可见行列，不渲染空白格子
@@ -379,6 +422,35 @@ const cellMap = computed(() => {
   for (const cell of cells.value) map.set(`${cell.row_index}:${cell.col_index}`, cell)
   return map
 })
+const cellStyleMap = computed(() => {
+  const map = new Map()
+  for (const cell of cells.value) map.set(`${cell.row_index}:${cell.col_index}`, parseCellStyle(cell.style_json))
+  return map
+})
+const formulaValueMap = computed(() => {
+  const values = new Map()
+  const visiting = new Set()
+  const evaluateCell = (row, col) => {
+    const key = `${Number(row)}:${Number(col)}`
+    const cell = cellMap.value.get(key)
+    if (!cell) return 0
+    if (cell.formula) {
+      if (visiting.has(key)) return 0
+      visiting.add(key)
+      const value = evaluateFormula(cell.formula, evaluateCell)
+      visiting.delete(key)
+      values.set(key, formatFormulaResult(value))
+      return Number(value) || 0
+    }
+    return parseFormulaNumber(cell.value ?? cell.raw_value)
+  }
+  for (const cell of cells.value) {
+    if (!cell.formula) continue
+    const key = `${cell.row_index}:${cell.col_index}`
+    values.set(key, formatFormulaResult(evaluateCell(cell.row_index, cell.col_index)))
+  }
+  return values
+})
 const commentMap = computed(() => {
   const map = new Map()
   for (const comment of comments.value) map.set(`${comment.row_index}:${comment.col_index}`, comment)
@@ -387,6 +459,18 @@ const commentMap = computed(() => {
 const mergeMasterMap = computed(() => {
   const map = new Map()
   for (const merge of merges.value) map.set(`${merge.start_row}:${merge.start_col}`, merge)
+  return map
+})
+const mergeOwnerMap = computed(() => {
+  const map = new Map()
+  for (const merge of merges.value) {
+    const owner = { row: Number(merge.start_row), col: Number(merge.start_col), merge }
+    for (let row = Number(merge.start_row); row <= Number(merge.end_row); row++) {
+      for (let col = Number(merge.start_col); col <= Number(merge.end_col); col++) {
+        map.set(`${row}:${col}`, owner)
+      }
+    }
+  }
   return map
 })
 const coveredCellSet = computed(() => {
@@ -421,6 +505,19 @@ const visibleCellItems = computed(() => {
 const selectedRangeLabel = computed(() => {
   if (!selectedRange.value) return ''
   return `${colName(selectedRange.value.startCol)}${selectedRange.value.startRow}:${colName(selectedRange.value.endCol)}${selectedRange.value.endRow}`
+})
+const selectedSingleCell = computed(() => {
+  const range = selectedRange.value
+  if (!range) return null
+  return resolveCellTarget(range.startRow, range.startCol)
+})
+const selectedSingleCellLabel = computed(() => {
+  if (!selectedSingleCell.value) return ''
+  return `${colName(selectedSingleCell.value.col)}${selectedSingleCell.value.row}`
+})
+const activeCellStyle = computed(() => {
+  if (!selectedSingleCell.value) return defaultCellStyle
+  return cellStyleFor(selectedSingleCell.value.row, selectedSingleCell.value.col)
 })
 const canMergeSelection = computed(() => {
   const range = selectedRange.value
@@ -763,11 +860,17 @@ function updateGridViewport() {
 }
 
 function selectCell(row, col, event) {
+  const target = resolveCellTarget(row, col)
   if (event?.shiftKey && selectedRange.value) {
-    selectedRange.value = normalizeRange(selectedRange.value.startRow, selectedRange.value.startCol, row, col)
+    selectedRange.value = normalizeRange(selectedRange.value.startRow, selectedRange.value.startCol, target.row, target.col)
   } else {
-    selectedRange.value = normalizeRange(row, col, row, col)
+    selectedRange.value = normalizeRange(target.row, target.col, target.row, target.col)
   }
+}
+
+function resolveCellTarget(row, col) {
+  const owner = mergeOwnerMap.value.get(`${Number(row)}:${Number(col)}`)
+  return owner ? { row: owner.row, col: owner.col } : { row: Number(row), col: Number(col) }
 }
 
 function normalizeRange(startRow, startCol, endRow, endCol) {
@@ -830,6 +933,56 @@ async function unmergeSelectedCell() {
   }
 }
 
+function parseCellStyle(value) {
+  let parsed = {}
+  if (value && typeof value === 'object') {
+    parsed = value
+  } else if (value) {
+    try {
+      parsed = JSON.parse(value)
+    } catch {
+      parsed = {}
+    }
+  }
+  const horizontal = ['left', 'center', 'right'].includes(parsed.horizontal) ? parsed.horizontal : 'left'
+  const vertical = ['top', 'middle', 'bottom'].includes(parsed.vertical) ? parsed.vertical : 'top'
+  const backgroundColor = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(parsed.backgroundColor || ''))
+    ? String(parsed.backgroundColor)
+    : ''
+  return { horizontal, vertical, backgroundColor }
+}
+
+function cellStyleFor(row, col) {
+  return cellStyleMap.value.get(`${row}:${col}`) || defaultCellStyle
+}
+
+async function applySelectedCellStyle(partial) {
+  const target = selectedSingleCell.value
+  if (!activeSheet.value || !target) {
+    ElMessage.warning('请先点击一个单元格')
+    return
+  }
+  const current = cellStyleFor(target.row, target.col)
+  const nextStyle = parseCellStyle({ ...current, ...partial })
+  const cell = cellFor(target.row, target.col)
+  try {
+    const json = await requestJson(`/api/finance/ledger/cells/${cell.id || 0}/style`, {
+      sheet_id: activeSheetId.value,
+      row_index: target.row,
+      col_index: target.col,
+      style: nextStyle
+    }, 'PUT')
+    upsertLocal(cells.value, json.data)
+    if (activeCacheKey.value && detailCache.has(activeCacheKey.value)) {
+      const cached = detailCache.get(activeCacheKey.value)
+      cached.cells = cached.cells || []
+      upsertLocal(cached.cells, json.data)
+    }
+  } catch (err) {
+    ElMessage.error(err.message || '单元格样式保存失败')
+  }
+}
+
 function cellFor(row, col) {
   return cellMap.value.get(`${row}:${col}`) || {
     id: 0,
@@ -842,7 +995,18 @@ function cellFor(row, col) {
 }
 
 function displayCellValue(cell) {
-  const text = String(cell?.value ?? '')
+  const key = `${cell?.row_index}:${cell?.col_index}`
+  const text = String(cell?.formula ? (formulaValueMap.value.get(key) ?? cell.value ?? '') : (cell?.value ?? ''))
+  return formatLedgerDisplayText(text)
+}
+
+function editableCellValue(cell) {
+  if (cell?.formula) return `=${String(cell.formula).replace(/^=+/, '')}`
+  return displayCellValue(cell)
+}
+
+function formatLedgerDisplayText(value) {
+  const text = String(value ?? '')
   const fullDate = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/)
   if (fullDate) return `${Number(fullDate[1])}/${Number(fullDate[2])}/${Number(fullDate[3])}`
   const shortDate = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/)
@@ -853,13 +1017,79 @@ function displayCellValue(cell) {
   return text
 }
 
+function parseFormulaNumber(value) {
+  const text = String(value ?? '').replace(/,/g, '').trim()
+  if (!text) return 0
+  if (text.endsWith('%')) {
+    const percent = Number(text.slice(0, -1))
+    return Number.isFinite(percent) ? percent / 100 : 0
+  }
+  const number = Number(text)
+  return Number.isFinite(number) ? number : 0
+}
+
+function evaluateFormula(formula, evaluateCell) {
+  let expression = String(formula || '').trim().replace(/^=/, '')
+  if (!expression) return ''
+  expression = expression.replace(/SUM\(([^)]+)\)/gi, (_, rangeText) => String(sumFormulaRange(rangeText, evaluateCell)))
+  expression = expression.replace(/\$?([A-Z]{1,3})\$?(\d+)/gi, (_, colText, rowText) => String(evaluateCell(Number(rowText), decodeColName(colText))))
+  expression = expression.replace(/(\d+(?:\.\d+)?)%/g, '($1/100)')
+  if (!/^[0-9+\-*/().\s]+$/.test(expression)) return ''
+  try {
+    const result = Function(`"use strict"; return (${expression})`)()
+    return Number.isFinite(result) ? result : ''
+  } catch {
+    return ''
+  }
+}
+
+function sumFormulaRange(rangeText, evaluateCell) {
+  const [startRef, endRef] = String(rangeText || '').split(':').map(part => part.trim())
+  const start = parseCellRef(startRef)
+  const end = parseCellRef(endRef || startRef)
+  if (!start || !end) return 0
+  const rowStart = Math.min(start.row, end.row)
+  const rowEnd = Math.max(start.row, end.row)
+  const colStart = Math.min(start.col, end.col)
+  const colEnd = Math.max(start.col, end.col)
+  let total = 0
+  for (let row = rowStart; row <= rowEnd; row++) {
+    for (let col = colStart; col <= colEnd; col++) {
+      total += Number(evaluateCell(row, col)) || 0
+    }
+  }
+  return total
+}
+
+function parseCellRef(refText) {
+  const match = String(refText || '').match(/^\$?([A-Z]{1,3})\$?(\d+)$/i)
+  if (!match) return null
+  return { col: decodeColName(match[1]), row: Number(match[2]) }
+}
+
+function decodeColName(name) {
+  return String(name || '').toUpperCase().split('').reduce((total, char) => {
+    const code = char.charCodeAt(0)
+    if (code < 65 || code > 90) return total
+    return total * 26 + (code - 64)
+  }, 0)
+}
+
+function formatFormulaResult(value) {
+  if (value === '' || value === null || value === undefined) return ''
+  const number = Number(value)
+  if (!Number.isFinite(number)) return ''
+  if (Number.isInteger(number)) return String(number)
+  return String(Number(number.toFixed(6)))
+}
+
 function commentFor(row, col) {
   return commentMap.value.get(`${row}:${col}`)?.comment_text || ''
 }
 
 async function updateCell(row, col, value) {
   const cell = cellFor(row, col)
-  if (String(cell.value || '') === String(value || '')) return
+  if (String(editableCellValue(cell) || '') === String(value || '')) return
   try {
     const json = await requestJson(`/api/finance/ledger/cells/${cell.id || 0}`, {
       sheet_id: activeSheetId.value,
@@ -995,8 +1225,9 @@ function focusSearchMatch(step = 1) {
   const current = activeSearchIndex.value >= 0 ? activeSearchIndex.value : (step > 0 ? -1 : 0)
   activeSearchIndex.value = (current + step + total) % total
   const match = searchMatches.value[activeSearchIndex.value]
-  selectedRange.value = normalizeRange(match.row, match.col, match.row, match.col)
-  nextTick(() => scrollToCell(match.row, match.col))
+  const target = resolveCellTarget(match.row, match.col)
+  selectedRange.value = normalizeRange(target.row, target.col, target.row, target.col)
+  nextTick(() => scrollToCell(target.row, target.col))
 }
 
 function scrollToCell(row, col) {
@@ -1044,15 +1275,6 @@ function handleToolbarCommand(command) {
     case 'freeze-clear':
       freezeRows.value = 0
       freezeCols.value = 0
-      break
-    case 'align-left':
-      cellAlign.value = 'left'
-      break
-    case 'align-center':
-      cellAlign.value = 'center'
-      break
-    case 'align-right':
-      cellAlign.value = 'right'
       break
     case 'export':
       exportWorkbook()
@@ -1183,10 +1405,65 @@ onUnmounted(() => {
   color: var(--text-secondary);
   font-size: 12px;
 }
+.cell-style-panel {
+  display: grid;
+  gap: 14px;
+}
+.style-panel-head {
+  display: grid;
+  gap: 2px;
+}
+.style-panel-head strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.style-panel-head span,
+.style-group > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.style-group {
+  display: grid;
+  gap: 8px;
+}
+.style-button-row,
+.fill-swatch-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.style-button-row button,
+.fill-clear {
+  min-width: 42px;
+  height: 30px;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.style-button-row button.active,
+.fill-clear:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 70%, var(--border-light));
+  color: var(--color-primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+.fill-swatch {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.fill-swatch.active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
 .fullscreen-exit {
   position: fixed;
-  right: 28px;
-  bottom: 24px;
+  right: 24px;
+  bottom: 18px;
   z-index: 1100;
   box-shadow: 0 10px 28px rgba(37, 99, 235, 0.22);
 }
@@ -1264,7 +1541,7 @@ onUnmounted(() => {
   position: absolute;
   box-sizing: border-box;
   border: 1px solid color-mix(in srgb, var(--border-light) 64%, #64748b);
-  background: var(--bg-card);
+  background: var(--cell-fill, var(--bg-card));
   overflow: hidden;
   transform-origin: top left;
 }
@@ -1361,10 +1638,10 @@ onUnmounted(() => {
 .ledger-cell.selected {
   z-index: 16;
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 62%, transparent);
-  background: color-mix(in srgb, var(--color-primary) 6%, var(--bg-card));
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--cell-fill, var(--bg-card)));
 }
 .ledger-cell.search-hit {
-  background: color-mix(in srgb, #facc15 22%, var(--bg-card));
+  background: color-mix(in srgb, #facc15 22%, var(--cell-fill, var(--bg-card)));
 }
 .ledger-cell.search-active {
   z-index: 17;
@@ -1373,10 +1650,11 @@ onUnmounted(() => {
     0 0 0 2px rgba(245, 158, 11, 0.18);
 }
 .ledger-cell.merged {
-  background: color-mix(in srgb, var(--bg-card) 92%, #dbeafe);
+  background: color-mix(in srgb, var(--cell-fill, var(--bg-card)) 92%, #dbeafe);
 }
 .cell-text {
-  display: block;
+  display: flex;
+  align-items: flex-start;
   height: 100%;
   min-height: 28px;
   padding: 8px 9px;
@@ -1386,13 +1664,24 @@ onUnmounted(() => {
   white-space: pre-wrap;
   overflow: hidden;
 }
+.cell-content {
+  width: 100%;
+}
 .ledger-cell.align-center .cell-text,
 .ledger-cell.align-center textarea {
+  justify-content: center;
   text-align: center;
 }
 .ledger-cell.align-right .cell-text,
 .ledger-cell.align-right textarea {
+  justify-content: flex-end;
   text-align: right;
+}
+.ledger-cell.valign-middle .cell-text {
+  align-items: center;
+}
+.ledger-cell.valign-bottom .cell-text {
+  align-items: flex-end;
 }
 .ledger-cell textarea {
   width: 100%;
@@ -1415,7 +1704,7 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 50%, transparent);
 }
 .ledger-cell.commented {
-  background: color-mix(in srgb, #f59e0b 8%, var(--bg-card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #f59e0b 24%, transparent);
 }
 .comment-dot {
   position: absolute;
@@ -1426,6 +1715,45 @@ onUnmounted(() => {
   border-top: 9px solid #f59e0b;
   border-left: 9px solid transparent;
   pointer-events: none;
+}
+:global(html.dark) .ledger-grid-wrap {
+  border-color: rgba(148, 163, 184, 0.34);
+  background: #0f172a;
+}
+:global(html.dark) .grid-corner,
+:global(html.dark) .grid-col-header,
+:global(html.dark) .grid-row-header {
+  border-color: rgba(148, 163, 184, 0.34);
+  background: #182235;
+  color: #dbe5f4;
+}
+:global(html.dark) .ledger-cell {
+  border-color: rgba(148, 163, 184, 0.34);
+  background: var(--cell-fill, #111827);
+  color: #f4f7fb;
+}
+:global(html.dark) .ledger-cell.merged {
+  background: color-mix(in srgb, var(--cell-fill, #111827) 90%, #334155);
+}
+:global(html.dark) .ledger-cell.selected {
+  background: color-mix(in srgb, var(--color-primary) 16%, var(--cell-fill, #111827));
+}
+:global(html.dark) .ledger-cell.search-hit {
+  background: color-mix(in srgb, #facc15 30%, var(--cell-fill, #111827));
+  color: #111827;
+}
+:global(html.dark) .ledger-cell.search-active {
+  box-shadow:
+    inset 0 0 0 2px #fbbf24,
+    0 0 0 2px rgba(251, 191, 36, 0.22);
+}
+:global(html.dark) .cell-text,
+:global(html.dark) .ledger-cell textarea {
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+}
+:global(html.dark) .ledger-cell textarea:focus {
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
 }
 @media (max-width: 980px) {
   .ledger-head :deep(.el-card__body),

@@ -9,10 +9,15 @@ import { createTransaction } from '../services/financeCommands.js'
 import {
   accountFacts,
   employeeFacts,
+  fileFacts,
   financeFacts,
+  financeArapFacts,
+  financeLedgerFacts,
   inventoryFacts,
+  projectFileFolderFacts,
   projectDocumentFacts,
   projectFacts,
+  supplyOrderFacts,
   systemStatsFacts,
   todayFinanceSummaryFacts,
   transactionFacts
@@ -57,6 +62,14 @@ export function executeTool(name, args, db, user) {
       return JSON.stringify(todayFinanceSummaryFacts(db, user))
     }
 
+    case 'get_finance_arap': {
+      return JSON.stringify(financeArapFacts(db, user, args))
+    }
+
+    case 'get_finance_ledger': {
+      return JSON.stringify(financeLedgerFacts(db, user, args))
+    }
+
     case 'get_products': {
       return JSON.stringify(inventoryFacts(db, user, args))
     }
@@ -71,6 +84,18 @@ export function executeTool(name, args, db, user) {
 
     case 'get_project_documents': {
       return JSON.stringify(projectDocumentFacts(db, user, args.project_id))
+    }
+
+    case 'search_files': {
+      return JSON.stringify(fileFacts(db, user, args))
+    }
+
+    case 'get_project_file_folders': {
+      return JSON.stringify(projectFileFolderFacts(db, user, args))
+    }
+
+    case 'get_supply_orders': {
+      return JSON.stringify(supplyOrderFacts(db, user, args))
     }
 
     case 'get_project_profit_summary': {
@@ -359,6 +384,199 @@ async function callDeepSeek(messages, config, tools) {
   }
 
   return await response.json()
+}
+
+export async function runAiChatToText({
+  db,
+  user,
+  message,
+  sessionId,
+  agentId,
+  agentKey,
+  contextType = 'direct',
+  contextKey = '',
+  title = '',
+  logger = null
+} = {}) {
+  if (!db || !user) return { success: false, statusCode: 401, message: '用户未登录' }
+  if (!message) return { success: false, statusCode: 400, message: '消息不能为空' }
+  if (user.assignment_status === 'pending') {
+    return { success: false, statusCode: 403, message: '账号等待管理员建档和岗位分配，暂不能使用 AI 查询业务数据' }
+  }
+
+  const rate = checkAiRateLimit(db, user)
+  if (!rate.ok) return { success: false, statusCode: 429, message: rate.message }
+
+  const config = getConfig(db)
+  if (!config.apiKey) return { success: false, statusCode: 500, message: 'AI 未配置' }
+
+  const agent = resolveAiAgent(db, { agentId, agentKey }, user)
+  if (!agent) return { success: false, statusCode: 403, message: '无权限使用该 AI 分身' }
+
+  const sid = sessionId || crypto.randomUUID()
+  const ctxKey = cleanContextKey(contextKey || sid)
+  const ctxType = cleanContextType(contextType)
+  const startedAt = Date.now()
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+
+  ensureAiContext(db, { userId: user.userId, agentId: agent.id, contextType: ctxType, contextKey: ctxKey, title: title || sid })
+  saveChatMessage(db, {
+    userId: user.userId,
+    agentId: agent.id,
+    contextType: ctxType,
+    contextKey: ctxKey,
+    sessionId: sid,
+    role: 'user',
+    content: message
+  })
+
+  const history = db.prepare(`
+    SELECT role, content
+    FROM chat_history
+    WHERE user_id = ? AND session_id = ? AND agent_id = ? AND context_key = ?
+    ORDER BY id ASC LIMIT 20
+  `).all(user.userId, sid, agent.id, ctxKey)
+
+  const memorySummary = agent.memory_enabled ? loadAiMemory(db, {
+    userId: user.userId,
+    agentId: agent.id,
+    contextType: ctxType,
+    contextKey: ctxKey
+  }) : ''
+
+  const messages = [
+    { role: 'system', content: getSystemPrompt(user.username, agent, memorySummary) },
+    ...history.map(h => ({ role: h.role, content: h.content }))
+  ]
+
+  const kbResults = await searchKnowledgeBase(message, 3)
+  if (kbResults.length > 0) {
+    const context = kbResults.map((r, i) =>
+      `[${i + 1}] 来源: ${r.source}\n内容: ${r.content}`
+    ).join('\n\n')
+    messages.splice(1, 0, {
+      role: 'system',
+      content: `以下是公司知识库中相关的参考资料，请据此回答用户问题：\n\n${context}`
+    })
+  }
+
+  const allowedToolNames = getAllowedTools(user.userId, user.role, db, agent)
+  const allowedTools = TOOLS.filter(t => allowedToolNames.includes(t.function.name))
+  let finalContent = ''
+  const currentMessages = messages
+
+  try {
+    for (let round = 0; round < 10; round++) {
+      const result = await callDeepSeek(currentMessages, config, round === 0 ? allowedTools : undefined)
+      totalInputTokens += result.usage?.prompt_tokens || 0
+      totalOutputTokens += result.usage?.completion_tokens || 0
+      const choice = result.choices?.[0]
+      if (choice?.finish_reason === 'stop' || !choice?.message?.tool_calls) {
+        finalContent = choice?.message?.content || ''
+        break
+      }
+
+      const toolCalls = choice.message.tool_calls
+      currentMessages.push({ role: 'assistant', content: choice.message.content || null, tool_calls: toolCalls })
+      for (const tc of toolCalls) {
+        let args = {}
+        try { args = JSON.parse(tc.function.arguments) } catch {}
+        const meta = toolMeta(tc.function.name)
+        const toolStartedAt = Date.now()
+        const resultData = executeTool(tc.function.name, args, db, user)
+        const parsedToolResult = parseJsonSafe(resultData, {})
+        logAiAudit(db, user, {
+          actionType: meta.action_type || 'tool_read',
+          toolName: tc.function.name,
+          requestSummary: args,
+          resultSummary: resultData,
+          status: parsedToolResult.success === false ? 'failed' : 'ok',
+          errorMessage: parsedToolResult.success === false ? parsedToolResult.message || '工具调用失败' : '',
+          model: config.model,
+          durationMs: Date.now() - toolStartedAt,
+          agentId: agent.id,
+          contextKey: ctxKey,
+          riskLevel: meta.risk_level,
+          confirmationRequired: meta.requires_confirmation
+        })
+        currentMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultData })
+      }
+    }
+  } catch (err) {
+    const errorMessage = humanizeAiError(err)
+    logger?.error?.({ err }, 'AI chat failed')
+    logAiAudit(db, user, {
+      actionType: 'chat_failed',
+      requestSummary: message,
+      resultSummary: errorMessage,
+      model: config.model,
+      durationMs: Date.now() - startedAt,
+      agentId: agent.id,
+      contextKey: ctxKey
+    })
+    return { success: false, statusCode: 502, message: errorMessage }
+  }
+
+  if (!finalContent) finalContent = '抱歉，我暂时无法回答这个问题。'
+
+  const toolLogs = currentMessages.filter(m => m.role === 'tool')
+  if (toolLogs.length > 0) {
+    const summary = toolLogs.map(m => {
+      const data = parseJsonSafe(m.content, {})
+      return `→ ${data.message || summarize(data.data || m.content, 180)}`
+    }).join('\n')
+    saveChatMessage(db, {
+      userId: user.userId,
+      agentId: agent.id,
+      contextType: ctxType,
+      contextKey: ctxKey,
+      sessionId: sid,
+      role: 'system',
+      content: `【上一次操作结果】\n${summary}`
+    })
+  }
+  saveChatMessage(db, {
+    userId: user.userId,
+    agentId: agent.id,
+    contextType: ctxType,
+    contextKey: ctxKey,
+    sessionId: sid,
+    role: 'assistant',
+    content: finalContent
+  })
+  if (agent.memory_enabled) {
+    saveAiMemory(db, {
+      userId: user.userId,
+      agentId: agent.id,
+      contextType: ctxType,
+      contextKey: ctxKey,
+      summary: finalContent,
+      retentionDays: agent.memory_retention_days
+    })
+  }
+  logAiAudit(db, user, {
+    actionType: 'chat',
+    requestSummary: message,
+    resultSummary: finalContent,
+    model: config.model,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    durationMs: Date.now() - startedAt,
+    agentId: agent.id,
+    contextKey: ctxKey
+  })
+
+  return {
+    success: true,
+    content: finalContent,
+    sessionId: sid,
+    agent,
+    contextKey: ctxKey,
+    contextType: ctxType,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens
+  }
 }
 
 async function handleAiChat(request, reply, db) {

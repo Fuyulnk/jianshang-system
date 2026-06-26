@@ -16,7 +16,7 @@ import accountRoutes from './routes/accounts.js'
 import transactionRoutes from './routes/transactions.js'
 import productRoutes from './routes/products.js'
 import employeeRoutes from './routes/employees.js'
-import aiRoutes from './routes/ai.js'
+import aiRoutes, { runAiChatToText } from './routes/ai.js'
 import aiPermissionsRoutes from './routes/ai-permissions.js'
 import kbRoutes from './routes/knowledge-base.js'
 import userRoutes from './routes/users.js'
@@ -95,6 +95,11 @@ try { db.exec('ALTER TABLE employees ADD COLUMN employee_code TEXT') } catch {}
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_employee_id_unique ON users(employee_id) WHERE employee_id > 0') } catch {}
 try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_code_unique ON employees(employee_code) WHERE employee_code IS NOT NULL AND employee_code != ''") } catch {}
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_participant ON conversation_participants(conversation_id, user_id)') } catch {}
+try { db.exec("ALTER TABLE conversation_participants ADD COLUMN is_pinned INTEGER DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE conversation_participants ADD COLUMN muted INTEGER DEFAULT 0") } catch {}
+try { db.exec("ALTER TABLE conversation_participants ADD COLUMN group_nickname TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE conversations ADD COLUMN updated_at TEXT DEFAULT ''") } catch {}
+try { db.exec("ALTER TABLE conversations ADD COLUMN avatar_url TEXT DEFAULT ''") } catch {}
 try {
   const employeesWithoutCode = db.prepare(`
     SELECT id FROM employees
@@ -272,6 +277,7 @@ try {
       raw_value TEXT DEFAULT '',
       formula TEXT DEFAULT '',
       number_format TEXT DEFAULT '',
+      style_json TEXT DEFAULT '{}',
       updated_by INTEGER DEFAULT 0,
       updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
       UNIQUE(sheet_id, row_index, col_index)
@@ -322,6 +328,7 @@ try {
 
   `)
   try { db.exec("ALTER TABLE finance_ledger_workbooks ADD COLUMN source_file_path TEXT DEFAULT ''") } catch {}
+  try { db.exec("ALTER TABLE finance_ledger_cells ADD COLUMN style_json TEXT DEFAULT '{}'") } catch {}
 } catch {}
 try { ensureSystemDocumentTemplates(db, documentTemplateDir) } catch {}
 // 升级上来的老用户标记已完成（仅一次）
@@ -458,6 +465,7 @@ db.exec(`
 `)
 ensureAiToolRegistry(db)
 ensureDefaultAiAgents(db)
+ensureDefaultAiAgentToolUpgrades(db)
 ensureFinanceAccountAliases(db)
 reconcileAssignedUserRoles(db)
 
@@ -469,16 +477,8 @@ if (toolCount === 0) {
   const stmt = db.prepare('INSERT OR IGNORE INTO ai_role_tools (role_id, tool_name, allowed) VALUES (?, ?, ?)')
 
   for (const role of roles) {
-    if (role.name === 'super_admin') {
-      for (const t of allTools) stmt.run(role.id, t, 1)
-    } else if (role.name === 'admin') {
-      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_products','get_employees','get_projects','get_project_documents','get_system_stats','get_project_profit_summary','parse_finance_transaction','parse_project_handover','create_project_workorder'].includes(t) ? 1 : 0)
-    } else if (role.name === 'finance') {
-      for (const t of allTools) stmt.run(role.id, t, ['get_accounts','get_transactions','get_today_summary','get_system_stats','get_project_profit_summary','parse_finance_transaction','create_transaction'].includes(t) ? 1 : 0)
-    } else if (role.name === 'warehouse') {
-      for (const t of allTools) stmt.run(role.id, t, ['get_products','get_system_stats'].includes(t) ? 1 : 0)
-    } else {
-      for (const t of allTools) stmt.run(role.id, t, ['get_system_stats','get_projects'].includes(t) ? 1 : 0)
+    for (const t of allTools) {
+      stmt.run(role.id, t, defaultAiToolAllowed(role.name, t))
     }
   }
 }
@@ -636,10 +636,15 @@ const start = async () => {
         const result = db.prepare(
           'INSERT INTO messages (conversation_id, user_id, content) VALUES (?, ?, ?)'
         ).run(conversation_id, socket.user.userId, content.trim())
+        db.prepare("UPDATE conversations SET updated_at = datetime('now', 'localtime') WHERE id = ?").run(conversation_id)
 
         const msg = db.prepare(`
-          SELECT m.*, u.username, u.avatar_url FROM messages m
-          JOIN users u ON m.user_id = u.id WHERE m.id = ?
+          SELECT m.*, u.username, u.avatar_url,
+            COALESCE(NULLIF(cp.group_nickname, ''), NULLIF(u.real_name, ''), u.username) as display_name
+          FROM messages m
+          JOIN users u ON m.user_id = u.id
+          LEFT JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = m.user_id
+          WHERE m.id = ?
         `).get(result.lastInsertRowid)
 
         io.to(`conv:${conversation_id}`).emit('message:new', msg)
@@ -673,65 +678,31 @@ const start = async () => {
             const aiUser = db.prepare("SELECT id FROM users WHERE username = 'ai'").get()
             if (!aiUser) return
 
-            const settings = getSystemSettings(db)
-            const config = {
-              apiKey: process.env.AI_API_KEY || '',
-              model: settings.ai_model || process.env.AI_MODEL || 'deepseek-chat',
-              maxTokens: parseInt(settings.ai_max_tokens || process.env.AI_MAX_TOKENS || '1024'),
-              temperature: parseFloat(settings.ai_temperature || process.env.AI_TEMPERATURE || '0.7')
-            }
-            if (!config.apiKey) return
-
-            // 搜索知识库
-            let kbContext = ''
-            try {
-              const kbRes = await fetch('http://127.0.0.1:18790/search', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: question, top_k: 3, threshold: 0.25, allow_categories: true }),
-                signal: AbortSignal.timeout(5000),
-              })
-              if (kbRes.ok) {
-                const kbData = await kbRes.json()
-                if (kbData.length > 0) {
-                  kbContext = '\n\n参考资料：\n' + kbData.map((r, i) =>
-                    `[${i + 1}] ${r.source}\n${r.content}`
-                  ).join('\n\n')
-                }
-              }
-            } catch {}
-
-            const response = await fetch(process.env.AI_ENDPOINT || 'https://api.deepseek.com/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${config.apiKey}`
-              },
-              body: JSON.stringify({
-                model: config.model,
-                messages: [
-                  { role: 'system', content: `你叫"简尚小助手"，是简尚系统的智能助手。你在群聊中被 @ 了，请简洁回答问题。当前提问者：${socket.user.username}${kbContext}` },
-                  { role: 'user', content: question }
-                ],
-                max_tokens: config.maxTokens,
-                temperature: config.temperature,
-                stream: false
-              })
+            const result = await runAiChatToText({
+              db,
+              user: socket.user,
+              message: question,
+              sessionId: `group:${conversation_id}`,
+              agentKey: 'general',
+              contextType: 'group',
+              contextKey: `conversation:${conversation_id}`,
+              title: conv.name || '群聊'
             })
-
-            if (!response.ok) return
-            const json = await response.json()
-            const reply = json.choices?.[0]?.message?.content
-            if (!reply) return
+            if (!result.success || !result.content) return
 
             // 发送 AI 回复到群聊，带上 @ 提问者
             const aiResult = db.prepare(
               'INSERT INTO messages (conversation_id, user_id, content) VALUES (?, ?, ?)'
-            ).run(conversation_id, aiUser.id, `@${socket.user.username} ${reply}`)
+            ).run(conversation_id, aiUser.id, `@${socket.user.username} ${result.content}`)
+            db.prepare("UPDATE conversations SET updated_at = datetime('now', 'localtime') WHERE id = ?").run(conversation_id)
 
             const aiMsg = db.prepare(`
-              SELECT m.*, u.username, u.avatar_url FROM messages m
-              JOIN users u ON m.user_id = u.id WHERE m.id = ?
+              SELECT m.*, u.username, u.avatar_url,
+                COALESCE(NULLIF(cp.group_nickname, ''), NULLIF(u.real_name, ''), u.username) as display_name
+              FROM messages m
+              JOIN users u ON m.user_id = u.id
+              LEFT JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = m.user_id
+              WHERE m.id = ?
             `).get(aiResult.lastInsertRowid)
 
             io.to(`conv:${conversation_id}`).emit('message:new', aiMsg)
@@ -1084,6 +1055,8 @@ function ensureCoreTables(db) {
       type TEXT NOT NULL,
       name TEXT,
       created_by INTEGER,
+      avatar_url TEXT DEFAULT '',
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -1091,6 +1064,9 @@ function ensureCoreTables(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
+      is_pinned INTEGER DEFAULT 0,
+      muted INTEGER DEFAULT 0,
+      group_nickname TEXT DEFAULT '',
       joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(conversation_id, user_id)
     );
@@ -1172,6 +1148,11 @@ function ensureCoreTables(db) {
   `)
 
   try { db.exec('ALTER TABLE conversations ADD COLUMN created_by INTEGER DEFAULT 0') } catch {}
+  try { db.exec("ALTER TABLE conversations ADD COLUMN avatar_url TEXT DEFAULT ''") } catch {}
+  try { db.exec("ALTER TABLE conversations ADD COLUMN updated_at TEXT DEFAULT ''") } catch {}
+  try { db.exec('ALTER TABLE conversation_participants ADD COLUMN is_pinned INTEGER DEFAULT 0') } catch {}
+  try { db.exec('ALTER TABLE conversation_participants ADD COLUMN muted INTEGER DEFAULT 0') } catch {}
+  try { db.exec("ALTER TABLE conversation_participants ADD COLUMN group_nickname TEXT DEFAULT ''") } catch {}
   try { db.exec("ALTER TABLE messages ADD COLUMN message_type TEXT DEFAULT 'text'") } catch {}
   try { db.exec('ALTER TABLE messages ADD COLUMN file_id INTEGER DEFAULT 0') } catch {}
   try { db.exec("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''") } catch {}
@@ -1339,11 +1320,27 @@ function ensureAiToolPermissionRows(db) {
 
 function defaultAiToolAllowed(role, tool) {
   if (role === 'super_admin') return 1
-  if (role === 'admin') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees', 'get_projects', 'get_project_documents', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
-  if (role === 'finance') return ['get_accounts', 'get_transactions', 'get_today_summary', 'get_projects', 'get_project_documents', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction'].includes(tool) ? 1 : 0
-  if (role === 'warehouse') return ['get_products', 'get_projects', 'get_project_documents', 'get_system_stats'].includes(tool) ? 1 : 0
-  if (role === 'engineering') return ['get_projects', 'get_project_documents', 'get_products', 'get_system_stats', 'parse_project_handover', 'create_project_workorder'].includes(tool) ? 1 : 0
-  return ['get_system_stats', 'get_projects', 'get_project_documents'].includes(tool) ? 1 : 0
+  if (role === 'admin') return [
+    'get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees',
+    'get_projects', 'get_project_documents', 'get_project_file_folders', 'get_system_stats',
+    'get_project_profit_summary', 'get_finance_arap', 'get_finance_ledger', 'search_files',
+    'get_supply_orders', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder'
+  ].includes(tool) ? 1 : 0
+  if (role === 'finance') return [
+    'get_accounts', 'get_transactions', 'get_today_summary', 'get_projects', 'get_project_documents',
+    'get_project_file_folders', 'get_system_stats', 'get_project_profit_summary', 'get_finance_arap',
+    'get_finance_ledger', 'search_files', 'get_supply_orders', 'parse_finance_transaction', 'create_transaction'
+  ].includes(tool) ? 1 : 0
+  if (role === 'warehouse') return [
+    'get_products', 'get_projects', 'get_project_documents', 'get_project_file_folders',
+    'get_supply_orders', 'search_files', 'get_system_stats'
+  ].includes(tool) ? 1 : 0
+  if (role === 'engineering') return [
+    'get_projects', 'get_project_documents', 'get_project_file_folders', 'get_products',
+    'get_supply_orders', 'search_files', 'get_system_stats', 'parse_project_handover',
+    'create_project_workorder'
+  ].includes(tool) ? 1 : 0
+  return ['get_system_stats', 'get_projects', 'get_project_documents', 'get_project_file_folders', 'search_files'].includes(tool) ? 1 : 0
 }
 
 function ensureAiToolRegistry(db) {
@@ -1406,6 +1403,24 @@ function ensureDefaultAiAgents(db) {
       toolStmt.run(row.id, tool.name, agent.tools.includes(tool.name) ? 1 : 0)
     }
   }
+}
+
+function ensureDefaultAiAgentToolUpgrades(db) {
+  const key = 'ensure_default_ai_agent_tools_20260625'
+  if (db.prepare('SELECT value FROM app_config WHERE key = ?').get(key)) return
+  const warehouse = db.prepare("SELECT id FROM ai_agents WHERE key = 'warehouse'").get()
+  if (warehouse?.id) {
+    const stmt = db.prepare(`
+      INSERT INTO ai_agent_tools (agent_id, tool_name, allowed)
+      VALUES (?, ?, 1)
+      ON CONFLICT(agent_id, tool_name) DO UPDATE SET allowed = 1
+    `)
+    for (const toolName of ['get_project_file_folders', 'search_files']) {
+      stmt.run(warehouse.id, toolName)
+    }
+  }
+  db.prepare('INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(key, '1', String(Date.now()))
 }
 
 function ensureFinanceAccountAliases(db) {
