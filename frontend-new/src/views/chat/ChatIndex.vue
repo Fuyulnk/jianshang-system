@@ -60,21 +60,37 @@
               <div v-if="showRecent" class="recent-panel" @mouseleave="showRecent = false">
                 <div v-if="recentLoading" class="recent-loading">加载中...</div>
                 <div v-else-if="!recentEntries.length" class="recent-empty">暂无录入</div>
-                <div v-for="item in recentEntries" :key="item.id" class="recent-item" @click="goToFinance">
-                  <span :class="['recent-type', item.type]">{{ item.type === 'income' ? '收入' : '支出' }}</span>
-                  <span class="recent-amount">{{ formatMoney(item.amount) }}</span>
-                  <span class="recent-desc">{{ item.description || item.party || '-' }}</span>
-                  <span v-if="item.status === 'pending'" class="recent-status">待确认</span>
-                  <button
-                    v-if="item.status === 'pending'"
-                    class="recent-confirm"
-                    type="button"
-                    :disabled="confirmingEntryId === item.id"
-                    @click.stop="confirmRecentEntry(item)"
-                  >
-                    确认
-                  </button>
-                  <span class="recent-time">{{ formatShortTime(item.created_at) }}</span>
+                <div
+                  v-for="(item, idx) in recentEntries"
+                  :key="item.id"
+                  class="recent-item"
+                  :class="{ 'recent-item-last': idx === recentEntries.length - 1 }"
+                  @click="goToFinance"
+                >
+                  <div class="recent-left">
+                    <div class="recent-row1">
+                      <span :class="['recent-type', item.type]">{{ item.type === 'income' ? '收入' : '支出' }}</span>
+                      <span class="recent-amount">{{ formatMoney(item.amount) }}</span>
+                      <span v-if="item.status === 'pending'" class="recent-status">待确认</span>
+                      <span v-else class="recent-status approved">已确认</span>
+                    </div>
+                    <div class="recent-row2">
+                      <span class="recent-acct">{{ item.account_name || '-' }}</span>
+                      <span class="recent-desc">{{ item.description || item.party || '-' }}</span>
+                    </div>
+                  </div>
+                  <div class="recent-right">
+                    <button
+                      v-if="item.status === 'pending'"
+                      class="recent-confirm"
+                      type="button"
+                      :disabled="confirmingEntryId === item.id"
+                      @click.stop="confirmRecentEntry(item)"
+                    >
+                      确认
+                    </button>
+                    <span class="recent-time">{{ formatShortTime(item.created_at) }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -781,7 +797,9 @@ async function fetchRecentEntries() {
 
 async function confirmRecentEntry(item) {
   try {
-    await ElMessageBox.confirm('确认后这条流水会生效，并更新账户余额。', '确认流水')
+    const typeLabel = item.type === 'income' ? '收入' : '支出'
+    const detail = `确认以下流水？\n\n${typeLabel} ¥${Number(item.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}\n账户：${item.account_name || '-'}\n对方：${item.party || '-'}\n说明：${item.description || '-'}\n\n确认后这条流水会生效，并更新账户余额。`
+    await ElMessageBox.confirm(detail, '确认流水', { dangerouslyUseHTMLString: false })
     confirmingEntryId.value = item.id
     const res = await fetch(`/api/transactions/${item.id}/confirm`, {
       method: 'POST',
@@ -968,10 +986,16 @@ onUnmounted(() => {
 .dark .recent-panel { background: rgba(30,30,35,0.95); }
 .recent-loading, .recent-empty { padding: 24px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
 .recent-item {
-  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  display: flex; align-items: flex-start; gap: 8px; padding: 10px 10px;
   border-radius: 8px; cursor: pointer; text-decoration: none; transition: background 0.1s;
+  border-bottom: 1px solid var(--border-light);
 }
+.recent-item-last { border-bottom: none; }
 .recent-item:hover { background: var(--border-light); }
+.recent-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.recent-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.recent-row1 { display: flex; align-items: center; gap: 6px; }
+.recent-row2 { display: flex; align-items: center; gap: 8px; }
 .recent-type {
   font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
 }
@@ -980,17 +1004,18 @@ onUnmounted(() => {
 .dark .recent-type.income { background: rgba(22,101,52,0.3); color: #86efac; }
 .dark .recent-type.expense { background: rgba(153,27,27,0.3); color: #fca5a5; }
 .recent-amount { font-size: 13px; font-weight: 600; color: var(--text-primary); flex-shrink: 0; }
-.recent-desc { font-size: 12px; color: var(--text-tertiary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.recent-acct { font-size: 11px; color: var(--color-primary); flex-shrink: 0; font-weight: 600; }
+.recent-desc { font-size: 12px; color: var(--text-tertiary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-time { font-size: 11px; color: var(--text-placeholder); flex-shrink: 0; }
 .recent-status {
   flex-shrink: 0;
   padding: 2px 6px;
   border-radius: 999px;
-  background: rgba(245, 158, 11, 0.14);
-  color: #b45309;
   font-size: 11px;
   font-weight: 700;
 }
+.recent-status { background: rgba(245, 158, 11, 0.14); color: #b45309; }
+.recent-status.approved { background: rgba(22, 163, 74, 0.14); color: #166534; }
 .recent-confirm {
   flex-shrink: 0;
   border: 0;

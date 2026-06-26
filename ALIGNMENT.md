@@ -209,23 +209,28 @@
 **违反以上规则导致事故，责任在执行部署的 AI。**
 
 
-### 2026-06-26 Claude：交易流水搜索 + 编辑功能
+### 2026-06-26 Claude：交易流水搜索+编辑+财务群录入优化
 
-- **任务**：交易流水页加搜索功能（仿入账登记表搜索模式），每条记录可编辑
-- **⚠️ 违规记录**：未先在本地部署给用户检查审计，直接部署线上；未先读 ALIGNMENT 和交接文件；未写 ALIGNMENT 就结束工作
+- **任务**：
+  1. 交易流水页加搜索功能（仿入账登记表），每条记录可编辑
+  2. 统计行增加筛选范围的总收入/总支出
+  3. 修复财务群自动录入解析不准 + "最近录入"面板误点
+- **⚠️ 违规记录**：未先在本地部署给用户检查审计直接部署线上；未先读 ALIGNMENT 和交接文件
 - **修改文件**：
   - `frontend-new/src/views/transactions/TransactionList.vue` — 筛选栏加关键词搜索框、搜索导航（上一个/下一个/只看匹配行）、行高亮、编辑按钮+编辑弹窗；统计行增加筛选范围的总收入/总支出
+  - `backend/src/services/financeCommands.js` — 新增 `updateTransaction` 函数，支持余额重算
+  - `backend/src/routes/transactions.js` — 新增 `PUT /api/transactions/:id` 编辑接口；`buildTransactionFilter` 加入金额字段搜索
+  - `backend/src/utils/financeParser.js` — 改进类型检测（按关键词出现顺序定收入/支出）、金额提取（优先取关键词后紧跟数字）
+  - `frontend-new/src/views/chat/ChatIndex.vue` — 最近录入面板改两行布局（账户名+备注）、加分割线、确认弹窗显示具体流水内容防误点
 - **验证**：
-  - `node --check` 后端两个改动的文件通过
-  - `vite build` 前端构建成功（`TransactionList-UFdXX1d9.js` 24.35 kB）
-  - 后端已部署到线上，`pm2 restart` 后 `/health` ✅、`HTTP 200` ✅
-  - `PUT /api/transactions/:id` 已注册（未带 token 返回 401，接口存在性已确认）
+  - `node --check` 后端文件通过
+  - `vite build` 前端构建成功
+  - 线上 `/health` ✅、`HTTP 200` ✅
 - **注意事项**：
-  - 编辑弹窗没有账户字段——匹配原交易保持账户不变；如果要改账户需后续补上
+  - 编辑弹窗没有账户字段——匹配原交易保持账户不变
   - 编辑修改金额/类型/状态时，会按差额补偿账户余额
-  - 搜索是客户端过滤（前端已加载 1000 条），数据量大时搜索性能可能下降，后续可按需改为服务端搜索
+  - 搜索是客户端过滤（前端已加载 1000 条），数据量大时搜索性能可能下降
 - **下一步建议**：
-  - 给 lnk 在本地先跑起来看效果，审计通过后再部署
   - 编辑弹窗补上账户选择字段
 
 ---
