@@ -145,7 +145,8 @@ export async function handleFinanceGroupMessage({ content, conversationId, conve
     description: draft.description || null,
     party: draft.party || null,
     proxy: null,
-    status: 'pending'
+    status: 'pending',
+    entry_source: 'finance_group'
   })
 
   if (!result?.id) return false
@@ -154,7 +155,7 @@ export async function handleFinanceGroupMessage({ content, conversationId, conve
   const typeLabel = draft.type === 'income' ? '收入' : '支出'
   const amountStr = Number(draft.amount).toLocaleString('zh-CN')
   const aiTag = usedAI ? ' 🤖' : ''
-  const replyText = `已生成待确认流水${aiTag}：${typeLabel}${amountStr}元${draft.account_name ? ' ' + draft.account_name : ''}${draft.party ? ' ' + draft.party : ''}${draft.description ? ' ' + draft.description : ''}。请在交易流水页面确认后生效。`
+  const replyText = `已生成待确认流水${aiTag}：${typeLabel}${amountStr}元${draft.account_name ? ' ' + draft.account_name : ''}${draft.party ? ' ' + draft.party : ''}${draft.description ? ' ' + draft.description : ''}。请在本群右上角「最近录入」中确认后生效。`
 
   // [7] Find bot user
   const botUser = db.prepare("SELECT id FROM users WHERE username = 'ai'").get()

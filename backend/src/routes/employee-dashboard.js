@@ -71,7 +71,6 @@ const ROLE_FOCUS = {
 }
 
 ROLE_FOCUS.admin = ROLE_FOCUS.super_admin
-ROLE_FOCUS.finance = ROLE_FOCUS.super_admin
 
 export default function employeeDashboardRoutes(server, db) {
   // 员工工作台数据

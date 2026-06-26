@@ -85,7 +85,9 @@ try { db.exec("ALTER TABLE users ADD COLUMN disabled_at TEXT DEFAULT ''") } catc
 try { db.exec('ALTER TABLE users ADD COLUMN disabled_by INTEGER DEFAULT 0') } catch {}
 try { db.exec("ALTER TABLE users ADD COLUMN last_login_at TEXT DEFAULT ''") } catch {}
 try { db.exec("ALTER TABLE transactions ADD COLUMN status TEXT DEFAULT 'approved'") } catch {}
+try { db.exec("ALTER TABLE transactions ADD COLUMN entry_source TEXT DEFAULT 'manual'") } catch {}
 try { db.prepare("UPDATE transactions SET status = 'approved' WHERE status IS NULL OR status = ''").run() } catch {}
+try { db.prepare("UPDATE transactions SET entry_source = 'manual' WHERE entry_source IS NULL OR entry_source = ''").run() } catch {}
 try { db.prepare("UPDATE users SET status = 'active' WHERE status IS NULL OR status = ''").run() } catch {}
 try { db.prepare("UPDATE users SET status = 'active', assignment_status = 'pending' WHERE status = 'pending_activation'").run() } catch {}
 try { db.prepare("UPDATE users SET assignment_status = 'assigned' WHERE username = 'fuyulnk' OR role IN ('super_admin', 'admin') OR COALESCE(employee_id, 0) > 0").run() } catch {}
@@ -871,6 +873,7 @@ function ensureCoreTables(db) {
       party TEXT,
       proxy TEXT,
       status TEXT DEFAULT 'approved',
+      entry_source TEXT DEFAULT 'manual',
       created_at DATETIME DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -1324,12 +1327,14 @@ function defaultAiToolAllowed(role, tool) {
     'get_accounts', 'get_transactions', 'get_today_summary', 'get_products', 'get_employees',
     'get_projects', 'get_project_documents', 'get_project_file_folders', 'get_system_stats',
     'get_project_profit_summary', 'get_finance_arap', 'get_finance_ledger', 'search_files',
-    'get_supply_orders', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder'
+    'get_supply_orders', 'parse_finance_transaction', 'parse_project_handover', 'create_project_workorder',
+    'create_finance_arap'
   ].includes(tool) ? 1 : 0
   if (role === 'finance') return [
     'get_accounts', 'get_transactions', 'get_today_summary', 'get_projects', 'get_project_documents',
     'get_project_file_folders', 'get_system_stats', 'get_project_profit_summary', 'get_finance_arap',
-    'get_finance_ledger', 'search_files', 'get_supply_orders', 'parse_finance_transaction', 'create_transaction'
+    'get_finance_ledger', 'search_files', 'get_supply_orders', 'parse_finance_transaction', 'create_transaction',
+    'create_finance_arap'
   ].includes(tool) ? 1 : 0
   if (role === 'warehouse') return [
     'get_products', 'get_projects', 'get_project_documents', 'get_project_file_folders',

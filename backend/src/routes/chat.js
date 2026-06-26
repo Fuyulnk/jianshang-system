@@ -8,7 +8,9 @@ import crypto from 'crypto'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const CHAT_UPLOAD_DIR = join(__dirname, '../../data/chat_uploads')
+const GROUP_AVATAR_DIR = join(__dirname, '../../data/avatars')
 const MAX_CHAT_FILE_SIZE = 8 * 1024 * 1024
+const MAX_GROUP_AVATAR_SIZE = 2 * 1024 * 1024
 const BLOCKED_EXTS = new Set(['.exe', '.sh', '.bat', '.cmd', '.app', '.dmg', '.pkg'])
 
 const DEFAULT_GROUPS = [
@@ -112,6 +114,41 @@ export default function chatRoutes(server, db, realtime = {}) {
       avatar_url: updated.avatar_url || ''
     })
     return { success: true, data: updated, message: '群资料已更新' }
+  })
+
+  // 群头像单独上传，避免让员工手动复制图片链接。
+  server.post('/api/conversations/:id/avatar', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能修改群资料')) return
+
+    const convId = Number(request.params.id)
+    const conv = getConversationForMember(db, convId, request.user.userId)
+    if (!conv) return reply.code(404).send({ success: false, message: '群聊不存在或无权限' })
+    if (conv.type !== 'group') return reply.code(400).send({ success: false, message: '当前只支持修改群聊资料' })
+    if (!canManageConversation(conv, request.user)) return reply.code(403).send({ success: false, message: '只有管理员或群创建人可以修改群资料' })
+
+    const image = String(request.body?.image || '')
+    const matches = image.match(/^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$/)
+    if (!matches) return reply.code(400).send({ success: false, message: '请选择 PNG、JPG 或 WebP 图片' })
+
+    const buffer = Buffer.from(matches[2], 'base64')
+    if (!buffer.length || buffer.length > MAX_GROUP_AVATAR_SIZE) {
+      return reply.code(400).send({ success: false, message: '群头像不能为空且不能超过 2MB' })
+    }
+
+    if (!existsSync(GROUP_AVATAR_DIR)) mkdirSync(GROUP_AVATAR_DIR, { recursive: true })
+    const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1]
+    const filename = `group_${convId}_${crypto.randomBytes(5).toString('hex')}.${ext}`
+    writeFileSync(join(GROUP_AVATAR_DIR, filename), buffer)
+    const avatarUrl = `/avatars/${filename}`
+    db.prepare("UPDATE conversations SET avatar_url = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(avatarUrl, convId)
+
+    realtime.io?.to(`conv:${convId}`).emit('conversation:updated', {
+      conversation_id: convId,
+      name: conv.name,
+      avatar_url: avatarUrl
+    })
+    return { success: true, data: { id: convId, name: conv.name, avatar_url: avatarUrl }, message: '群头像已更新' }
   })
 
   // 当前用户在本群的个人设置：群昵称、置顶、免打扰。

@@ -5,7 +5,7 @@ import { canAccessModule, requireAssignedAccount } from '../utils/permissions.js
 import { missingCoreFields, normalizeProjectDraft, parseProjectHandoverText } from '../utils/projectImport.js'
 import { parseFinanceTransactionDraft as parseFinanceTransactionDraftShared } from '../utils/financeParser.js'
 import { AI_TOOL_REGISTRY, buildToolSchemas, toolMeta } from '../ai/toolRegistry.js'
-import { createTransaction } from '../services/financeCommands.js'
+import { createFinanceArapItem, createTransaction } from '../services/financeCommands.js'
 import {
   accountFacts,
   employeeFacts,
@@ -23,7 +23,6 @@ import {
   transactionFacts
 } from '../services/businessFacts.js'
 
-const KB_SERVER = 'http://127.0.0.1:18790'
 const AI_ENDPOINT = process.env.AI_ENDPOINT || 'https://api.deepseek.com/chat/completions'
 
 function getConfig(db) {
@@ -68,6 +67,25 @@ export function executeTool(name, args, db, user) {
 
     case 'get_finance_ledger': {
       return JSON.stringify(financeLedgerFacts(db, user, args))
+    }
+
+    case 'create_finance_arap': {
+      if (!['super_admin', 'admin', 'finance'].includes(user.role)) {
+        return JSON.stringify({ success: false, message: '没有创建应收应付事项的权限' })
+      }
+      if (!args.confirmed) {
+        return JSON.stringify({ success: false, message: '写入应收应付事项前必须先让用户明确确认' })
+      }
+      try {
+        const result = createFinanceArapItem(db, args, user.userId)
+        return JSON.stringify({
+          success: true,
+          id: result.id,
+          message: `已新增${result.item.type === 'payable' ? '应付' : '应收'}事项「${result.item.title}」`
+        })
+      } catch (err) {
+        return JSON.stringify({ success: false, message: err.message || '新增应收应付事项失败' })
+      }
     }
 
     case 'get_products': {
@@ -202,20 +220,6 @@ export function executeTool(name, args, db, user) {
       return JSON.stringify({ success: true, id: result.lastInsertRowid, message: `已创建项目工单「${draft.name}」` })
     }
   }
-}
-
-// ====== 知识库搜索 ======
-async function searchKnowledgeBase(query, topK = 3) {
-  try {
-    const res = await fetch(`${KB_SERVER}/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, top_k: topK, threshold: 0.25, allow_categories: true }),
-      signal: AbortSignal.timeout(5000),
-    })
-    if (!res.ok) return []
-    return await res.json()
-  } catch { return [] }
 }
 
 // ====== AI 工具权限过滤 ======
@@ -450,17 +454,6 @@ export async function runAiChatToText({
     ...history.map(h => ({ role: h.role, content: h.content }))
   ]
 
-  const kbResults = await searchKnowledgeBase(message, 3)
-  if (kbResults.length > 0) {
-    const context = kbResults.map((r, i) =>
-      `[${i + 1}] 来源: ${r.source}\n内容: ${r.content}`
-    ).join('\n\n')
-    messages.splice(1, 0, {
-      role: 'system',
-      content: `以下是公司知识库中相关的参考资料，请据此回答用户问题：\n\n${context}`
-    })
-  }
-
   const allowedToolNames = getAllowedTools(user.userId, user.role, db, agent)
   const allowedTools = TOOLS.filter(t => allowedToolNames.includes(t.function.name))
   let finalContent = ''
@@ -642,17 +635,6 @@ async function handleAiChat(request, reply, db) {
     { role: 'system', content: getSystemPrompt(user.username, agent, memorySummary) },
     ...history.map(h => ({ role: h.role, content: h.content }))
   ]
-
-  const kbResults = await searchKnowledgeBase(message, 3)
-  if (kbResults.length > 0) {
-    const context = kbResults.map((r, i) =>
-      `[${i + 1}] 来源: ${r.source}\n内容: ${r.content}`
-    ).join('\n\n')
-    messages.splice(1, 0, {
-      role: 'system',
-      content: `以下是公司知识库中相关的参考资料，请据此回答用户问题：\n\n${context}`
-    })
-  }
 
   const allowedToolNames = getAllowedTools(user.userId, user.role, db, agent)
   const allowedTools = TOOLS.filter(t => allowedToolNames.includes(t.function.name))

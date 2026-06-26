@@ -302,14 +302,18 @@ onMounted(fetchData)
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
   gap: 18px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 88%, transparent);
+  border-radius: calc(var(--radius-md) + 2px);
+  background: color-mix(in srgb, var(--bg-page) 72%, var(--bg-card));
 }
 .agent-list {
-  border: 1px solid var(--border-light);
+  border: 1px solid color-mix(in srgb, var(--border-light) 92%, var(--text-primary));
   border-radius: var(--radius-md);
   padding: 12px;
   align-self: start;
-  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-page));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  background: var(--bg-card);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 .agent-list-head,
 .editor-head,
@@ -350,8 +354,8 @@ onMounted(fetchData)
   padding: 16px;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
-  background: var(--bg-card);
-  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.05);
+  background: color-mix(in srgb, var(--bg-card) 94%, white);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08);
 }
 .editor-head {
   margin-bottom: 16px;
@@ -373,7 +377,21 @@ onMounted(fetchData)
   padding: 14px;
   border: 1px solid color-mix(in srgb, var(--border-light) 82%, transparent);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-page) 62%, var(--bg-card));
+  background: color-mix(in srgb, var(--bg-page) 78%, var(--bg-card));
+}
+
+:global(.dark) .agent-layout {
+  background: color-mix(in srgb, var(--bg-page) 82%, #000);
+}
+
+:global(.dark) .agent-list,
+:global(.dark) .agent-editor {
+  border-color: color-mix(in srgb, var(--border-light) 84%, #ffffff);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+}
+
+:global(.dark) .agent-editor {
+  background: color-mix(in srgb, var(--bg-card) 88%, #ffffff);
 }
 .tool-group {
   margin-top: 12px;

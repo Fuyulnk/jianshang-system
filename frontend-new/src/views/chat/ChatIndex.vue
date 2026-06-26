@@ -771,7 +771,7 @@ async function fetchRecentEntries() {
   if (currentConvName.value !== '财务群') return
   recentLoading.value = true
   try {
-    const res = await fetch('/api/transactions/recent?limit=5', {
+    const res = await fetch('/api/transactions/recent?entry_source=finance_group&limit=5', {
       headers: { Authorization: `Bearer ${token()}` }
     })
     const json = await res.json()

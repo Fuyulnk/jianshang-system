@@ -509,13 +509,16 @@ export default function transactionRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireModuleAccess(db, request, reply, 'transactions', 'can_view', '无权限查看交易流水')) return
     const limit = Math.min(Math.max(Number(request.query.limit) || 5, 1), 20)
+    const entrySource = String(request.query.entry_source || '').trim()
+    const sourceFilter = entrySource === 'finance_group' ? 'WHERE t.entry_source = ?' : ''
     const rows = db.prepare(`
       SELECT t.*, a.name as account_name
       FROM transactions t
       LEFT JOIN accounts a ON t.account_id = a.id
+      ${sourceFilter}
       ORDER BY t.id DESC
       LIMIT ?
-    `).all(limit)
+    `).all(...(sourceFilter ? [entrySource, limit] : [limit]))
     return { success: true, data: rows }
   })
 

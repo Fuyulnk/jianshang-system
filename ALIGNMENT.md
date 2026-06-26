@@ -178,6 +178,51 @@
 
 ## 对接记录
 
+### 2026-06-26 Codex：移除失效知识库调用，降低 AI 首次响应等待（本地，未提交未上传）
+
+- 发现：设置页的“知识库”入口已删，但 `backend/src/routes/ai.js` 仍在每次普通聊天和流式聊天前请求 `http://127.0.0.1:18790/search`。本机端口未运行服务；失败时旧代码会进入最多 5 秒的超时等待，既不提供可管理知识，也会拖慢 AI 解析。
+- 修改：删除 `KB_SERVER`、`searchKnowledgeBase` 和两处调用，不再把不存在的服务伪装成公司知识来源。AI 继续只以权限过滤后的数据库事实工具、会话上下文和已配置分身提示词回答。
+- 验证：`curl http://127.0.0.1:18790/health` 确认端口不可连接；`node --check backend/src/routes/ai.js`、`rg` 确认不再残留 `KB_SERVER/searchKnowledgeBase/18790`、`git diff --check` 通过。
+- 后续：真正的知识库应另起正式方案，数据源明确为 SOP、受控附件和数据库索引，带权限、来源、更新时间和可管理入口；不要恢复这个本地幽灵服务。
+
+### 2026-06-26 Codex：V2 收口复核补充 — 财务岗位与 AI 应收应付写入（本地，未提交未上传）
+
+- 修复：`backend/src/routes/employee-dashboard.js` 删除了把 `finance` 工作台错误覆盖成管理员工作台的赋值；财务账号恢复显示“待收款单/进场款、待工费、待成本、待财务结算、待归档”这一组真实岗位待办。
+- AI：
+  - `backend/src/services/financeCommands.js` 新增 `createFinanceArapItem`，把应收应付创建统一成可复用的服务层命令。
+  - `backend/src/routes/finance.js` 的人工新建接口复用同一服务，避免网页和 AI 两条写入逻辑漂移。
+  - `backend/src/ai/toolRegistry.js`、`backend/src/routes/ai.js`、`backend/src/index.js` 新增 `create_finance_arap`（L3、高风险、必须确认）；仅超级管理员、管理员、财务角色可用。未确认时拒绝写入，确认后才新增应收/应付记录并保留 AI 审计链。
+- 文案收口：`frontend-new/src/views/system/SystemSettings.vue` 已同时移除关于页里不准确的“知识库引擎”宣称；当前没有真实业务知识库，不再假装已启用。
+- 验证：
+  - `node --check` 通过：`financeCommands.js`、`finance.js`、`ai.js`、`toolRegistry.js`、`employee-dashboard.js`、`chat.js`、`files.js`。
+  - 内存 SQLite 冒烟：应收应付服务能规范日期、创建记录并拒绝空标题/零金额。
+  - 内存 SQLite 冒烟：AI 未确认不能创建应收应付；确认后可成功创建 `payable` 记录。
+  - `npm --prefix frontend-new run build` 与 `git diff --check` 通过；仍只有既有 Element Plus 大包警告。
+- 仍需真人验收：Windows 非管理员/财务账号的主题切换、刷新、重新登录；入账登记表合并格的单格对齐/公式实际交互；群聊群头像上传和财务群“最近录入”确认。
+- 部署状态：未提交、未上传。构建产物仍只在 `frontend-new/dist`，尚未同步到 `backend/public`。
+
+### 2026-06-26 Codex：V2 收口联调补漏（本地，未提交未上传）
+
+- 任务：继续 V2 收口，不扩展项目主状态机；重点补群聊闭环、文件中心实体隔离、主题白屏风险、AI 面板可读性，并复核入账登记表的单元格样式与公式能力。
+- 本轮修改文件：
+  - `frontend-new/src/layouts/MainLayout.vue`：移除根节点 `clip-path` 主题切换动画，改为立即切换 class 并清理残留样式。此前 Windows/部分浏览器可能在根节点动画异常后持续白屏；这版避免把整个应用裁掉。
+  - `frontend-new/src/components/chat/GroupSettingsDrawer.vue`、`backend/src/routes/chat.js`、`backend/src/index.js`、`backend/src/db/init.js`、`backend/src/db/seed.js`：补群头像上传与保存；迁移兼容 `avatar_url`、群昵称、置顶、免打扰等字段。
+  - `frontend-new/src/views/chat/ChatIndex.vue`、`backend/src/routes/transactions.js`、`backend/src/services/chatFinanceBot.js`、`backend/src/services/financeCommands.js`：财务群 AI 创建的流水标记 `entry_source=finance_group`；群内“最近录入”只展示本群机器人草稿，并可在群内确认，避免混入人工流水。
+  - `frontend-new/src/views/files/FileCenter.vue`、`backend/src/routes/files.js`：项目/收款文件夹筛选增加 `entity_id`，同名项目或同名流水不再混在一个文件夹视图里。
+  - `frontend-new/src/components/system/AiAgentsPanel.vue`：增强深色主题下的边框、层级和文字对比。
+  - `frontend-new/src/views/system/SystemSettings.vue`：移除当前只有本地代理状态/重建按钮、尚未形成真实业务知识库的“知识库”外壳，避免误导员工。
+- 入账登记表复核结论（本轮未重写该模块）：现有实现已具备按单元格保存的水平/垂直对齐与填充色、合并单元格主格映射、公式显示计算（`SUM`、引用、四则运算、百分比、依赖更新）及 `2025/1/6` 日期显示。公式目前保留公式源文本并在前端重算显示，不把计算结果额外落库。
+- 验证：
+  - `node --check backend/src/index.js backend/src/routes/chat.js backend/src/routes/files.js backend/src/routes/transactions.js backend/src/services/chatFinanceBot.js backend/src/services/financeCommands.js backend/src/db/init.js backend/src/db/seed.js` 通过。
+  - `git diff --check` 通过。
+  - `npm --prefix frontend-new run build` 通过；仅保留既有 `vendor-element` 包体积警告，不阻断构建。
+- 未完成验证 / 风险：
+  - 尚未用真实财务普通账号在 Windows 浏览器完成“切换深色主题 -> 刷新 -> 重新登录”的冒烟；因此白屏修复是代码级修复，仍需真人环境确认。
+  - 尚未用真实入账登记表完成公式编辑、合并格对齐、全屏右键备注的交互验收；需由用户按真实表格验证。
+  - 本机 `5173` 登录页可正常打开；未提交账号/密码，因此未完成已登录的角色冒烟。当前本机有已保存的财务账号名，不能擅自尝试密码或改变员工登录状态；不能把构建成功当作登录/权限已验收。
+  - 本轮未 `git commit`、未 `git push`、未同步 `frontend-new/dist` 到 `backend/public`、未上传服务器。
+- 下一步：先让用户审本地效果；确认后再按部署步骤构建、同步静态资源、备份服务器、上传并做管理员和财务账号的线上登录/主题冒烟。不要跳过上述真人验证。
+
 ### 2026-06-26 Claude：数据库迁移补漏 — 群聊功能新增字段
 
 - 背景：Codex 新增群聊置顶/免打扰/群昵称功能，`chat.js` 引用了 `conversation_participants.is_pinned`、`muted`、`group_nickname` 和 `conversations.updated_at`、`avatar_url` 等字段，但数据库迁移未同步，导致群聊列表接口报错返回空。

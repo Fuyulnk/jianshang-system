@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url'
 import { authMiddleware } from '../middleware/auth.js'
 import { patchXlsxCells } from '../utils/xlsxTemplateExport.js'
 import { getActiveDocumentTemplate } from '../services/documentTemplateService.js'
+import { createFinanceArapItem } from '../services/financeCommands.js'
 
 const LARGE_LEDGER_BODY_LIMIT = 80 * 1024 * 1024
 const __filename = fileURLToPath(import.meta.url)
@@ -144,33 +145,12 @@ export default function financeRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
     if (!requireFinanceAccess(request, reply)) return
 
-    const item = normalizeArapInput(request.body || {})
-    if (!item.title) return reply.code(400).send({ success: false, message: '事项名称不能为空' })
-    if (!item.amount || item.amount <= 0) return reply.code(400).send({ success: false, message: '金额必须大于 0' })
-
-    const result = db.prepare(`
-      INSERT INTO finance_arap_items (
-        type, title, counterparty, amount, settled_amount, due_date, status,
-        category, project_id, source_type, source_id, owner_user_id, note, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      item.type,
-      item.title,
-      item.counterparty,
-      item.amount,
-      item.settled_amount,
-      item.due_date,
-      item.status,
-      item.category,
-      item.project_id,
-      item.source_type,
-      item.source_id,
-      item.owner_user_id,
-      item.note,
-      request.user.userId
-    )
-
-    return { success: true, id: result.lastInsertRowid, message: '已新增应收应付事项' }
+    try {
+      const result = createFinanceArapItem(db, request.body || {}, request.user.userId)
+      return { success: true, id: result.id, message: '已新增应收应付事项' }
+    } catch (err) {
+      return reply.code(err.statusCode || 400).send({ success: false, message: err.message || '新增应收应付事项失败' })
+    }
   })
 
   server.put('/api/finance/receivables-payables/:id', async (request, reply) => {

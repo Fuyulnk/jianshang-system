@@ -222,44 +222,11 @@ function isNightTime() {
 }
 
 function applyTheme(dark) {
-  const setTheme = value => {
-    isDark.value = value
-    document.documentElement.classList.toggle('dark', value)
-    document.documentElement.style.clipPath = ''
-  }
-  const btn = document.querySelector('.header-btn')
-  const rect = btn?.getBoundingClientRect() || { left: window.innerWidth / 2, top: 20 }
-  const x = rect.left + (rect.width || 0) / 2
-  const y = rect.top + (rect.height || 0) / 2
-  const r = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y))
-  const canAnimate = typeof document.documentElement.animate === 'function'
-    && window.matchMedia?.('(prefers-reduced-motion: no-preference)')?.matches !== false
-
-  if (!canAnimate) {
-    setTheme(dark)
-    return
-  }
-
-  if (dark && !isDark.value) {
-    // 变暗：从按钮向外圆周扩散
-    setTheme(true)
-    const animation = document.documentElement.animate([
-      { clipPath: `circle(0% at ${x}px ${y}px)` },
-      { clipPath: `circle(${r}px at ${x}px ${y}px)` }
-    ], { duration: 600, easing: 'ease-in-out' })
-    animation.oncancel = () => { document.documentElement.style.clipPath = '' }
-    setTimeout(() => { document.documentElement.style.clipPath = '' }, 650)
-  } else if (!dark && isDark.value) {
-    // 变亮：从外向内收缩到按钮
-    const animation = document.documentElement.animate([
-      { clipPath: `circle(${r}px at ${x}px ${y}px)` },
-      { clipPath: `circle(0% at ${x}px ${y}px)` }
-    ], { duration: 600, easing: 'ease-in-out' })
-    animation.onfinish = () => setTheme(false)
-    animation.oncancel = () => setTheme(false)
-  } else {
-    setTheme(dark)
-  }
+  // 根节点裁切动画在部分 Windows 浏览器会残留 clip-path，造成整页白屏。
+  // 主题是高频基础功能，优先稳定可恢复，不在这里做全页动画。
+  isDark.value = Boolean(dark)
+  document.documentElement.classList.toggle('dark', isDark.value)
+  document.documentElement.style.clipPath = ''
 }
 
 function toggleTheme() {

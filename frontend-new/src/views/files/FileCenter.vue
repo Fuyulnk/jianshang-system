@@ -14,6 +14,7 @@ const allowedModules = ref([])
 const loading = ref(false)
 const filters = ref({
   entity_type: '',
+  entity_id: '',
   keyword: '',
   start_date: '',
   end_date: '',
@@ -128,7 +129,7 @@ async function fetchAll() {
 }
 
 function resetFilters() {
-  filters.value = { entity_type: '', keyword: '', start_date: '', end_date: '', amount_min: '', amount_max: '', person: '' }
+  filters.value = { entity_type: '', entity_id: '', keyword: '', start_date: '', end_date: '', amount_min: '', amount_max: '', person: '' }
   fetchAll()
 }
 
@@ -186,19 +187,25 @@ function openEntity(row) {
 
 function openProjectFolder(folder) {
   filters.value.entity_type = 'project'
-  filters.value.keyword = folder.name || folder.customer || ''
+  filters.value.entity_id = String(folder.id)
+  filters.value.keyword = ''
+  filters.value.start_date = ''
+  filters.value.end_date = ''
+  filters.value.amount_min = ''
+  filters.value.amount_max = ''
+  filters.value.person = ''
   fetchFiles()
 }
 
 function openReceiptFolder(folder) {
   filters.value.entity_type = 'transaction'
-  filters.value.keyword = folder.description || folder.party || folder.category || ''
-  const date = String(folder.created_at || '').slice(0, 10)
-  filters.value.start_date = date
-  filters.value.end_date = date
-  filters.value.amount_min = String(folder.amount || '')
-  filters.value.amount_max = String(folder.amount || '')
-  filters.value.person = folder.party || folder.proxy || ''
+  filters.value.entity_id = String(folder.id)
+  filters.value.keyword = ''
+  filters.value.start_date = ''
+  filters.value.end_date = ''
+  filters.value.amount_min = ''
+  filters.value.amount_max = ''
+  filters.value.person = ''
   fetchFiles()
 }
 

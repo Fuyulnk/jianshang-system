@@ -70,6 +70,30 @@ export const AI_TOOL_REGISTRY = [
     }
   },
   {
+    name: 'create_finance_arap',
+    label: '确认创建应收应付',
+    desc: '用户明确确认后，新增一条应收或应付事项',
+    tier: 'L3',
+    risk_level: 'high',
+    action_type: 'tool_write',
+    requires_confirmation: true,
+    schema: {
+      type: 'object',
+      properties: {
+        confirmed: { type: 'boolean', description: '用户是否已明确确认创建' },
+        type: { type: 'string', enum: ['receivable', 'payable'], description: '应收或应付' },
+        title: { type: 'string', description: '事项名称' },
+        counterparty: { type: 'string', description: '客户、门店、供应商或其他对方' },
+        amount: { type: 'number', description: '应收或应付金额，正数' },
+        due_date: { type: 'string', description: '到期日，YYYY-MM-DD' },
+        category: { type: 'string', description: '分类，如项目款、材料款、工费' },
+        project_id: { type: 'number', description: '关联项目 ID，可不填' },
+        note: { type: 'string', description: '备注' }
+      },
+      required: ['confirmed', 'type', 'title', 'amount']
+    }
+  },
+  {
     name: 'get_products',
     label: '查看库存产品',
     desc: '查询库存产品，返回名称、规格、分类、仓库单位、当前库存、低库存线、仓库编码/库位、别名和低库存状态',
@@ -338,7 +362,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance'],
-    tools: ['get_accounts', 'get_transactions', 'get_today_summary', 'get_finance_arap', 'get_finance_ledger', 'search_files', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction'],
+    tools: ['get_accounts', 'get_transactions', 'get_today_summary', 'get_finance_arap', 'get_finance_ledger', 'search_files', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction', 'create_finance_arap'],
     base_prompt: '你是简尚财务助手。财务消息先解析成草稿，用户明确确认后才能写入流水。不要猜账户余额和金额，必须查系统数据。'
   },
   {

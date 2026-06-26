@@ -23,6 +23,7 @@ export default function fileRoutes(server, db) {
     if (authMiddleware(request, reply) === false) return
 
     const entityType = normalizeEntityType(request.query.entity_type)
+    const entityId = toInt(request.query.entity_id)
     const keyword = cleanText(request.query.keyword)
     const startDate = normalizeDate(request.query.start_date)
     const endDate = normalizeDate(request.query.end_date)
@@ -36,6 +37,10 @@ export default function fileRoutes(server, db) {
     if (entityType) {
       conditions.push('a.entity_type = ?')
       params.push(entityType)
+    }
+    if (entityId) {
+      conditions.push('a.entity_id = ?')
+      params.push(entityId)
     }
     if (keyword) {
       conditions.push('(a.original_name LIKE ? OR p.name LIKE ? OR p.customer LIKE ? OR t.description LIKE ? OR t.party LIKE ? OR w.name LIKE ?)')

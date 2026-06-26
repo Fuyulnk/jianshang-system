@@ -64,6 +64,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS transactions (
   party TEXT,
   proxy TEXT,
   status TEXT DEFAULT 'approved',
+  entry_source TEXT DEFAULT 'manual',
   created_at DATETIME DEFAULT (datetime('now', 'localtime'))
 )`)
 

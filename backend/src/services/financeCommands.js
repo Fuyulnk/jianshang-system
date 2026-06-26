@@ -22,8 +22,8 @@ export function createTransaction(db, payload = {}) {
 
   const tx = db.transaction(() => {
     const result = db.prepare(`
-      INSERT INTO transactions (account_id, type, amount, category, description, party, proxy, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
+      INSERT INTO transactions (account_id, type, amount, category, description, party, proxy, status, entry_source, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
     `).run(
       accountId,
       type,
@@ -33,6 +33,7 @@ export function createTransaction(db, payload = {}) {
       cleanNullable(payload.party),
       cleanNullable(payload.proxy),
       status,
+      cleanTransactionSource(payload.entry_source),
       createdAt
     )
 
@@ -99,6 +100,24 @@ export function confirmTransaction(db, transactionId) {
   return tx()
 }
 
+export function createFinanceArapItem(db, payload = {}, createdBy = 0) {
+  const item = normalizeArapPayload(payload)
+  if (!item.title) throw commandError('事项名称不能为空', 400)
+  if (!item.amount || item.amount <= 0) throw commandError('金额必须大于 0', 400)
+
+  const result = db.prepare(`
+    INSERT INTO finance_arap_items (
+      type, title, counterparty, amount, settled_amount, due_date, status,
+      category, project_id, source_type, source_id, owner_user_id, note, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    item.type, item.title, item.counterparty, item.amount, item.settled_amount,
+    item.due_date, item.status, item.category, item.project_id, item.source_type,
+    item.source_id, item.owner_user_id, item.note, toPositiveInt(createdBy)
+  )
+  return { id: Number(result.lastInsertRowid), item }
+}
+
 function commandError(message, statusCode = 400) {
   const err = new Error(message)
   err.statusCode = statusCode
@@ -115,6 +134,11 @@ function toPositiveMoney(value) {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
+function toNonNegativeMoney(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
 function toSignedMoney(value) {
   const n = Number(value)
   return Number.isFinite(n) ? n : 0
@@ -127,6 +151,41 @@ function cleanText(value) {
 function cleanNullable(value) {
   const text = cleanText(value)
   return text || null
+}
+
+function cleanTransactionSource(value) {
+  const source = cleanText(value)
+  return /^[a-z_]{1,40}$/.test(source) ? source : 'manual'
+}
+
+function normalizeArapPayload(payload = {}) {
+  const amount = toPositiveMoney(payload.amount)
+  const settledAmount = Math.min(toNonNegativeMoney(payload.settled_amount ?? payload.settledAmount), amount)
+  const requestedStatus = cleanText(payload.status)
+  const status = ['pending', 'partial', 'done'].includes(requestedStatus)
+    ? requestedStatus
+    : settledAmount >= amount && amount > 0 ? 'done' : settledAmount > 0 ? 'partial' : 'pending'
+  return {
+    type: cleanText(payload.type) === 'payable' ? 'payable' : 'receivable',
+    title: cleanText(payload.title).slice(0, 120),
+    counterparty: cleanText(payload.counterparty).slice(0, 120),
+    amount,
+    settled_amount: settledAmount,
+    due_date: normalizeArapDate(payload.due_date ?? payload.dueDate),
+    status,
+    category: cleanText(payload.category).slice(0, 80),
+    project_id: toPositiveInt(payload.project_id ?? payload.projectId),
+    source_type: cleanText(payload.source_type ?? payload.sourceType).slice(0, 60),
+    source_id: toPositiveInt(payload.source_id ?? payload.sourceId),
+    owner_user_id: toPositiveInt(payload.owner_user_id ?? payload.ownerUserId),
+    note: cleanText(payload.note).slice(0, 500)
+  }
+}
+
+function normalizeArapDate(value) {
+  const match = cleanText(value).match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
+  if (!match) return ''
+  return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`
 }
 
 function normalizeTransactionStatus(value) {

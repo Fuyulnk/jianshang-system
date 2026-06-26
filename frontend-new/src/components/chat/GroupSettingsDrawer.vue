@@ -28,6 +28,11 @@ const selectedUserIds = ref([])
 const canManage = ref(false)
 const savingGroup = ref(false)
 const savingPrefs = ref(false)
+const uploadingAvatar = ref(false)
+const groupAvatarFileInput = ref(null)
+const groupAvatarPreview = ref('')
+const groupAvatarData = ref('')
+const groupAvatarFileName = ref('')
 const groupForm = ref({
   name: '',
   avatar_url: ''
@@ -75,6 +80,9 @@ async function loadSettings() {
       name: conversation.name || props.conversationName || '',
       avatar_url: conversation.avatar_url || ''
     }
+    groupAvatarPreview.value = ''
+    groupAvatarData.value = ''
+    groupAvatarFileName.value = ''
     const currentPreferences = memberJson.data?.current_preferences || {}
     preferences.value = {
       is_pinned: !!currentPreferences.is_pinned,
@@ -102,7 +110,7 @@ async function saveGroupProfile() {
     const res = await fetch(`/api/conversations/${props.conversationId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
-      body: JSON.stringify(groupForm.value)
+      body: JSON.stringify({ name: groupForm.value.name })
     })
     const json = await res.json()
     if (!json.success) throw new Error(json.message || '保存群资料失败')
@@ -116,6 +124,57 @@ async function saveGroupProfile() {
     ElMessage.error(error.message || '保存群资料失败')
   } finally {
     savingGroup.value = false
+  }
+}
+
+function chooseGroupAvatar() {
+  groupAvatarFileInput.value?.click()
+}
+
+function onGroupAvatarSelect(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    ElMessage.warning('请选择 PNG、JPG 或 WebP 图片')
+    event.target.value = ''
+    return
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    ElMessage.warning('群头像不能超过 2MB')
+    event.target.value = ''
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = loadEvent => {
+    groupAvatarPreview.value = String(loadEvent.target?.result || '')
+    groupAvatarData.value = groupAvatarPreview.value
+    groupAvatarFileName.value = file.name
+  }
+  reader.readAsDataURL(file)
+  event.target.value = ''
+}
+
+async function uploadGroupAvatar() {
+  if (!groupAvatarData.value || !canManage.value) return
+  uploadingAvatar.value = true
+  try {
+    const res = await fetch(`/api/conversations/${props.conversationId}/avatar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ image: groupAvatarData.value })
+    })
+    const json = await res.json()
+    if (!json.success) throw new Error(json.message || '群头像保存失败')
+    groupForm.value.avatar_url = json.data?.avatar_url || ''
+    groupAvatarPreview.value = ''
+    groupAvatarData.value = ''
+    groupAvatarFileName.value = ''
+    ElMessage.success(json.message || '群头像已更新')
+    emit('changed', { conversation: json.data, member_count: members.value.length })
+  } catch (error) {
+    ElMessage.error(error.message || '群头像保存失败')
+  } finally {
+    uploadingAvatar.value = false
   }
 }
 
@@ -243,11 +302,22 @@ function memberMeta(member) {
       <section class="settings-section profile-section">
         <div class="section-title">群资料</div>
         <el-form label-width="64px" class="compact-form">
+          <el-form-item label="群头像">
+            <div class="group-avatar-editor">
+              <UserAvatar :username="groupForm.name || conversationName || '群聊'" :avatar-url="groupAvatarPreview || groupForm.avatar_url" :size="48" />
+              <input ref="groupAvatarFileInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="onGroupAvatarSelect" />
+              <div class="group-avatar-actions">
+                <div class="group-avatar-buttons">
+                  <el-button size="small" :disabled="!canManage || loading" @click="chooseGroupAvatar">选择图片</el-button>
+                  <el-button v-if="groupAvatarPreview" size="small" type="primary" :loading="uploadingAvatar" @click="uploadGroupAvatar">保存头像</el-button>
+                </div>
+                <span v-if="groupAvatarFileName" class="avatar-file-name">{{ groupAvatarFileName }}</span>
+                <span class="avatar-hint">PNG、JPG、WebP，2MB 以内</span>
+              </div>
+            </div>
+          </el-form-item>
           <el-form-item label="群名称">
             <el-input v-model="groupForm.name" :disabled="!canManage || loading" maxlength="40" placeholder="群聊名称" />
-          </el-form-item>
-          <el-form-item label="头像链接">
-            <el-input v-model="groupForm.avatar_url" :disabled="!canManage || loading" maxlength="500" placeholder="可选，粘贴图片链接" />
           </el-form-item>
         </el-form>
         <div class="section-actions">
@@ -387,6 +457,36 @@ function memberMeta(member) {
 
 .compact-form :deep(.el-form-item) {
   margin-bottom: 0;
+}
+
+.group-avatar-editor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.group-avatar-actions {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.group-avatar-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.avatar-file-name,
+.avatar-hint {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .section-actions {

@@ -165,39 +165,6 @@
           <AiAgentsPanel v-if="isAdmin" />
         </div>
 
-        <!-- 知识库 -->
-        <div v-show="activeTab === 'kb'" class="settings-section">
-          <div class="section-header">
-            <h3>知识库状态</h3>
-            <p class="section-desc">这里暂时只检查本机知识库搜索服务是否可用，正式文档库后续单独建设</p>
-          </div>
-          <el-card shadow="never" class="settings-card">
-            <el-alert
-              class="kb-alert"
-              :type="kbStatus.running ? 'success' : 'warning'"
-              :closable="false"
-              show-icon
-              :title="kbStatus.running ? '知识库搜索服务已连接' : '当前还没有启用可用的知识库服务'"
-              :description="kbStatus.running ? 'AI 可在允许范围内检索已索引内容。' : '这不是员工文档库页面，只是运维检查入口；服务未启动时重新索引不会生效。'"
-            />
-            <el-descriptions :column="1" border size="small">
-              <el-descriptions-item label="运行状态">
-                <el-tag :type="kbStatus.running ? 'success' : 'danger'" size="small">
-                  {{ kbStatus.running ? '运行中' : '未启动' }}
-                </el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="定位">{{ kbStatus.message || '当前仅连接本机知识库搜索服务' }}</el-descriptions-item>
-              <el-descriptions-item label="集合名称">{{ kbStatus.collection || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="文档块数">{{ kbStatus.chunks ?? '-' }}</el-descriptions-item>
-            </el-descriptions>
-            <div class="kb-actions">
-              <el-button @click="refreshKB" :loading="kbLoading">刷新状态</el-button>
-              <el-button type="warning" @click="reindexKB" :loading="reindexing" :disabled="!kbStatus.running">重新索引</el-button>
-            </div>
-            <p class="kb-note">后续真正要做的是“公司制度、工单样板、材料说明”的可见文档库；当前入口只保留给管理员排查 AI 检索服务。</p>
-          </el-card>
-        </div>
-
         <!-- AI 权限 -->
         <div v-show="activeTab === 'ai-perm'" class="settings-section">
           <div class="section-header">
@@ -525,7 +492,6 @@
               <el-descriptions-item label="后端框架">Fastify + better-sqlite3</el-descriptions-item>
               <el-descriptions-item label="前端框架">Vue 3 + Element Plus</el-descriptions-item>
               <el-descriptions-item label="AI 服务">DeepSeek API</el-descriptions-item>
-              <el-descriptions-item label="知识库引擎">ChromaDB + sentence-transformers</el-descriptions-item>
               <el-descriptions-item label="Node.js 版本">v26.0.0</el-descriptions-item>
             </el-descriptions>
           </el-card>
@@ -549,7 +515,6 @@ const navItems = [
   { key: 'basic', label: '基本设置', icon: Setting },
   { key: 'ai', label: 'AI 配置', icon: Aim },
   { key: 'ai-agents', label: 'AI 分身', icon: Aim },
-  { key: 'kb', label: '知识库', icon: Collection },
   { key: 'ai-perm', label: 'AI 权限', icon: Operation },
   { key: 'ai-audit', label: 'API统计', icon: Operation },
   { key: 'templates', label: '表格模板', icon: Collection },
@@ -571,8 +536,6 @@ const saving = ref(false)
 const saved = ref(false)
 const testingAI = ref(false)
 const aiTestResult = ref(null)
-const kbLoading = ref(false)
-const reindexing = ref(false)
 
 // ====== AI 权限 ======
 const aiRawData = ref([])
@@ -1069,13 +1032,6 @@ const form = reactive({
   ai_max_tokens_num: 2048,
 })
 
-const kbStatus = reactive({
-  running: false,
-  collection: '',
-  chunks: null,
-  message: '',
-})
-
 function token() { return getAuthToken() }
 
 async function fetchSettings() {
@@ -1092,31 +1048,6 @@ async function fetchSettings() {
       form.ai_max_tokens_num = parseInt(json.data.ai_max_tokens || '2048')
     }
   } catch {}
-}
-
-async function fetchKB() {
-  kbLoading.value = true
-  try {
-    const res = await fetch('/api/settings/knowledge-base', {
-      headers: { Authorization: `Bearer ${token()}` }
-    })
-    const json = await res.json()
-    if (json.success && json.data) {
-      kbStatus.running = true
-      kbStatus.collection = json.data.collection || ''
-      kbStatus.chunks = json.data.chunks ?? null
-      kbStatus.message = '知识库搜索服务已连接'
-    } else {
-      kbStatus.running = false
-      kbStatus.collection = ''
-      kbStatus.chunks = null
-      kbStatus.message = json.message || '知识库服务未运行'
-    }
-  } catch {
-    kbStatus.running = false
-    kbStatus.message = '知识库状态检查失败'
-  }
-  kbLoading.value = false
 }
 
 async function saveSettings() {
@@ -1166,32 +1097,6 @@ async function testAI() {
     aiTestResult.value = { ok: false, msg: '后端连接失败' }
   }
   testingAI.value = false
-}
-
-async function refreshKB() {
-  await fetchKB()
-  ElMessage.success(kbStatus.running ? '知识库运行正常' : '知识库未启动')
-}
-
-async function reindexKB() {
-  try {
-    await ElMessageBox.confirm('重新索引可能需要几分钟，确认执行？', '提示', {
-      confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning'
-    })
-  } catch { return }
-  reindexing.value = true
-  try {
-    const res = await fetch('/api/settings/knowledge-base/reindex', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token()}` }
-    })
-    const json = await res.json()
-    if (json.success) ElMessage.success(json.message || '已触发索引任务')
-    else ElMessage.warning(json.message || '当前环境没有可用索引脚本')
-  } catch {
-    ElMessage.error('触发索引失败')
-  }
-  reindexing.value = false
 }
 
 // ====== 个人资料 ======
@@ -1355,7 +1260,6 @@ async function changePassword() {
 onMounted(() => {
   loadAppearance()
   fetchSettings()
-  fetchKB()
   fetchUserInfo()
   if (isAdmin.value) {
     fetchAiData()
