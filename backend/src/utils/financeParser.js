@@ -29,24 +29,30 @@ export function parseFinanceTransactionDraft(rawText, db) {
 
   const accounts = db.prepare('SELECT id, name FROM accounts ORDER BY id').all()
   const accountAlias = loadFinanceAccountAliases(db)
-  let account = null
+  const { account: transferAccount, counterparty: transferParty } = resolveTransferAccounts(text, accounts, accountAlias, type)
 
-  for (const item of accounts) {
-    if (text.includes(item.name)) {
-      account = item
-      break
+  let account = transferAccount
+  let party = transferParty
+
+  if (!transferAccount) {
+    // 非转账场景：原逻辑匹配
+    for (const item of accounts) {
+      if (text.includes(item.name)) {
+        account = item
+        break
+      }
     }
-  }
-  if (!account) {
-    for (const { alias, account_name: standard } of accountAlias) {
-      if (!text.includes(alias)) continue
-      account = findAccountByName(accounts, standard)
-      if (account) break
+    if (!account) {
+      for (const { alias, account_name: standard } of accountAlias) {
+        if (!text.includes(alias)) continue
+        account = findAccountByName(accounts, standard)
+        if (account) break
+      }
     }
+    party = inferCounterparty(text)
   }
 
   const category = inferFinanceCategory(text, type)
-  const party = inferCounterparty(text)
   return {
     raw_text: text,
     type,
@@ -89,6 +95,72 @@ function findAccountByName(accounts, targetName) {
 
 function normalizeAccountName(value) {
   return String(value || '').replace(/[·\s　]/g, '')
+}
+
+/**
+ * 检测转账模式并提取正确的账户和对方。
+ * 转账模式："A转进B""A转到B""A转B""A转入B""A汇给B""A转给B"
+ * 对于支出：A=支出账户，B=对方。对于收入：B=收入账户，A=对方。
+ */
+function resolveTransferAccounts(text, accounts, accountAliases, type) {
+  const transferPatterns = [
+    /([一-鿿]{2,12})转(?:进|到|入|给?)([一-鿿]{2,12})/,
+    /([一-鿿]{2,12})汇(?:到|给|入?)([一-鿿]{2,12})/
+  ]
+
+  for (const pattern of transferPatterns) {
+    const match = text.match(pattern)
+    if (!match) continue
+    const sourceName = match[1]  // A
+    const destName = match[2]    // B
+
+    // 尝试匹配 source (A) 到账户
+    const sourceAccount = findMatchingAccount(sourceName, accounts, accountAliases)
+    const destAccount = findMatchingAccount(destName, accounts, accountAliases)
+
+    if (type === 'expense') {
+      // 支出：A=支出账户，B=对方
+      if (sourceAccount) {
+        return { account: sourceAccount, counterparty: destName }
+      }
+      // A没匹配到但B匹配到了，至少对方已知
+      if (destAccount) {
+        return { account: null, counterparty: destName }
+      }
+    } else {
+      // 收入：B=收入账户，A=对方
+      if (destAccount) {
+        return { account: destAccount, counterparty: sourceName }
+      }
+      if (sourceAccount) {
+        return { account: null, counterparty: sourceName }
+      }
+    }
+  }
+  return { account: null, counterparty: '' }
+}
+
+/** 根据名称文本在账户和别名中查找匹配 */
+function findMatchingAccount(name, accounts, accountAliases) {
+  // 精确匹配账户名（忽略特殊字符）
+  const normalized = name.replace(/[·\s　]/g, '')
+  const exact = accounts.find(a => a.name.replace(/[·\s　]/g, '') === normalized)
+  if (exact) return exact
+
+  // 别名匹配
+  for (const { alias, account_name: standard } of accountAliases) {
+    if (alias === name || alias.includes(name) || name.includes(alias)) {
+      const found = findAccountByName(accounts, standard)
+      if (found) return found
+    }
+  }
+
+  // 模糊匹配：账户名包含关键字
+  const fuzzy = accounts.find(a => {
+    const clean = a.name.replace(/[·\s　]/g, '')
+    return clean.includes(normalized) || normalized.includes(clean)
+  })
+  return fuzzy || null
 }
 
 function inferFinanceCategory(text, type) {

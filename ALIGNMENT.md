@@ -220,7 +220,7 @@
   - `frontend-new/src/views/transactions/TransactionList.vue` — 筛选栏加关键词搜索框、搜索导航（上一个/下一个/只看匹配行）、行高亮、编辑按钮+编辑弹窗；统计行增加筛选范围的总收入/总支出
   - `backend/src/services/financeCommands.js` — 新增 `updateTransaction` 函数，支持余额重算
   - `backend/src/routes/transactions.js` — 新增 `PUT /api/transactions/:id` 编辑接口；`buildTransactionFilter` 加入金额字段搜索
-  - `backend/src/utils/financeParser.js` — 改进类型检测（按关键词出现顺序定收入/支出）、金额提取（优先取关键词后紧跟数字）
+  - `backend/src/utils/financeParser.js` — 改进类型检测（按关键词出现顺序定收入/支出）、金额提取（优先取关键词后紧跟数字）；新增转账模式识别（"A转进B"自动选转出方为账户、转入方为对方）
   - `frontend-new/src/views/chat/ChatIndex.vue` — 最近录入面板改两行布局（账户名+备注）、加分割线、确认弹窗显示具体流水内容防误点
 - **验证**：
   - `node --check` 后端文件通过
