@@ -58,12 +58,38 @@
           />
         </el-form-item>
         <el-form-item>
+          <el-input
+            v-model="searchKeyword"
+            class="tx-search"
+            clearable
+            placeholder="搜索日期、金额、名称…"
+            @input="resetSearchCursor"
+            @keyup.enter="focusSearchMatch(1)"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+        </el-form-item>
+        <template v-if="searchKeyword">
+          <el-form-item>
+            <span class="search-count">{{ searchMatchLabel }}</span>
+          </el-form-item>
+          <el-form-item>
+            <el-button size="small" :disabled="!searchMatches.length" @click="focusSearchMatch(-1)">上一个</el-button>
+            <el-button size="small" :disabled="!searchMatches.length" @click="focusSearchMatch(1)">下一个</el-button>
+            <el-checkbox v-model="filterToSearch" :disabled="!searchKeyword || !searchMatches.length" @change="resetSearchCursor">只看匹配行</el-checkbox>
+          </el-form-item>
+        </template>
+        <el-form-item>
           <el-button @click="resetFilters">重置</el-button>
         </el-form-item>
       </el-form>
       <div class="transaction-summary">
         <span>当前筛选：{{ filterSummaryText }}</span>
-        <span>已加载 {{ transactions.length }} 条{{ totalCount > transactions.length ? ` / 共 ${totalCount} 条，建议缩小筛选后查看` : '' }}</span>
+        <span class="stat-income">收入 {{ fmt(totalIncome) }}</span>
+        <span class="stat-expense">支出 {{ fmt(totalExpense) }}</span>
+        <span>已加载 {{ displayedTransactions.length }} 条{{ filterToSearch && searchKeyword ? `（匹配 ${searchMatches.length} 条）` : '' }}{{ totalCount > transactions.length ? ` / 共 ${totalCount} 条，建议缩小筛选后查看` : '' }}</span>
         <span>默认折叠明细，点击账户查看流水</span>
       </div>
 
@@ -95,7 +121,7 @@
           <!-- 交易列表 -->
           <el-collapse-transition>
             <div v-if="isExpanded(group.id)" class="group-body">
-              <el-table v-if="group.txs.length" :data="group.txs" stripe size="small" style="width: 100%">
+              <el-table v-if="group.txs.length" :data="group.txs" stripe size="small" style="width: 100%" :row-class-name="txRowClass">
                 <el-table-column prop="created_at" label="日期" width="155" />
                 <el-table-column label="类型" width="70">
                   <template #default="{ row }">
@@ -121,8 +147,9 @@
                     </el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="160" fixed="right">
+                <el-table-column label="操作" width="200" fixed="right">
                   <template #default="{ row }">
+                    <el-button :icon="Edit" link size="small" @click="openEditDialog(row)">编辑</el-button>
                     <el-button v-if="row.status === 'pending'" type="success" link size="small" @click="handleConfirm(row)">确认</el-button>
                     <el-button link size="small" @click="openAttachmentDialog(row)">附件</el-button>
                     <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
@@ -219,15 +246,50 @@
         compact
       />
     </el-dialog>
+
+    <!-- 编辑弹窗 -->
+    <el-dialog v-model="showEdit" title="编辑交易" width="460px">
+      <el-form :model="editForm" label-width="70px">
+        <el-form-item label="类型">
+          <el-radio-group v-model="editForm.type">
+            <el-radio value="income">收入</el-radio>
+            <el-radio value="expense">支出</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="金额">
+          <el-input-number v-model="editForm.amount" :min="0.01" :precision="2" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="分类">
+          <el-input v-model="editForm.category" placeholder="如：材料费、工资" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="editForm.description" type="textarea" :rows="2" />
+        </el-form-item>
+        <el-form-item label="对方">
+          <el-input v-model="editForm.party" placeholder="交易对方" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="editForm.status" style="width: 100%">
+            <el-option label="已确认" value="approved" />
+            <el-option label="待确认" value="pending" />
+            <el-option label="已作废" value="cancelled" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEdit = false">取消</el-button>
+        <el-button type="primary" :loading="editSaving" @click="handleEdit">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { getAuthToken } from '../../utils/authSession'
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowRight, Download, Paperclip } from '@element-plus/icons-vue'
+import { ArrowRight, Download, Edit, Paperclip, Search } from '@element-plus/icons-vue'
 import AttachmentPanel from '../../components/AttachmentPanel.vue'
 
 const route = useRoute()
@@ -254,6 +316,17 @@ const filters = ref({ type: '', status: '', account_id: null, account_type: '', 
 const dateRange = ref(null)
 const LIST_PAGE_SIZE = 1000
 
+// 搜索相关
+const searchKeyword = ref('')
+const activeSearchIndex = ref(-1)
+const filterToSearch = ref(false)
+
+// 编辑相关
+const showEdit = ref(false)
+const editSaving = ref(false)
+const editForm = ref({ type: 'expense', amount: 0, category: '', description: '', party: '', status: 'approved' })
+const editTarget = ref(null)
+
 function token() { return getAuthToken() }
 
 function fmt(v) {
@@ -279,7 +352,7 @@ function isExpanded(id) {
 // 按账户分组
 const groups = computed(() => {
   const map = {}
-  for (const tx of transactions.value) {
+  for (const tx of displayedTransactions.value) {
     const key = tx.account_id
     if (!map[key]) {
       const acc = allAccounts.value.find(a => a.id === key)
@@ -306,6 +379,97 @@ const attachmentDialogTitle = computed(() => {
   const tx = selectedTransaction.value
   const type = tx.type === 'income' ? '收入' : '支出'
   return `${type} ¥${Number(tx.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })} 的附件`
+})
+
+// 搜索匹配
+const normalizedSearchKeyword = computed(() => searchKeyword.value.trim().toLowerCase())
+
+const searchMatches = computed(() => {
+  const keyword = normalizedSearchKeyword.value
+  if (!keyword) return []
+  const matches = []
+  for (const tx of transactions.value) {
+    const fields = [
+      tx.created_at, String(tx.amount), tx.category,
+      tx.description, tx.party, tx.account_name,
+      tx.proxy
+    ]
+    const text = fields.filter(Boolean).join(' ').toLowerCase()
+    if (text.includes(keyword)) {
+      matches.push(tx.id)
+    }
+  }
+  return matches
+})
+
+const searchMatchSet = computed(() => new Set(searchMatches.value))
+
+const searchMatchLabel = computed(() => {
+  if (!normalizedSearchKeyword.value) return ''
+  if (!searchMatches.value.length) return '0 项'
+  const total = searchMatches.value.length
+  const idx = activeSearchIndex.value >= 0 ? activeSearchIndex.value : 0
+  return `${Math.min(idx + 1, total)}/${total} 项`
+})
+
+const currentSearchMatchId = computed(() => {
+  const total = searchMatches.value.length
+  if (!total) return null
+  const idx = activeSearchIndex.value >= 0 ? activeSearchIndex.value : 0
+  return searchMatches.value[idx % total] || null
+})
+
+const displayedTransactions = computed(() => {
+  if (filterToSearch.value && normalizedSearchKeyword.value && searchMatches.value.length) {
+    return transactions.value.filter(tx => searchMatchSet.value.has(tx.id))
+  }
+  return transactions.value
+})
+
+function resetSearchCursor() {
+  activeSearchIndex.value = searchMatches.value.length ? 0 : -1
+  nextTick(() => {
+    scrollToSearchMatch()
+  })
+}
+
+function focusSearchMatch(step = 1) {
+  if (!searchMatches.value.length) return
+  const total = searchMatches.value.length
+  const cur = activeSearchIndex.value >= 0 ? activeSearchIndex.value : (step > 0 ? -1 : 0)
+  activeSearchIndex.value = (cur + step + total) % total
+  scrollToSearchMatch()
+}
+
+function scrollToSearchMatch() {
+  const id = currentSearchMatchId.value
+  if (!id) return
+  const el = document.getElementById(`tx-row-${id}`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('search-flash')
+    setTimeout(() => el.classList.remove('search-flash'), 1500)
+  }
+}
+
+function isSearchMatch(txId) {
+  return Boolean(normalizedSearchKeyword.value && searchMatchSet.value.has(txId))
+}
+
+function isSearchHitRow(txId) {
+  return isSearchMatch(txId) || !normalizedSearchKeyword.value
+}
+
+// 总收入/总支出（只算已确认的）
+const totalIncome = computed(() => {
+  return displayedTransactions.value
+    .filter(tx => tx.type === 'income' && transactionStatusLabel(tx.status) === '已确认')
+    .reduce((sum, tx) => sum + Number(tx.amount || 0), 0)
+})
+const totalExpense = computed(() => {
+  return displayedTransactions.value
+    .filter(tx => tx.type === 'expense' && transactionStatusLabel(tx.status) === '已确认')
+    .reduce((sum, tx) => sum + Number(tx.amount || 0), 0)
 })
 
 const filterSummaryText = computed(() => {
@@ -496,6 +660,9 @@ function doSearch() { fetchList() }
 function resetFilters() {
   filters.value = { type: '', status: '', account_id: null, account_type: '', category: '' }
   dateRange.value = null
+  searchKeyword.value = ''
+  activeSearchIndex.value = -1
+  filterToSearch.value = false
   fetchList()
 }
 
@@ -651,6 +818,54 @@ async function handleDelete(row) {
   } catch {}
 }
 
+function txRowClass({ row }) {
+  if (!normalizedSearchKeyword.value) return ''
+  const isActive = currentSearchMatchId.value === row.id
+  const isMatch = isSearchMatch(row.id)
+  if (isActive) return 'tx-search-active'
+  if (isMatch) return 'tx-search-match'
+  if (filterToSearch.value && !isMatch) return 'tx-hidden'
+  return ''
+}
+
+function openEditDialog(row) {
+  editTarget.value = row
+  editForm.value = {
+    type: row.type,
+    amount: row.amount,
+    category: row.category || '',
+    description: row.description || '',
+    party: row.party || '',
+    status: row.status || 'approved'
+  }
+  showEdit.value = true
+}
+
+async function handleEdit() {
+  if (!editForm.value.amount || editForm.value.amount <= 0) {
+    ElMessage.warning('金额必须大于 0')
+    return
+  }
+  editSaving.value = true
+  try {
+    const res = await fetch(`/api/transactions/${editTarget.value.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
+      body: JSON.stringify(editForm.value)
+    })
+    const json = await res.json()
+    if (!json.success) throw new Error(json.message || '编辑失败')
+    ElMessage.success('已更新')
+    showEdit.value = false
+    fetchList()
+    fetchAccounts()
+  } catch (error) {
+    ElMessage.error(error.message || '编辑失败')
+  } finally {
+    editSaving.value = false
+  }
+}
+
 async function handleConfirm(row) {
   try {
     await ElMessageBox.confirm('确认后这条流水会生效，并更新账户余额。', '确认流水')
@@ -708,6 +923,35 @@ onMounted(() => { fetchList(); fetchAccounts(); fetchCategories() })
 }
 .filter-bar :deep(.el-form-item) { margin-bottom: 0; }
 .filter-bar :deep(.el-form-item__label) { color: var(--text-secondary); }
+
+.tx-search {
+  width: 220px;
+}
+.search-count {
+  min-width: 54px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+:deep(.tx-search-match) {
+  --el-table-row-bg: color-mix(in srgb, #facc15 18%, var(--bg-card));
+}
+:deep(.tx-search-active) {
+  --el-table-row-bg: color-mix(in srgb, #f59e0b 30%, var(--bg-card));
+  box-shadow: inset 0 0 0 2px #f59e0b;
+}
+.search-flash {
+  animation: search-pulse 1.5s ease-out;
+}
+@keyframes search-pulse {
+  0%, 100% { background: transparent; }
+  30% { background: color-mix(in srgb, #f59e0b 24%, transparent); }
+}
+
+:deep(.tx-hidden) {
+  display: none !important;
+}
 
 .transaction-summary {
   display: flex;

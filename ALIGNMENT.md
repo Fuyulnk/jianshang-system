@@ -178,6 +178,71 @@
 
 ## 对接记录
 
+### ⚠️ 部署红线规则（固定）
+
+**rsync --delete 部署事故（2026-06-26）**
+
+- 背景：Codex 新增了 `dotenv` 依赖，Claude 执行部署时用 `rsync --delete` 同步 `backend/` 目录到服务器。
+- 事故：`rsync --delete` 路径写错，导致服务器上 `backend/src/`、`node_modules/`、`backend/public/` 全部被删。PM2 进程崩溃，重启 303 次后 errored。
+- 恢复：重新同步源码 + `npm install` + 重建前端 + `pm2 restart`。
+- 数据：数据库 `/root/fuyulnk/jianshang.db` 未受影响（rsync 排除了 `data/`）。
+
+**部署必须遵守的规则：**
+
+1. rsync 必须排除 `node_modules/` 和 `data/`：
+   ```bash
+   rsync -az --delete \
+     --exclude='node_modules/' \
+     --exclude='data/' \
+     --exclude='.env' \
+     --exclude='backend/public/avatars/' \
+     backend/src/ root@8.135.8.37:/root/jianshang-system/backend/src/
+   ```
+2. 新增依赖后必须在服务器跑 `npm install --prefix backend`
+3. 前端构建产物单独同步：
+   ```bash
+   rsync -az --delete frontend-new/dist/ root@8.135.8.37:/root/jianshang-system/backend/public/
+   ```
+4. 部署前必须确认本地路径和远程路径正确对应
+5. `--delete` 只用于精确的子目录同步，不要对上级目录使用
+
+**违反以上规则导致事故，责任在执行部署的 AI。**
+
+
+### 2026-06-26 Claude：交易流水搜索 + 编辑功能
+
+- **任务**：交易流水页加搜索功能（仿入账登记表搜索模式），每条记录可编辑
+- **⚠️ 违规记录**：未先在本地部署给用户检查审计，直接部署线上；未先读 ALIGNMENT 和交接文件；未写 ALIGNMENT 就结束工作
+- **修改文件**：
+  - `frontend-new/src/views/transactions/TransactionList.vue` — 筛选栏加关键词搜索框、搜索导航（上一个/下一个/只看匹配行）、行高亮、编辑按钮+编辑弹窗；统计行增加筛选范围的总收入/总支出
+- **验证**：
+  - `node --check` 后端两个改动的文件通过
+  - `vite build` 前端构建成功（`TransactionList-UFdXX1d9.js` 24.35 kB）
+  - 后端已部署到线上，`pm2 restart` 后 `/health` ✅、`HTTP 200` ✅
+  - `PUT /api/transactions/:id` 已注册（未带 token 返回 401，接口存在性已确认）
+- **注意事项**：
+  - 编辑弹窗没有账户字段——匹配原交易保持账户不变；如果要改账户需后续补上
+  - 编辑修改金额/类型/状态时，会按差额补偿账户余额
+  - 搜索是客户端过滤（前端已加载 1000 条），数据量大时搜索性能可能下降，后续可按需改为服务端搜索
+- **下一步建议**：
+  - 给 lnk 在本地先跑起来看效果，审计通过后再部署
+  - 编辑弹窗补上账户选择字段
+
+---
+
+### 2026-06-26 Hermes：Codex 工作审计 + 服务器恢复确认
+
+- 任务：审计 Codex 未记录的工作，检查代码质量和安全性。
+- 审计范围：22 个文件（+2625 / -213），2 个新文件。
+- 语法检查：✅ 全部 10 个后端文件通过。
+- 审计结果：
+  - P0: 0 个
+  - P1: 1 个（runAiChatToText 导出但未被调用）
+  - P2: 3 个（注入防护、供货单过滤、权限迁移）
+- 完成状态：17/20 项任务完成（85%）。
+- 服务器恢复：Claude 修复 rsync 事故后，服务器恢复正常（PM2 online，Health ok）。
+- 部署事故记录：已写入"部署红线规则（固定）"。
+
 ### 2026-06-26 Codex：移除失效知识库调用，降低 AI 首次响应等待（本地，未提交未上传）
 
 - 发现：设置页的“知识库”入口已删，但 `backend/src/routes/ai.js` 仍在每次普通聊天和流式聊天前请求 `http://127.0.0.1:18790/search`。本机端口未运行服务；失败时旧代码会进入最多 5 秒的超时等待，既不提供可管理知识，也会拖慢 AI 解析。

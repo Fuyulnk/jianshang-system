@@ -70,6 +70,75 @@ export function deleteTransaction(db, transactionId) {
   return { id }
 }
 
+export function updateTransaction(db, transactionId, payload = {}) {
+  const id = toPositiveInt(transactionId)
+  const existing = id ? db.prepare('SELECT * FROM transactions WHERE id = ?').get(id) : null
+  if (!existing) {
+    throw commandError('交易记录不存在', 404)
+  }
+
+  const type = cleanText(payload.type) || existing.type
+  const amount = payload.amount !== undefined
+    ? (payload.allow_signed_import
+        ? toSignedMoney(payload.amount)
+        : toPositiveMoney(payload.amount))
+    : Number(existing.amount)
+  const accountId = toPositiveInt(payload.account_id) || existing.account_id
+  const status = payload.status ? normalizeTransactionStatus(payload.status) : (existing.status || 'approved')
+
+  if (!['income', 'expense'].includes(type)) {
+    throw commandError('类型必须为 income 或 expense', 400)
+  }
+  if (!amount) {
+    throw commandError('金额必须大于 0', 400)
+  }
+
+  const oldAmount = Number(existing.amount || 0)
+  const needsRevert = isBalanceAppliedStatus(existing.status)
+  const needsApply = isBalanceAppliedStatus(status)
+  const balanceChanged = needsRevert || needsApply
+    && (existing.account_id !== accountId || existing.type !== type || oldAmount !== amount)
+
+  db.transaction(() => {
+    if (balanceChanged && needsRevert) {
+      const revertSign = existing.type === 'income' ? -1 : 1
+      db.prepare(`
+        UPDATE accounts
+        SET current_balance = current_balance + ?, updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+      `).run(revertSign * oldAmount, existing.account_id)
+    }
+
+    db.prepare(`
+      UPDATE transactions
+      SET type = ?, amount = ?, category = ?, description = ?, party = ?, proxy = ?,
+          status = ?, account_id = ?, updated_at = datetime('now', 'localtime')
+      WHERE id = ?
+    `).run(
+      type,
+      amount,
+      cleanNullable(payload.category ?? existing.category),
+      cleanNullable(payload.description ?? existing.description),
+      cleanNullable(payload.party ?? existing.party),
+      cleanNullable(payload.proxy ?? existing.proxy),
+      status,
+      accountId,
+      id
+    )
+
+    if (balanceChanged && needsApply) {
+      const applySign = type === 'income' ? 1 : -1
+      db.prepare(`
+        UPDATE accounts
+        SET current_balance = current_balance + ?, updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+      `).run(applySign * amount, accountId)
+    }
+  })()
+
+  return { id }
+}
+
 export function confirmTransaction(db, transactionId) {
   const id = toPositiveInt(transactionId)
   const tx = db.transaction(() => {

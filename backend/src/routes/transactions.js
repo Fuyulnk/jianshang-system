@@ -1,7 +1,7 @@
 import { authMiddleware } from '../middleware/auth.js'
 import { requireModuleAccess } from '../utils/permissions.js'
 import { parseFinanceTransactionDraft } from '../utils/financeParser.js'
-import { confirmTransaction, createTransaction, deleteTransaction } from '../services/financeCommands.js'
+import { confirmTransaction, createTransaction, deleteTransaction, updateTransaction } from '../services/financeCommands.js'
 import * as XLSX from 'xlsx'
 
 const LARGE_IMPORT_BODY_LIMIT = 25 * 1024 * 1024
@@ -33,9 +33,9 @@ function buildTransactionFilter(query = {}) {
     params.push(category)
   }
   if (keyword) {
-    conditions.push('(t.category LIKE ? OR t.description LIKE ? OR t.party LIKE ? OR t.proxy LIKE ? OR a.name LIKE ?)')
+    conditions.push('(t.category LIKE ? OR t.description LIKE ? OR t.party LIKE ? OR t.proxy LIKE ? OR a.name LIKE ? OR CAST(t.amount AS TEXT) LIKE ?)')
     const like = `%${keyword}%`
-    params.push(like, like, like, like, like)
+    params.push(like, like, like, like, like, like)
   }
   if (start_date) {
     conditions.push('t.created_at >= ?')
@@ -637,6 +637,19 @@ export default function transactionRoutes(server, db) {
       }
     } catch (err) {
       reply.code(err.statusCode || 400).send({ success: false, message: err.message || '确认交易失败' })
+    }
+  })
+
+  // 编辑交易
+  server.put('/api/transactions/:id', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireModuleAccess(db, request, reply, 'transactions', 'can_edit', '无权限编辑交易流水')) return
+
+    try {
+      const result = updateTransaction(db, request.params.id, request.body || {})
+      return { success: true, id: result.id }
+    } catch (err) {
+      reply.code(err.statusCode || 400).send({ success: false, message: err.message || '编辑交易失败' })
     }
   })
 
