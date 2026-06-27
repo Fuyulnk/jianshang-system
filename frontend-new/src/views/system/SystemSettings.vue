@@ -59,7 +59,9 @@
               <el-input v-model="userPhone" placeholder="可用于手机号登录和后续通知" clearable style="width: 300px" />
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="savingProfile" @click="saveProfile">保存手机号</el-button>
+              <el-button type="primary" :loading="savingProfile" @click="saveProfile">
+                {{ savingProfile ? '保存中...' : phoneActionLabel }}
+              </el-button>
             </el-form-item>
             <el-divider />
             <el-form-item label="旧密码">
@@ -1012,6 +1014,7 @@ const fileName = ref('')
 const userName = ref('用户')
 const userAvatar = ref('')
 const userPhone = ref('')
+const savedUserPhone = ref('')
 const pwdForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 const avatarCrop = reactive({ scale: 1, x: 0, y: 0 })
 const appearance = reactive({
@@ -1023,6 +1026,10 @@ const appearance = reactive({
 const avatarCropStyle = computed(() => ({
   transform: `translate(${avatarCrop.x}px, ${avatarCrop.y}px) scale(${avatarCrop.scale})`
 }))
+
+const phoneActionLabel = computed(() => (
+  String(savedUserPhone.value || '').trim() ? '更改手机号' : '绑定手机号'
+))
 
 const form = reactive({
   company_name: '',
@@ -1110,6 +1117,7 @@ async function fetchUserInfo() {
       userName.value = json.user.username || '用户'
       userAvatar.value = json.user.avatar_url || ''
       userPhone.value = json.user.phone || ''
+      savedUserPhone.value = json.user.phone || ''
     }
   } catch {}
 }

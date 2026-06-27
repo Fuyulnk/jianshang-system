@@ -1,6 +1,5 @@
 // 系统设置接口
 import { authMiddleware } from '../middleware/auth.js'
-import { spawn } from 'child_process'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
@@ -9,7 +8,6 @@ import { requireAssignedAccount } from '../utils/permissions.js'
 import { ensureDocumentTemplateTables } from '../db/documentTemplates.js'
 import { SYSTEM_DOCUMENT_TEMPLATES } from '../domain/documentTemplateConfig.js'
 
-const KB_SERVER = 'http://127.0.0.1:18790'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
@@ -110,53 +108,7 @@ export default function settingsRoutes(server, db) {
     } catch (err) {
       return { success: false, message: `连接失败: ${err.message}` }
     }
-  })
 
-  // 知识库状态
-  server.get('/api/settings/knowledge-base', async (request, reply) => {
-    if (authMiddleware(request, reply) === false) return
-    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能查看知识库状态')) return
-
-    try {
-      const res = await fetch(`${KB_SERVER}/health`, { signal: AbortSignal.timeout(3000) })
-      const data = await res.json()
-      return { success: true, data }
-    } catch {
-      return { success: false, message: '知识库服务未运行', data: null }
-    }
-  })
-
-  server.post('/api/settings/knowledge-base/reindex', async (request, reply) => {
-    if (authMiddleware(request, reply) === false) return
-    if (!requireAssignedAccount(request, reply, '账号等待管理员建档和岗位分配，暂不能重建知识库索引')) return
-    if (!['super_admin', 'admin'].includes(request.user.role)) {
-      reply.code(403).send({ success: false, message: '无权限' })
-      return
-    }
-
-    const candidates = [
-      join(process.env.HOME, '.openclaw/workspace/scripts/ingest-jianshang-docs.py'),
-      join(process.env.HOME, '.openclaw/workspace/scripts/ingest-docs.py'),
-    ]
-    const script = candidates.find(path => existsSync(path))
-    if (!script) {
-      return {
-        success: false,
-        message: '未找到知识库索引脚本；当前只能刷新状态，不能自动重建索引'
-      }
-    }
-
-    try {
-      const child = spawn('python3', [script], {
-        cwd: join(process.env.HOME, '.openclaw/workspace'),
-        detached: true,
-        stdio: 'ignore'
-      })
-      child.unref()
-      return { success: true, message: '已触发知识库索引任务，请稍后刷新状态' }
-    } catch (err) {
-      return { success: false, message: `索引任务启动失败: ${err.message}` }
-    }
   })
 
   server.get('/api/settings/ai-audit', async (request, reply) => {

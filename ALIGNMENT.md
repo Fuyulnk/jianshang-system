@@ -106,6 +106,7 @@
 - `handoff/2026-06-18-original-template-export-v1.md`：原表格格式导出 V1 对接，记录入账登记表、项目结算收款单按原 Excel 格式导出的实现边界。
 - `handoff/2026-06-22-warehouse-data-entry-sop-v1.md`：仓库数据录入 SOP V1，统一材料名称、规格、仓库单位、库位编码、盘点导入、出库/回库/供货单和 AI 查询口径。
 - `handoff/2026-06-24-finance-ledger-merge-virtual-grid-v1.md`：入账登记表合并/拆开单元格、虚拟网格渲染、全屏填写布局优化和原格式导出合并区域保留说明。
+- `handoff/2026-06-27-active-goal-ledger-ai-chat-filecenter-v1.md`：当前大目标阶段性对接，覆盖入账登记表公式/样式、AI、群聊、文件中心、设置稳定性，明确已做、未验收、未完成和下一步顺序。
 - `handoff/2026-06-17-project-payment-ledger-flow-v1.md`：项目结算收款单、财务入账登记表、出库导入、复尺跳过等流程调整对接。
 - `outputs/project-library-v1/`：项目库 V1 生成物，含 `project_library_seed.csv`、`project_library_seed.json`、`project_document_inventory.json`。
 - `handoff/animation-tasks.md`：历史遗留的动画任务记录，目前不是主线，除非用户明确要求再处理。
@@ -122,6 +123,75 @@
   - `SystemSettings.vue`、`FinanceOverview.vue`、`ProjectDetail.vue`、`EmployeeDashboard.vue` 等非首屏页面改成 `() => import(...)`。
   - 系统设置里的 AI 权限、用户管理等大块功能后续可拆成子组件并按 tab 延迟加载。
 - 现阶段不用为了这个警告做激进优化；功能稳定后安排一次“前端加载结构整理”即可。
+
+## 2026-06-27 Codex：V2 大目标对接补写（目标级状态矩阵，本地记录）
+
+- 背景：用户指出本轮 V2 大目标没有完整写进对接文件。此前只分散记录了群聊、文件中心、AI、入账登记表、白屏、设置页等点状改动，不能让 Claude/Hermes/下一轮 Codex 一眼判断“哪些已完成、哪些只是代码级判断、哪些还必须真实账号复测”。本条是补写目标级交接，不代表新增代码提交或服务器上传。
+- 当前 Git 状态提醒：本条最初补写时工作树只剩 `ALIGNMENT.md`；随后 Codex 又继续补了入账登记表公式引擎的可测试化改动。下一位 agent 必须重新执行 `git status --short`，以实时结果为准，不要仅凭本条判断代码已上线。
+
+### 2026-06-27 追加进展：入账登记表公式引擎可测试化
+
+- 修改：
+  - `frontend-new/src/utils/financeLedgerFormula.js`：把入账登记表公式计算、百分比/数字解析、日期显示格式化抽成纯工具函数。
+  - `frontend-new/src/utils/financeLedgerGrid.js`：把合并单元格目标解析、样式 JSON 清洗、默认样式抽成纯工具函数，确保合并区域内任意格都指向主格，样式保存不会落到被合并覆盖的小格。
+  - `frontend-new/src/views/finance/FinanceLedger.vue`：公式显示继续使用同一套逻辑，但页面里不再内嵌大段公式计算函数，减少后续误改风险。
+  - `frontend-new/scripts/check-finance-ledger-formula.mjs`、`frontend-new/scripts/check-finance-ledger-grid.mjs`、`frontend-new/package.json`：新增 `npm --prefix frontend-new run check:ledger`，专门验证 `SUM(区域)`、加减乘除、百分比、短日期转 `2025/1/6`、`A1=B1+C1` 修改依赖值后重算，以及合并区域点选/样式目标解析。
+- 验证：
+  - `npm --prefix frontend-new run check:ledger` 通过。
+  - `npm --prefix frontend-new run build` 通过；仍只有既有 `vendor-element` 大包警告。
+  - `git diff --check` 通过。
+- 注意：这只是把公式引擎变成可单独复查，并不等同于完成真实表格交互验收；合并格点选、全屏右键备注、单行/单列拖拽行高列宽仍需真人在真实表上验收。
+
+### 目标项完成/待验收矩阵
+
+- 入账登记表：
+  - 已实现/代码层确认：单元格水平对齐、垂直对齐、底色按单元格保存；合并单元格通过主格映射处理；日期显示从 `1/6/25` 类格式转为 `2025/1/6`；公式前端显示计算支持 `SUM(区域)`、单元格引用、加减乘除、百分比，修改依赖格后前端显示可重算。
+  - 仍需真实表交互验收：合并后的单元格点选是否总能落到正确主格；全屏模式下右键备注、对齐、底色、搜索、冻结、行高列宽是否全部可用；单行/单列拖拽行高列宽是否符合 Excel 习惯。
+  - 风险说明：公式计算目前是前端显示层轻量引擎，公式源文本仍保存在 `finance_ledger_cells.formula`；计算结果不额外写回数据库。若未来需要公式结果也成为数据库事实，必须单独设计重算/快照机制。
+
+- 界面与白屏：
+  - 已实现/代码层确认：主题切换移除根节点 `clip-path` 动画，避免浏览器把整个应用裁掉；深色主题下 AI 分身面板和部分卡片对比度已增强；设置页删除不真实的“知识库”入口和关于页里的知识库引擎宣称。
+  - 仍需真实环境验收：Windows 财务/普通员工账号执行“登录 -> 切换主题 -> 刷新 -> 关闭浏览器重开 -> 再登录”；如果出现恢复页，先用 `?resetLocal=1` 清理本地状态，再记录具体账号、浏览器和操作顺序。
+  - 风险说明：白屏问题高度依赖浏览器缓存、localStorage、角色菜单和线上静态资源版本，不能用本地构建成功代替 Windows 财务账号冒烟。
+
+- AI：
+  - 已实现/代码层确认：AI 工具注册表补充财务应收应付读取/写入、入账登记表读取、文件搜索、项目文件夹、供货单等读取口；新增 `create_finance_arap` 写入工具，L3 高风险，必须 `confirmed=true`，且只允许超级管理员/管理员/财务角色使用。
+  - 已移除：旧的 `127.0.0.1:18790` 幽灵知识库调用。该服务本机不可连接，旧逻辑会拖慢 AI 首次响应且让员工误以为系统已有真实知识库。
+  - 仍需验收：用 mock/脱敏测试项目验证 AI 不越权读取无关项目；用财务账号确认 AI 能解释/创建应收应付草稿但不会绕过确认；真实 DeepSeek 不要直接外发敏感业务数据。
+
+- 群聊与财务群录入：
+  - 已实现/代码层确认：群聊设置补群头像、群名称、群昵称隔离、成员管理、置顶、免打扰；财务群机器人录入的流水标记 `entry_source=finance_group`，群内“最近录入”可展示并确认，避免必须跳去交易流水页面找当天记录。
+  - 仍需验收：按飞书图片口径检查群设置是否符合财务/员工真实使用习惯；确认群头像上传在本地和线上都能持久化；确认最近录入时间不再显示 `00:00`；确认 pending 草稿只出现在对应群，不混入人工流水。
+
+- 文件中心：
+  - 已实现/代码层确认：文件中心项目/凭证文件夹筛选加入 `entity_id`，项目文件夹、收款凭证文件夹按实体隔离；流水凭证可按绑定的录入日期、金额、人员、关键字搜索。
+  - 仍需验收：低权限账号在筛选项里是否只能看到自己可访问的项目/凭证；同名项目、同名客户或同金额流水不会串文件；超级管理员上传到高权限实体的文件不会在普通员工筛选里泄露。
+
+- 设置与个人信息：
+  - 已实现/代码层确认：个人设置支持显示/绑定/更改手机号；AI 分身页面深色可读性增强；知识库空壳已删除。
+  - 仍需验收：已有手机号、新绑定手机号、修改手机号三种路径；普通员工是否只能改自己的资料；设置页深色主题下文字和按钮是否可读。
+
+### 已做验证证据
+
+- 后端语法检查曾通过：`financeCommands.js`、`finance.js`、`ai.js`、`toolRegistry.js`、`employee-dashboard.js`、`chat.js`、`files.js`、`index.js`、`db/init.js`、`db/seed.js` 等本轮相关文件。
+- 前端构建曾通过：`npm --prefix frontend-new run build`；只保留既有 Element Plus / vendor 大包体积警告。
+- 代码级检查曾通过：`git diff --check`。
+- 临时 SQLite 冒烟曾验证：`createFinanceArapItem` 能创建应收/应付并拒绝无效输入；AI `create_finance_arap` 未确认时拒绝，确认后才写入。
+- 本地服务曾确认：`http://127.0.0.1:3001/health` 正常，`http://127.0.0.1:5173/` 登录页可打开。
+
+### 未完成验证 / 下一步必须做
+
+- 未完成真实登录冒烟：没有擅自提交保存的财务账号密码，因此尚未用财务/普通员工真实登录完成角色菜单、主题切换、账户管理、入账登记表、群聊最近录入全链路验证。
+- 未完成 Windows 复测：白屏、最小化被拉回、主题缓存和非管理员页面稳定性必须在员工 Windows 浏览器上复测。
+- 未完成线上确认：本条不是上传记录。若要部署，必须按“线上上传/部署步骤”备份、构建、同步 `frontend-new/dist -> backend/public`、上传 `backend/src` 与 `backend/public`、重启 PM2，并记录备份路径、资源 hash、`/health` 和登录冒烟结果。
+- 未完成 Hermes 终审：涉及权限、财务写入、群聊录入、文件隔离、AI 写入工具，建议由 Hermes 再做一次 P0/P1 安全审计。
+
+### 下一位 Agent 接手建议
+
+1. 先不要继续扩功能，先做“真实账号/真实浏览器复测清单”：超级管理员、财务、普通员工各跑一遍主题、文件中心、群聊、入账登记表、AI 工具。
+2. 如果复测通过，再考虑提交和上传；如果复测失败，优先修白屏/权限/数据隔离，不要先做 UI 精修。
+3. 入账登记表如果还要继续增强，优先处理“全屏模式功能一致性”和“单行/单列拖拽行高列宽”，不要把全局设置冒充 Excel 级单格/单列操作。
+4. 真正知识库后续另起正式方案：数据源、权限、索引状态、来源引用、更新时间都要可见；不要恢复旧的本地 18790 假入口。
 
 ## 2026-06-05 下午 Codex：项目工单分支和完工样本校正
 
@@ -177,6 +247,84 @@
 注意：这些改动可能是用户或其他 Agent 的已有成果。除非用户明确要求，不要清理或回滚。
 
 ## 对接记录
+
+### 2026-06-27 Codex：补齐当前大目标对接与设置/AI 小缺口（未提交未上传）
+
+- 背景：用户再次指出“整个目标几乎都没有写对接”。已复核：`handoff/2026-06-27-active-goal-ledger-ai-chat-filecenter-v1.md` 虽已创建，但对群聊、文件中心、设置、AI 口径和未完成项的接力说明还不够细。
+- 修改文件：
+  - `handoff/2026-06-27-active-goal-ledger-ai-chat-filecenter-v1.md`
+  - `backend/src/routes/ai.js`
+  - `frontend-new/src/views/ProfilePage.vue`
+  - `frontend-new/src/views/system/SystemSettings.vue`
+  - `ALIGNMENT.md`
+- 改动：
+  - 对接文件补充“AI 口径补漏”“设置页手机号入口补漏”“当前目标完成度粗分”，并更新未提交文件列表。
+  - AI system prompt 移除“系统会自动搜索公司文档知识库”的假口径，改为明确：当前没有启用稳定公司文档知识库，只能依据系统工具、对话和用户提供资料回答。
+  - 个人设置和系统设置的手机号按钮不再固定显示“保存手机号”；已绑定时显示“更改手机号”，未绑定时显示“绑定手机号”。
+- 验证：
+  - `node --check backend/src/routes/ai.js`
+  - `npm --prefix frontend-new run build`（成功，仍只有既有 Vite 大 chunk 提醒）
+  - `git diff --check`
+- 注意：
+  - 后端旧 `knowledge-base` 路由和设置状态接口仍存在；本轮只修 AI 假口径，不代表正式知识库入口已彻底清干净。
+  - 未做真实浏览器、Windows、财务账号复测。
+  - 当前大目标仍未完成，未提交、未上传。
+
+### 2026-06-27 Codex：补写当前大目标对接文件（未提交未上传）
+
+- 背景：用户指出“整个目标几乎都没有写对接”。这是事实，本轮目标此前只在 `ALIGNMENT.md` 中分散补记，没有单独形成可接手的 handoff 文件。
+- 已补：
+  - 新增 `handoff/2026-06-27-active-goal-ledger-ai-chat-filecenter-v1.md`。
+  - 已在 `## 关键文件索引` 补入口。
+- 本文件覆盖：
+  - 入账登记表公式/样式/合并格目标解析。
+  - AI 工具与确认链路待办。
+  - 群聊设置与财务群确认待办。
+  - 文件中心权限隔离与凭证搜索待办。
+  - 设置页手机号、AI 面板、知识库入口待办。
+  - 已验证命令和未验证项。
+- 当前状态：
+  - 目标尚未完成。
+  - 本轮未提交、未上传服务器。
+  - 后续接手前必须重新跑 `git status --short`。
+
+### 2026-06-27 Codex：入账登记表合并格样式加固（未提交未上传）
+
+- 任务：继续当前大目标的入账登记表部分，针对“合并后的单元格左右对齐有 bug”做代码级加固。
+- 修改文件：
+  - `frontend-new/src/utils/financeLedgerGrid.js`
+  - `frontend-new/src/views/finance/FinanceLedger.vue`
+  - `frontend-new/scripts/check-finance-ledger-grid.mjs`
+  - `handoff/2026-06-27-active-goal-ledger-ai-chat-filecenter-v1.md`
+- 改动：
+  - 新增 `resolveLedgerCellStyle()`，样式读取也统一解析到合并区域左上角主格。
+  - `FinanceLedger.vue` 的 `cellStyleFor()` 改为通过该工具函数读取样式，避免覆盖格或后续逻辑直接查坐标时绕过主格。
+  - `check-finance-ledger-grid.mjs` 增加覆盖：合并区域内 `C3` 读取到 `B2` 主格样式。
+- 验证：
+  - `npm --prefix frontend-new run check:ledger`
+  - `npm --prefix frontend-new run build`
+  - `node --check backend/src/routes/finance.js`
+  - `git diff --check`
+- 注意：
+  - 这仍是代码级/构建级验证，没有做真实浏览器和 Windows 财务账号验收。
+  - 当前目标尚未完成，不能提交/上传，除非用户明确要求。
+
+### 2026-06-27 Codex：AI 应收应付事实查询过滤删除项（未提交未上传）
+
+- 任务：继续当前大目标的“AI 同步新功能”部分，核对应收应付页面、接口、AI 工具是否连接到同一数据模型。
+- 发现：页面接口 `/api/finance/receivables-payables` 已过滤 `is_deleted`，但 AI 事实服务 `financeArapFacts` 没过滤已删除事项，可能导致 AI 把员工已删除的应收/应付事项又查出来。
+- 修改文件：
+  - `backend/src/services/businessFacts.js`
+  - `handoff/2026-06-27-active-goal-ledger-ai-chat-filecenter-v1.md`
+- 改动：`financeArapFacts` 查询条件从 `1=1` 改为 `COALESCE(f.is_deleted, 0) = 0`。
+- 验证：
+  - `node --check backend/src/services/businessFacts.js`
+  - `node --check backend/src/routes/ai.js`
+  - `node --check backend/src/routes/finance.js`
+  - 内存 SQLite 冒烟：插入 1 条正常应收 + 1 条 `is_deleted=1` 应收，`financeArapFacts` 只返回正常应收。
+- 注意：
+  - 这只修 AI 查询事实口径，不代表应收应付页面已经过真实财务账号验收。
+  - AI 写入应收应付仍必须走 `create_finance_arap` 的 `confirmed=true` 确认链路。
 
 ### ⚠️ 部署红线规则（固定）
 
@@ -234,6 +382,22 @@
   - 编辑弹窗补上账户选择字段
 
 ---
+
+### 2026-06-26 Hermes：Claude 小任务审计（财务解析+交易编辑）
+
+- 审计范围：3 个提交（1253eb2, 73368bf, 9f00b90），6 个文件，+561/-46 行。
+- 语法检查：✅ 全部 3 个后端文件通过。
+- 审计结果：
+  - P0: 0 个
+  - P1: 0 个
+  - P2: 1 个（updateTransaction 括号优先级问题，实际结果碰巧正确）
+- 关键改动：
+  - 财务解析增强：转账模式识别（A转进B）、关键词位置优先判断
+  - 交易编辑接口：PUT /api/transactions/:id，支持修改类型/金额/账户/状态，自动回退+应用余额
+  - 搜索支持按金额搜索
+- 坑点提示：
+  - `&&` 优先级高于 `||`，写 `a || b && c` 时务必加括号明确意图
+- 结论：质量很好，可提交。
 
 ### 2026-06-26 Hermes：Codex 工作审计 + 服务器恢复确认
 

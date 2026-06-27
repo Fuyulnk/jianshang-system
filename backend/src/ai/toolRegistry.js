@@ -338,6 +338,93 @@ export const AI_TOOL_REGISTRY = [
       },
       required: ['confirmed', 'name', 'customer']
     }
+  },
+  {
+    name: 'get_material_requests',
+    label: '查看出库申请',
+    desc: '查询材料出库申请列表，按项目或状态筛选',
+    tier: 'L1',
+    risk_level: 'low',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: '项目 ID，筛选某个项目的出库申请' },
+        status: { type: 'string', enum: ['pending', 'confirmed', 'cancelled'], description: '出库状态' },
+        limit: { type: 'number', description: '返回数量，默认50，最多200' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'create_material_request',
+    label: '确认创建出库申请',
+    desc: '用户明确确认后为指定项目创建材料出库申请',
+    tier: 'L3',
+    risk_level: 'high',
+    action_type: 'tool_write',
+    requires_confirmation: true,
+    schema: {
+      type: 'object',
+      properties: {
+        confirmed: { type: 'boolean', description: '用户是否已明确确认创建' },
+        project_id: { type: 'number', description: '项目 ID' },
+        items: {
+          type: 'array',
+          description: '出库材料列表',
+          items: {
+            type: 'object',
+            properties: {
+              product_id: { type: 'number', description: '产品 ID' },
+              quantity: { type: 'number', description: '出库数量' },
+              unit: { type: 'string', description: '单位，如 桶、袋、套' }
+            },
+            required: ['product_id', 'quantity']
+          }
+        },
+        note: { type: 'string', description: '出库备注' }
+      },
+      required: ['confirmed', 'project_id', 'items']
+    }
+  },
+  {
+    name: 'get_role_permissions',
+    label: '查看角色权限',
+    desc: '查询系统角色和每个角色的模块权限配置',
+    tier: 'L1',
+    risk_level: 'medium',
+    action_type: 'tool_read',
+    schema: {
+      type: 'object',
+      properties: {
+        role_id: { type: 'number', description: '角色 ID，不传则返回所有角色' },
+        limit: { type: 'number', description: '返回数量，默认50，最多200' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'manage_employee',
+    label: '确认管理员工',
+    desc: '用户明确确认后新增或更新员工档案信息',
+    tier: 'L3',
+    risk_level: 'high',
+    action_type: 'tool_write',
+    requires_confirmation: true,
+    schema: {
+      type: 'object',
+      properties: {
+        confirmed: { type: 'boolean', description: '用户是否已明确确认操作' },
+        action: { type: 'string', enum: ['create', 'update'], description: 'create=新增员工，update=更新已有员工' },
+        employee_id: { type: 'number', description: '更新时必填，员工 ID' },
+        name: { type: 'string', description: '员工姓名' },
+        phone: { type: 'string', description: '手机号' },
+        department: { type: 'string', description: '部门' },
+        position: { type: 'string', description: '岗位' },
+        status: { type: 'string', enum: ['active', 'inactive'], description: '员工状态' }
+      },
+      required: ['confirmed', 'action']
+    }
   }
 ]
 
@@ -351,7 +438,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance', 'warehouse', 'engineering', 'employee'],
-    tools: ['get_projects', 'get_project_documents', 'get_project_file_folders', 'search_files', 'get_products', 'get_supply_orders', 'get_system_stats', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder'],
+    tools: ['get_projects', 'get_project_documents', 'get_project_file_folders', 'search_files', 'get_products', 'get_supply_orders', 'get_system_stats', 'get_project_profit_summary', 'parse_project_handover', 'create_project_workorder', 'get_material_requests', 'get_role_permissions', 'manage_employee'],
     base_prompt: '你是简尚总助手。优先查询系统事实，再用简洁中文解释流程和下一步。写入动作必须先让用户确认。'
   },
   {
@@ -362,7 +449,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'finance'],
-    tools: ['get_accounts', 'get_transactions', 'get_today_summary', 'get_finance_arap', 'get_finance_ledger', 'search_files', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction', 'create_finance_arap'],
+    tools: ['get_accounts', 'get_transactions', 'get_today_summary', 'get_finance_arap', 'get_finance_ledger', 'search_files', 'get_system_stats', 'get_project_profit_summary', 'parse_finance_transaction', 'create_transaction', 'create_finance_arap', 'get_role_permissions'],
     base_prompt: '你是简尚财务助手。财务消息先解析成草稿，用户明确确认后才能写入流水。不要猜账户余额和金额，必须查系统数据。'
   },
   {
@@ -373,7 +460,7 @@ export const DEFAULT_AI_AGENTS = [
     memory_enabled: 0,
     memory_retention_days: 7,
     allowed_roles: ['super_admin', 'admin', 'warehouse', 'engineering'],
-    tools: ['get_products', 'get_supply_orders', 'get_projects', 'get_project_documents', 'get_project_file_folders', 'search_files', 'get_system_stats'],
+    tools: ['get_products', 'get_supply_orders', 'get_material_requests', 'create_material_request', 'get_projects', 'get_project_documents', 'get_project_file_folders', 'search_files', 'get_system_stats'],
     base_prompt: '你是简尚仓库助手。回答产品、分类、规格、仓库单位、库存和库位时必须以系统查询结果为准。同名材料要按规格分开说，例如霞光沙1升、霞光沙5升、霞光沙14升不能混成一个产品。'
   },
   {

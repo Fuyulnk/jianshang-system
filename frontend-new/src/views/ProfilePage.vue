@@ -38,7 +38,9 @@
             <el-input v-model="profileForm.phone" placeholder="用于账号识别和后续通知" clearable />
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="savingProfile" @click="saveProfile">保存手机号</el-button>
+            <el-button type="primary" :loading="savingProfile" @click="saveProfile">
+              {{ savingProfile ? '保存中...' : profilePhoneActionLabel }}
+            </el-button>
           </el-form-item>
         </el-form>
       </div>
@@ -69,7 +71,7 @@
 
 <script setup>
 import { getAuthToken, clearAuthSession } from '../utils/authSession'
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import UserAvatar from '../components/UserAvatar.vue'
@@ -85,6 +87,10 @@ const previewUrl = ref('')
 const fileData = ref(null)
 const profileForm = ref({ phone: '' })
 const pwdForm = ref({ old_password: '', new_password: '', confirm_password: '' })
+
+const profilePhoneActionLabel = computed(() => {
+  return String(user.value.phone || '').trim() ? '更改手机号' : '绑定手机号'
+})
 
 function token() { return getAuthToken() }
 

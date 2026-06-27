@@ -315,7 +315,7 @@ export function financeArapFacts(db, user, filters = {}) {
   const query = clean(filters.query)
   const limit = clampLimit(filters.limit, 50, 200)
   const params = []
-  const where = ['1=1']
+  const where = ['COALESCE(f.is_deleted, 0) = 0']
   if (['receivable', 'payable'].includes(type)) {
     where.push('f.type = ?')
     params.push(type)

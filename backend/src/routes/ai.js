@@ -219,6 +219,97 @@ export function executeTool(name, args, db, user) {
         .run(result.lastInsertRowid, 'AI创建工单', user.username || '', '用户确认后由简尚 AI 创建项目工单')
       return JSON.stringify({ success: true, id: result.lastInsertRowid, message: `已创建项目工单「${draft.name}」` })
     }
+
+    case 'get_material_requests': {
+      const materialRows = db.prepare(`
+        SELECT mr.*, p.name as project_name FROM material_requests mr
+        LEFT JOIN projects p ON mr.project_id = p.id
+        WHERE (CASE WHEN ? > 0 THEN mr.project_id = ? ELSE 1 END)
+          AND (CASE WHEN ? != '' THEN mr.status = ? ELSE 1 END)
+        ORDER BY mr.created_at DESC
+        LIMIT ?
+      `).all(
+        args.project_id || 0, args.project_id || 0,
+        args.status || '', args.status || '',
+        Math.min(args.limit || 50, 200)
+      )
+      return JSON.stringify({ success: true, count: materialRows.length, data: materialRows })
+    }
+
+    case 'create_material_request': {
+      if (!canAccessModule(db, user, 'material_requests', 'can_create')) {
+        return JSON.stringify({ success: false, message: '没有创建出库申请的权限' })
+      }
+      if (!args.confirmed) {
+        return JSON.stringify({ success: false, message: '创建出库申请前必须先让用户确认' })
+      }
+      if (!args.project_id || !args.items?.length) {
+        return JSON.stringify({ success: false, message: '项目 ID 和出库材料列表不能为空' })
+      }
+      const itemsJson = JSON.stringify(args.items.map(item => ({
+        product_id: item.product_id,
+        quantity: Number(item.quantity),
+        unit: item.unit || ''
+      })))
+      const result = db.prepare(`
+        INSERT INTO material_requests (project_id, items, note, status, created_by, created_at)
+        VALUES (?, ?, ?, 'pending', ?, datetime('now', 'localtime'))
+      `).run(args.project_id, itemsJson, args.note || null, user.userId)
+      return JSON.stringify({ success: true, id: result.lastInsertRowid, message: '材料出库申请已创建，等待仓库确认' })
+    }
+
+    case 'get_role_permissions': {
+      if (!['super_admin', 'admin'].includes(user.role)) {
+        return JSON.stringify({ success: false, message: '没有查看角色权限的权限' })
+      }
+      if (args.role_id) {
+        const role = db.prepare('SELECT * FROM roles WHERE id = ?').get(args.role_id)
+        return JSON.stringify({ success: true, role })
+      }
+      const roles = db.prepare('SELECT * FROM roles ORDER BY id').all()
+      return JSON.stringify({ success: true, count: roles.length, data: roles })
+    }
+
+    case 'manage_employee': {
+      if (!canAccessModule(db, user, 'employees', 'can_edit')) {
+        return JSON.stringify({ success: false, message: '没有管理员工的权限' })
+      }
+      if (!args.confirmed) {
+        return JSON.stringify({ success: false, message: '操作员工前必须先让用户确认' })
+      }
+      if (args.action === 'create') {
+        if (!args.name || !args.phone) {
+          return JSON.stringify({ success: false, message: '姓名和手机号必填' })
+        }
+        const result = db.prepare(`
+          INSERT INTO employees (name, phone, department, position, status, created_at)
+          VALUES (?, ?, ?, ?, COALESCE(?, 'active'), datetime('now', 'localtime'))
+        `).run(args.name, args.phone, args.department || null, args.position || null, args.status || 'active')
+        return JSON.stringify({ success: true, id: result.lastInsertRowid, message: `已创建员工「${args.name}」` })
+      }
+      if (args.action === 'update') {
+        if (!args.employee_id) {
+          return JSON.stringify({ success: false, message: '更新员工需要 employee_id' })
+        }
+        const existing = db.prepare('SELECT * FROM employees WHERE id = ?').get(args.employee_id)
+        if (!existing) {
+          return JSON.stringify({ success: false, message: '员工不存在' })
+        }
+        db.prepare(`
+          UPDATE employees SET name = ?, phone = ?, department = ?, position = ?, status = ?,
+            updated_at = datetime('now', 'localtime') WHERE id = ?
+        `).run(
+          args.name || existing.name,
+          args.phone || existing.phone,
+          args.department ?? existing.department,
+          args.position ?? existing.position,
+          args.status || existing.status,
+          args.employee_id
+        )
+        return JSON.stringify({ success: true, message: `已更新员工「${args.name || existing.name}」` })
+      }
+      return JSON.stringify({ success: false, message: 'action 必须是 create 或 update' })
+    }
   }
 }
 
@@ -346,8 +437,8 @@ ${memorySummary ? `\n## 当前场景轻记忆\n${memorySummary}` : ''}
 3. **直接查询系统数据并回答** - 你可以调用工具获取账户、交易、产品、员工、项目等实时数据
 4. 帮用户把门店/微信交底内容拆成项目工单草稿
 
-## 知识库
-你有一个公司文档知识库可供查询。系统会自动搜索相关文档提供给你参考。
+## 知识库状态
+当前没有启用稳定的公司文档知识库。你只能依据系统工具返回的数据、当前对话内容和用户明确提供的资料回答；不要声称已经自动搜索或读取公司知识库。
 
 ## 工具使用规则
 - 当用户问及具体数据时（如"查账户余额"、"今天收入多少"、"库存还有多少"等），直接调用对应工具查询

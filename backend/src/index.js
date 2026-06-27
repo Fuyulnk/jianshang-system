@@ -18,7 +18,6 @@ import productRoutes from './routes/products.js'
 import employeeRoutes from './routes/employees.js'
 import aiRoutes, { runAiChatToText } from './routes/ai.js'
 import aiPermissionsRoutes from './routes/ai-permissions.js'
-import kbRoutes from './routes/knowledge-base.js'
 import userRoutes from './routes/users.js'
 import roleRoutes from './routes/roles.js'
 import chatRoutes from './routes/chat.js'
@@ -547,7 +546,6 @@ productRoutes(server, db)
 employeeRoutes(server, db)
 aiRoutes(server, db)
 aiPermissionsRoutes(server, db)
-kbRoutes(server, db)
 userRoutes(server, db)
 roleRoutes(server, db)
 chatRoutes(server, db, realtime)

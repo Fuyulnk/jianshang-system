@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "check:ledger-formula": "node scripts/check-finance-ledger-formula.mjs",
+    "check:ledger-grid": "node scripts/check-finance-ledger-grid.mjs",
+    "check:ledger": "npm run check:ledger-formula && npm run check:ledger-grid",
     "preview": "vite preview"
   },
   "dependencies": {
