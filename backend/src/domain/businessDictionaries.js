@@ -105,6 +105,12 @@ export const FINANCE_CATEGORIES = [
 
 export const ORG_DEPARTMENT_POSITIONS = [
   {
+    department: '技术部',
+    positions: ['AI开发工程师'],
+    registration_allowed: true,
+    assignment_note: '负责系统开发、维护和AI能力建设。'
+  },
+  {
     department: '工程部',
     positions: ['监理'],
     registration_allowed: true,

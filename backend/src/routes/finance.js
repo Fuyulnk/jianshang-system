@@ -828,12 +828,34 @@ export default function financeRoutes(server, db) {
     `).run(merge.workbook_id, merge.sheet_id, merge.address || '', merge.address || '', request.user.userId)
     return { success: true, data: merge }
   })
+
+  server.post('/api/finance/ledger/sheets/:id/structure', async (request, reply) => {
+    if (authMiddleware(request, reply) === false) return
+    if (!requireFinanceAccess(request, reply)) return
+    const sheetId = toInt(request.params.id)
+    const sheet = db.prepare('SELECT * FROM finance_ledger_sheets WHERE id = ?').get(sheetId)
+    if (!sheet) return reply.code(404).send({ success: false, message: '工作表不存在' })
+    const axis = ['row', 'col'].includes(request.body?.axis) ? request.body.axis : ''
+    const action = ['insert_before', 'insert_after', 'delete'].includes(request.body?.action) ? request.body.action : ''
+    const index = Math.max(1, toInt(request.body?.index))
+    if (!axis || !action || !index) return reply.code(400).send({ success: false, message: '行列操作参数不完整' })
+
+    const tx = db.transaction(() => {
+      applyLedgerStructureChange(db, sheet, { axis, action, index, userId: request.user.userId })
+      db.prepare(`
+        INSERT INTO finance_ledger_logs (workbook_id, sheet_id, address, action, new_value, created_by)
+        VALUES (?, ?, '', 'update_structure', ?, ?)
+      `).run(sheet.workbook_id, sheet.id, `${axis}:${action}:${index}`, request.user.userId)
+    })
+    tx()
+    return { success: true, data: buildLedgerWorkbookDetail(db, sheet.workbook_id, sheet.id) }
+  })
 }
 
-function buildLedgerWorkbookDetail(db, workbookId) {
+function buildLedgerWorkbookDetail(db, workbookId, preferredSheetId = 0) {
   const workbook = db.prepare('SELECT * FROM finance_ledger_workbooks WHERE id = ?').get(workbookId)
   const sheets = db.prepare('SELECT * FROM finance_ledger_sheets WHERE workbook_id = ? ORDER BY sheet_index ASC, id ASC').all(workbookId)
-  const activeSheet = sheets[0]
+  const activeSheet = sheets.find(sheet => Number(sheet.id) === Number(preferredSheetId)) || sheets[0]
   const cells = activeSheet ? db.prepare('SELECT * FROM finance_ledger_cells WHERE sheet_id = ? ORDER BY row_index ASC, col_index ASC').all(activeSheet.id) : []
   const comments = activeSheet ? db.prepare("SELECT * FROM finance_ledger_comments WHERE sheet_id = ? AND COALESCE(comment_text, '') != '' ORDER BY row_index ASC, col_index ASC").all(activeSheet.id) : []
   const merges = activeSheet ? db.prepare('SELECT * FROM finance_ledger_merges WHERE sheet_id = ? ORDER BY start_row ASC, start_col ASC').all(activeSheet.id) : []
@@ -845,6 +867,89 @@ function buildLedgerWorkbookDetail(db, workbookId) {
     comments,
     merges
   }
+}
+
+function applyLedgerStructureChange(db, sheet, { axis, action, index, userId }) {
+  const insertIndex = action === 'insert_after' ? index + 1 : index
+  const isRow = axis === 'row'
+  if (action === 'delete') {
+    shiftLedgerAxisRows(db, 'finance_ledger_cells', sheet.id, axis, index, -1, true)
+    shiftLedgerAxisRows(db, 'finance_ledger_comments', sheet.id, axis, index, -1, true)
+    adjustLedgerMergesForDelete(db, sheet.id, axis, index)
+    updateLedgerSheetBounds(db, sheet.id, isRow ? -1 : 0, isRow ? 0 : -1)
+  } else {
+    shiftLedgerAxisRows(db, 'finance_ledger_cells', sheet.id, axis, insertIndex, 1, false)
+    shiftLedgerAxisRows(db, 'finance_ledger_comments', sheet.id, axis, insertIndex, 1, false)
+    adjustLedgerMergesForInsert(db, sheet.id, axis, insertIndex)
+    updateLedgerSheetBounds(db, sheet.id, isRow ? 1 : 0, isRow ? 0 : 1)
+  }
+  refreshLedgerAddresses(db, sheet.id, userId)
+}
+
+function shiftLedgerAxisRows(db, table, sheetId, axis, index, delta, removeAtIndex) {
+  const column = axis === 'row' ? 'row_index' : 'col_index'
+  if (removeAtIndex) db.prepare(`DELETE FROM ${table} WHERE sheet_id = ? AND ${column} = ?`).run(sheetId, index)
+  const comparator = removeAtIndex ? '>' : '>='
+  db.prepare(`UPDATE ${table} SET ${column} = ${column} + ? WHERE sheet_id = ? AND ${column} ${comparator} ?`)
+    .run(delta, sheetId, index)
+}
+
+function adjustLedgerMergesForInsert(db, sheetId, axis, index) {
+  const startColumn = axis === 'row' ? 'start_row' : 'start_col'
+  const endColumn = axis === 'row' ? 'end_row' : 'end_col'
+  db.prepare(`UPDATE finance_ledger_merges SET ${startColumn} = ${startColumn} + 1, ${endColumn} = ${endColumn} + 1 WHERE sheet_id = ? AND ${startColumn} >= ?`)
+    .run(sheetId, index)
+  db.prepare(`UPDATE finance_ledger_merges SET ${endColumn} = ${endColumn} + 1 WHERE sheet_id = ? AND ${startColumn} < ? AND ${endColumn} >= ?`)
+    .run(sheetId, index, index)
+  refreshLedgerMergeAddresses(db, sheetId)
+}
+
+function adjustLedgerMergesForDelete(db, sheetId, axis, index) {
+  const startColumn = axis === 'row' ? 'start_row' : 'start_col'
+  const endColumn = axis === 'row' ? 'end_row' : 'end_col'
+  db.prepare(`DELETE FROM finance_ledger_merges WHERE sheet_id = ? AND ${startColumn} = ? AND ${endColumn} = ?`)
+    .run(sheetId, index, index)
+  db.prepare(`UPDATE finance_ledger_merges SET ${startColumn} = ${startColumn} - 1, ${endColumn} = ${endColumn} - 1 WHERE sheet_id = ? AND ${startColumn} > ?`)
+    .run(sheetId, index)
+  db.prepare(`UPDATE finance_ledger_merges SET ${endColumn} = ${endColumn} - 1 WHERE sheet_id = ? AND ${startColumn} <= ? AND ${endColumn} >= ?`)
+    .run(sheetId, index, index)
+  db.prepare('DELETE FROM finance_ledger_merges WHERE sheet_id = ? AND (start_row > end_row OR start_col > end_col)')
+    .run(sheetId)
+  refreshLedgerMergeAddresses(db, sheetId)
+}
+
+function refreshLedgerAddresses(db, sheetId, userId) {
+  const cells = db.prepare('SELECT id, row_index, col_index FROM finance_ledger_cells WHERE sheet_id = ?').all(sheetId)
+  const updateCell = db.prepare("UPDATE finance_ledger_cells SET address = ?, updated_by = ?, updated_at = datetime('now', 'localtime') WHERE id = ?")
+  for (const cell of cells) {
+    updateCell.run(XLSX.utils.encode_cell({ r: Number(cell.row_index) - 1, c: Number(cell.col_index) - 1 }), userId, cell.id)
+  }
+  const comments = db.prepare('SELECT id, row_index, col_index FROM finance_ledger_comments WHERE sheet_id = ?').all(sheetId)
+  const updateComment = db.prepare("UPDATE finance_ledger_comments SET address = ?, updated_by = ?, updated_at = datetime('now', 'localtime') WHERE id = ?")
+  for (const comment of comments) {
+    updateComment.run(XLSX.utils.encode_cell({ r: Number(comment.row_index) - 1, c: Number(comment.col_index) - 1 }), userId, comment.id)
+  }
+}
+
+function refreshLedgerMergeAddresses(db, sheetId) {
+  const merges = db.prepare('SELECT id, start_row, start_col, end_row, end_col FROM finance_ledger_merges WHERE sheet_id = ?').all(sheetId)
+  const updateMerge = db.prepare("UPDATE finance_ledger_merges SET address = ?, updated_at = datetime('now', 'localtime') WHERE id = ?")
+  for (const merge of merges) {
+    const address = XLSX.utils.encode_range({
+      s: { r: Number(merge.start_row) - 1, c: Number(merge.start_col) - 1 },
+      e: { r: Number(merge.end_row) - 1, c: Number(merge.end_col) - 1 }
+    })
+    updateMerge.run(address, merge.id)
+  }
+}
+
+function updateLedgerSheetBounds(db, sheetId, rowDelta, colDelta) {
+  db.prepare(`
+    UPDATE finance_ledger_sheets
+    SET row_count = MAX(1, COALESCE(row_count, 1) + ?),
+        col_count = MAX(1, COALESCE(col_count, 1) + ?)
+    WHERE id = ?
+  `).run(rowDelta, colDelta, sheetId)
 }
 
 function ensureFinanceReceivablePayableTables(db) {

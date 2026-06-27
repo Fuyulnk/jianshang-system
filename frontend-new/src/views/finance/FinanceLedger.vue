@@ -1,5 +1,5 @@
 <template>
-  <div class="finance-ledger" :class="{ 'ledger-fullscreen': fullscreen }">
+  <div class="finance-ledger" :class="{ 'ledger-fullscreen': fullscreen, 'ledger-selecting': isSelectingCells }">
     <el-card class="ledger-head" shadow="never">
       <div>
         <div class="kicker">财务工作台</div>
@@ -59,7 +59,7 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-popover placement="bottom-end" trigger="click" width="320" :disabled="!activeSheet">
+          <el-popover placement="bottom-end" trigger="click" width="380" :disabled="!activeSheet">
             <template #reference>
               <el-button :disabled="!activeSheet">单元格样式</el-button>
             </template>
@@ -86,16 +86,46 @@
               </div>
               <div class="style-group">
                 <span>底色</span>
-                <div class="fill-swatch-row">
-                  <button
-                    v-for="color in fillColors"
-                    :key="color"
-                    type="button"
-                    class="fill-swatch"
-                    :class="{ active: activeCellStyle.backgroundColor === color }"
-                    :style="{ backgroundColor: color }"
-                    @click="applySelectedCellStyle({ backgroundColor: color })"
-                  ></button>
+                <div class="fill-family-grid">
+                  <el-popover
+                    v-for="group in fillColorGroups"
+                    :key="group.name"
+                    placement="bottom"
+                    trigger="click"
+                    width="184"
+                  >
+                    <template #reference>
+                      <button
+                        type="button"
+                        class="fill-family"
+                        :class="{ active: isFillGroupActive(group) }"
+                        :title="`${group.name}底色`"
+                      >
+                        <span class="fill-family-main" :style="{ backgroundColor: group.base }"></span>
+                        <span class="fill-family-name">{{ group.name }}</span>
+                      </button>
+                    </template>
+                    <div class="fill-shade-popover">
+                      <strong>{{ group.name }}深浅</strong>
+                      <div class="fill-shade-grid">
+                        <button
+                          v-for="color in group.shades"
+                          :key="`${group.name}-${color}`"
+                          type="button"
+                          class="fill-shade"
+                          :class="{ active: activeCellStyle.backgroundColor === color }"
+                          :style="{ backgroundColor: color }"
+                          :title="color"
+                          @click="applySelectedCellStyle({ backgroundColor: color })"
+                        ></button>
+                      </div>
+                    </div>
+                  </el-popover>
+                </div>
+                <div class="custom-fill-row">
+                  <span>自定义</span>
+                  <el-color-picker v-model="customFillColor" :predefine="customFillPredefine" />
+                  <button type="button" class="fill-custom-apply" @click="applyCustomFillColor">应用颜色</button>
                   <button type="button" class="fill-clear" @click="applySelectedCellStyle({ backgroundColor: '' })">清除</button>
                 </div>
               </div>
@@ -158,8 +188,10 @@
                 v-for="col in visibleCols"
                 :key="`h-${col}`"
                 class="grid-col-header"
-                :class="{ frozen: isFrozenCol(col) }"
+                :class="{ frozen: isFrozenCol(col), selected: isColumnSelected(col) }"
                 :style="{ transform: `translate(${positionedLeft(col)}px, ${scrollState.top}px)`, width: `${colWidth(col)}px`, height: `${headerHeightPx}px` }"
+                @click="selectColumn(col)"
+                @contextmenu.prevent="openHeaderMenu('col', col, $event)"
               >
                 <span>{{ colName(col) }}</span>
                 <button
@@ -174,8 +206,10 @@
                 v-for="row in visibleRows"
                 :key="`r-${row}`"
                 class="grid-row-header"
-                :class="{ frozen: isFrozenRow(row) }"
+                :class="{ frozen: isFrozenRow(row), selected: isRowSelected(row) }"
                 :style="{ transform: `translate(${scrollState.left}px, ${positionedTop(row)}px)`, width: `${rowHeaderWidthPx}px`, height: `${rowHeight(row)}px` }"
+                @click="selectRow(row)"
+                @contextmenu.prevent="openHeaderMenu('row', row, $event)"
               >
                 <span>{{ row }}</span>
                 <button
@@ -209,7 +243,8 @@
                   height: `${item.height}px`,
                   '--cell-fill': cellStyleFor(item.row, item.col).backgroundColor || 'var(--bg-card)'
                 }"
-                @click="selectCell(item.row, item.col, $event)"
+                @mousedown="startCellSelection(item.row, item.col, $event)"
+                @mouseenter="extendCellSelection(item.row, item.col)"
                 @dblclick="editCell(item.row, item.col)"
                 @contextmenu.prevent="editComment(item.row, item.col)"
               >
@@ -226,10 +261,38 @@
                 <i v-if="commentFor(item.row, item.col)" class="comment-dot"></i>
               </div>
             </div>
+            <div
+              v-if="showSelectionToolbar"
+              class="selection-float-toolbar"
+              :style="selectionToolbarStyle"
+              @mousedown.stop
+            >
+              <button v-if="canMergeSelection" type="button" @click="mergeSelectedCells">合并</button>
+              <button v-if="selectedMerge" type="button" @click="unmergeSelectedCell">拆开</button>
+              <button type="button" @click="clearSelectedRange">取消</button>
+            </div>
           </div>
         </template>
         <el-empty v-else description="请选择或导入一份入账登记表" :image-size="96" />
       </el-card>
+    </div>
+
+    <div
+      v-if="headerMenu.visible"
+      class="ledger-header-menu"
+      :style="{ left: `${headerMenu.x}px`, top: `${headerMenu.y}px` }"
+      @mousedown.stop
+    >
+      <template v-if="headerMenu.axis === 'row'">
+        <button type="button" @click="applyHeaderAction('insert_before')">在上方插入行</button>
+        <button type="button" @click="applyHeaderAction('insert_after')">在下方插入行</button>
+        <button type="button" class="danger" @click="applyHeaderAction('delete')">删除当前行</button>
+      </template>
+      <template v-else>
+        <button type="button" @click="applyHeaderAction('insert_before')">在左侧插入列</button>
+        <button type="button" @click="applyHeaderAction('insert_after')">在右侧插入列</button>
+        <button type="button" class="danger" @click="applyHeaderAction('delete')">删除当前列</button>
+      </template>
     </div>
   </div>
 </template>
@@ -281,9 +344,23 @@ const maxRowHeightUnit = 220
 const minColWidthUnit = 56
 const maxColWidthUnit = 420
 const overscan = 4
-const fillColors = ['#fef3c7', '#dbeafe', '#dcfce7', '#fee2e2', '#ede9fe', '#fce7f3', '#e0f2fe', '#f8fafc']
+const fillColorGroups = [
+  { name: '黄', base: '#facc15', shades: ['#fef3c7', '#fde68a', '#facc15', '#eab308', '#a16207'] },
+  { name: '蓝', base: '#3b82f6', shades: ['#dbeafe', '#bfdbfe', '#60a5fa', '#2563eb', '#1e40af'] },
+  { name: '绿', base: '#22c55e', shades: ['#dcfce7', '#bbf7d0', '#4ade80', '#16a34a', '#166534'] },
+  { name: '红', base: '#ef4444', shades: ['#fee2e2', '#fecaca', '#f87171', '#dc2626', '#991b1b'] },
+  { name: '紫', base: '#8b5cf6', shades: ['#ede9fe', '#ddd6fe', '#a78bfa', '#7c3aed', '#5b21b6'] },
+  { name: '粉', base: '#ec4899', shades: ['#fce7f3', '#fbcfe8', '#f472b6', '#db2777', '#9d174d'] },
+  { name: '青', base: '#06b6d4', shades: ['#e0f2fe', '#bae6fd', '#38bdf8', '#0284c7', '#075985'] },
+  { name: '灰', base: '#64748b', shades: ['#f8fafc', '#e2e8f0', '#94a3b8', '#475569', '#1e293b'] }
+]
+const customFillPredefine = fillColorGroups.flatMap(group => group.shades.slice(1, 4))
 const scrollState = reactive({ top: 0, left: 0, width: 900, height: 520 })
 const resizingGrid = ref(null)
+const selectionDrag = ref(null)
+const selectionSource = ref('')
+const customFillColor = ref('#facc15')
+const headerMenu = reactive({ visible: false, axis: '', index: 0, x: 0, y: 0 })
 let scrollFrame = 0
 
 const activeSheet = computed(() => sheets.value.find(sheet => Number(sheet.id) === Number(activeSheetId.value)) || null)
@@ -316,6 +393,7 @@ const columns = computed(() => Array.from({ length: dataRange.value.cols }, (_, 
 const editingCell = ref('')
 function editCell(row, col) { editingCell.value = `${row}-${col}` }
 const selectedRange = ref(null)
+const isSelectingCells = computed(() => Boolean(selectionDrag.value))
 
 const defaultRowHeightUnit = computed(() => Math.round(baseRowHeight * rowHeightScale.value))
 const defaultColWidthUnit = computed(() => Math.round(baseColWidth * colWidthScale.value))
@@ -488,7 +566,24 @@ const activeCellStyle = computed(() => {
 })
 const canMergeSelection = computed(() => {
   const range = selectedRange.value
-  return Boolean(range && (range.startRow !== range.endRow || range.startCol !== range.endCol))
+  return Boolean(selectionSource.value === 'cell' && range && (range.startRow !== range.endRow || range.startCol !== range.endCol))
+})
+const selectedMerge = computed(() => {
+  if (selectionSource.value !== 'cell') return null
+  const range = selectedRange.value
+  if (!range || range.startRow !== range.endRow || range.startCol !== range.endCol) return null
+  return mergeMasterMap.value.get(`${range.startRow}:${range.startCol}`) || null
+})
+const showSelectionToolbar = computed(() => {
+  if (isSelectingCells.value || selectionSource.value !== 'cell') return false
+  return Boolean(canMergeSelection.value || selectedMerge.value)
+})
+const selectionToolbarStyle = computed(() => {
+  const range = selectedRange.value
+  if (!range) return {}
+  const left = clampNumber(cellLeft(range.startCol) - scrollState.left, rowHeaderWidthPx.value + 8, Math.max(rowHeaderWidthPx.value + 8, scrollState.width - 180))
+  const top = clampNumber(cellTop(range.startRow) - scrollState.top - 42, headerHeightPx.value + 8, Math.max(headerHeightPx.value + 8, scrollState.height - 46))
+  return { left: `${left}px`, top: `${top}px` }
 })
 
 function token() { return getAuthToken() }
@@ -826,13 +921,41 @@ function updateGridViewport() {
   scrollState.height = el.clientHeight || scrollState.height
 }
 
-function selectCell(row, col, event) {
+function startCellSelection(row, col, event) {
+  if (event?.button !== 0) return
+  if (event?.target?.tagName === 'TEXTAREA') return
+  event?.preventDefault()
   const target = resolveCellTarget(row, col)
   if (event?.shiftKey && selectedRange.value) {
     selectedRange.value = normalizeRange(selectedRange.value.startRow, selectedRange.value.startCol, target.row, target.col)
   } else {
     selectedRange.value = normalizeRange(target.row, target.col, target.row, target.col)
   }
+  selectionSource.value = 'cell'
+  selectionDrag.value = {
+    anchorRow: selectedRange.value.startRow,
+    anchorCol: selectedRange.value.startCol
+  }
+  window.removeEventListener('mouseup', stopCellSelection)
+  window.addEventListener('mouseup', stopCellSelection)
+  closeHeaderMenu()
+}
+
+function extendCellSelection(row, col) {
+  const drag = selectionDrag.value
+  if (!drag) return
+  const target = resolveCellTarget(row, col)
+  selectedRange.value = normalizeRange(drag.anchorRow, drag.anchorCol, target.row, target.col)
+}
+
+function stopCellSelection() {
+  selectionDrag.value = null
+  window.removeEventListener('mouseup', stopCellSelection)
+}
+
+function clearSelectedRange() {
+  selectedRange.value = null
+  selectionSource.value = ''
 }
 
 function resolveCellTarget(row, col) {
@@ -854,6 +977,70 @@ function isItemSelected(item) {
   const itemEndRow = item.merge ? Number(item.merge.end_row) : item.row
   const itemEndCol = item.merge ? Number(item.merge.end_col) : item.col
   return rangesOverlap(item.row, itemEndRow, range.startRow, range.endRow, item.col, itemEndCol, range.startCol, range.endCol)
+}
+
+function selectRow(row) {
+  selectedRange.value = normalizeRange(row, 1, row, dataRange.value.cols)
+  selectionSource.value = 'row'
+  closeHeaderMenu()
+}
+
+function selectColumn(col) {
+  selectedRange.value = normalizeRange(1, col, dataRange.value.rows, col)
+  selectionSource.value = 'col'
+  closeHeaderMenu()
+}
+
+function isRowSelected(row) {
+  const range = selectedRange.value
+  return Boolean(range && range.startRow <= row && range.endRow >= row && range.startCol === 1 && range.endCol >= dataRange.value.cols)
+}
+
+function isColumnSelected(col) {
+  const range = selectedRange.value
+  return Boolean(range && range.startCol <= col && range.endCol >= col && range.startRow === 1 && range.endRow >= dataRange.value.rows)
+}
+
+function openHeaderMenu(axis, index, event) {
+  if (axis === 'row') selectRow(index)
+  else selectColumn(index)
+  headerMenu.axis = axis
+  headerMenu.index = Number(index)
+  headerMenu.x = Math.min(event.clientX, window.innerWidth - 190)
+  headerMenu.y = Math.min(event.clientY, window.innerHeight - 150)
+  headerMenu.visible = true
+}
+
+function closeHeaderMenu() {
+  headerMenu.visible = false
+}
+
+async function applyHeaderAction(action) {
+  if (!activeSheet.value || !headerMenu.axis || !headerMenu.index) return
+  try {
+    const json = await requestJson(`/api/finance/ledger/sheets/${activeSheetId.value}/structure`, {
+      axis: headerMenu.axis,
+      action,
+      index: headerMenu.index
+    }, 'POST')
+    const cacheKey = `${json.data?.workbook?.id || workbook.value?.id}:${json.data?.active_sheet_id || activeSheetId.value}`
+    detailCache.set(cacheKey, json.data)
+    applyWorkbookDetail(json.data, cacheKey)
+    if (action === 'delete') selectedRange.value = null
+    else if (headerMenu.axis === 'row') selectRow(action === 'insert_after' ? headerMenu.index + 1 : headerMenu.index)
+    else selectColumn(action === 'insert_after' ? headerMenu.index + 1 : headerMenu.index)
+    ElMessage.success(structureActionMessage(headerMenu.axis, action))
+  } catch (err) {
+    ElMessage.error(err.message || '行列操作失败')
+  } finally {
+    closeHeaderMenu()
+  }
+}
+
+function structureActionMessage(axis, action) {
+  const axisName = axis === 'row' ? '行' : '列'
+  if (action === 'delete') return `${axisName}已删除`
+  return `${axisName}已插入`
 }
 
 async function mergeSelectedCells() {
@@ -901,6 +1088,14 @@ async function unmergeSelectedCell() {
 
 function cellStyleFor(row, col) {
   return resolveLedgerCellStyle(row, col, mergeOwnerMap.value, cellStyleMap.value, defaultLedgerCellStyle)
+}
+
+function isFillGroupActive(group) {
+  return group.shades.includes(activeCellStyle.value.backgroundColor)
+}
+
+function applyCustomFillColor() {
+  applySelectedCellStyle({ backgroundColor: customFillColor.value })
 }
 
 async function applySelectedCellStyle(partial) {
@@ -1168,12 +1363,15 @@ function colName(index) {
 
 onMounted(() => {
   window.addEventListener('resize', updateGridViewport)
+  window.addEventListener('mousedown', closeHeaderMenu)
   fetchWorkbooks()
   nextTick(updateGridViewport)
 })
 onUnmounted(() => {
   window.removeEventListener('resize', updateGridViewport)
+  window.removeEventListener('mousedown', closeHeaderMenu)
   stopGridResize()
+  stopCellSelection()
   if (scrollFrame) cancelAnimationFrame(scrollFrame)
 })
 </script>
@@ -1302,8 +1500,75 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 8px;
 }
+.fill-family-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.fill-family {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.fill-family.active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 14%, transparent);
+}
+.fill-family-main {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+.fill-family-name {
+  font-size: 12px;
+}
+.fill-shade-popover {
+  display: grid;
+  gap: 10px;
+}
+.fill-shade-popover strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.fill-shade-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+.fill-shade {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.fill-shade.active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+.custom-fill-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+.custom-fill-row > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
 .style-button-row button,
-.fill-clear {
+.fill-clear,
+.fill-custom-apply {
   min-width: 42px;
   height: 30px;
   border: 1px solid var(--border-light);
@@ -1313,7 +1578,8 @@ onUnmounted(() => {
   cursor: pointer;
 }
 .style-button-row button.active,
-.fill-clear:hover {
+.fill-clear:hover,
+.fill-custom-apply:hover {
   border-color: color-mix(in srgb, var(--color-primary) 70%, var(--border-light));
   color: var(--color-primary);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 30%, transparent);
@@ -1426,6 +1692,7 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   user-select: none;
+  cursor: pointer;
   background: color-mix(in srgb, var(--bg-page) 86%, var(--bg-card));
   color: var(--text-secondary);
   font-size: 12px;
@@ -1437,6 +1704,12 @@ onUnmounted(() => {
 }
 .grid-row-header {
   z-index: 7;
+}
+.grid-col-header.selected,
+.grid-row-header.selected {
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 12%, var(--bg-card));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 52%, transparent);
 }
 .col-resize-handle,
 .row-resize-handle {
@@ -1508,6 +1781,42 @@ onUnmounted(() => {
   z-index: 16;
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 62%, transparent);
   background: color-mix(in srgb, var(--color-primary) 6%, var(--cell-fill, var(--bg-card)));
+}
+.ledger-selecting .ledger-cell {
+  cursor: crosshair;
+  user-select: none;
+}
+.selection-float-toolbar {
+  position: absolute;
+  z-index: 70;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 26%, var(--border-light));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-card) 96%, white);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
+}
+.selection-float-toolbar button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.selection-float-toolbar button:first-child {
+  border-color: color-mix(in srgb, var(--color-primary) 68%, var(--border-light));
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--bg-card));
+  color: var(--color-primary);
+}
+.selection-float-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 .ledger-cell.search-hit {
   background: color-mix(in srgb, #facc15 22%, var(--cell-fill, var(--bg-card)));
@@ -1616,6 +1925,22 @@ onUnmounted(() => {
     inset 0 0 0 2px #fbbf24,
     0 0 0 2px rgba(251, 191, 36, 0.22);
 }
+:global(html.dark) .grid-col-header.selected,
+:global(html.dark) .grid-row-header.selected {
+  background: color-mix(in srgb, var(--color-primary) 22%, #182235);
+}
+:global(html.dark) .selection-float-toolbar,
+:global(html.dark) .ledger-header-menu {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: #111827;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.38);
+}
+:global(html.dark) .selection-float-toolbar button,
+:global(html.dark) .ledger-header-menu button {
+  border-color: rgba(148, 163, 184, 0.26);
+  background: #182235;
+  color: #f8fafc;
+}
 :global(html.dark) .cell-text,
 :global(html.dark) .ledger-cell textarea {
   color: inherit;
@@ -1623,6 +1948,35 @@ onUnmounted(() => {
 }
 :global(html.dark) .ledger-cell textarea:focus {
   background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+}
+.ledger-header-menu {
+  position: fixed;
+  z-index: 2400;
+  display: grid;
+  min-width: 166px;
+  padding: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.18);
+}
+.ledger-header-menu button {
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.ledger-header-menu button:hover {
+  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
+  color: var(--color-primary);
+}
+.ledger-header-menu button.danger:hover {
+  background: color-mix(in srgb, #ef4444 10%, transparent);
+  color: #ef4444;
 }
 @media (max-width: 980px) {
   .ledger-head :deep(.el-card__body),
