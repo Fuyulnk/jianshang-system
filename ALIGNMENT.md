@@ -357,6 +357,26 @@
 **违反以上规则导致事故，责任在执行部署的 AI。**
 
 
+### 2026-06-27 Claude：AI工具同步 + 知识库清理
+
+- **任务**：AI同步3个新工具（物资出库/员工管理/角色权限），删除知识库空壳
+- **修改文件**：
+  - `backend/src/ai/toolRegistry.js` — 新增4个工具注册 + 更新各分身工具列表
+  - `backend/src/routes/ai.js` — 新增4个工具的执行器 case
+  - `backend/src/routes/knowledge-base.js` — **删除**（空壳路由）
+  - `backend/src/routes/settings.js` — 删除知识库状态/重建接口
+  - `backend/src/index.js` — 移除 kbRoutes 引用
+- **验证**：
+  - `node --check` 全部后端文件通过
+  - `vite build` 前端构建成功
+  - 已部署线上，PM2 重启后 `/health` ✅
+- **注意事项**：
+  - `get_role_permissions` 只有 super_admin/admin 可用
+  - `manage_employee` 和 `create_material_request` 需要用户确认
+  - 知识库删除后，旧前端设置页的 kb-actions CSS 段残留但无实际入口，不影响功能
+- **下一步**：
+  - 等 lnk 晚上截图修夜间主题视觉问题
+
 ### 2026-06-26 Claude：交易流水搜索+编辑+财务群录入优化
 
 - **任务**：
